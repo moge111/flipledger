@@ -1108,6 +1108,7 @@ export default function BatchDetailPage({ params }: { params: Promise<{ id: stri
               <div className="relative flex-1">
                 <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-text-tertiary" />
                 <input
+                  autoComplete="off"
                   value={query}
                   onChange={(e) => setQuery(e.target.value)}
                   placeholder="B0CNJ7G8CP or 045496597818"
@@ -1195,6 +1196,7 @@ export default function BatchDetailPage({ params }: { params: Promise<{ id: stri
                       )}
                     </label>
                     <input
+                      autoComplete="off"
                       value={sku}
                       onChange={(e) => { setSku(e.target.value); setSkuManuallyEdited(true); }}
                       className="w-full mt-1 h-9 px-2 bg-bg-elevated border border-border-default rounded text-sm font-mono focus:outline-none focus:border-accent"
@@ -1217,6 +1219,7 @@ export default function BatchDetailPage({ params }: { params: Promise<{ id: stri
                   <div>
                     <label className="text-[10px] uppercase tracking-widest text-text-tertiary">Qty</label>
                     <input
+                      autoComplete="off"
                       type="number"
                       min="1"
                       value={quantity}
@@ -1227,6 +1230,7 @@ export default function BatchDetailPage({ params }: { params: Promise<{ id: stri
                   <div>
                     <label className="text-[10px] uppercase tracking-widest text-text-tertiary">Buy Price ($)</label>
                     <input
+                      autoComplete="off"
                       type="number"
                       step="0.01"
                       value={buyPrice}
@@ -1237,6 +1241,7 @@ export default function BatchDetailPage({ params }: { params: Promise<{ id: stri
                   <div>
                     <label className="text-[10px] uppercase tracking-widest text-text-tertiary">List Price ($)</label>
                     <input
+                      autoComplete="off"
                       type="number"
                       step="0.01"
                       value={listPrice}
@@ -1255,6 +1260,7 @@ export default function BatchDetailPage({ params }: { params: Promise<{ id: stri
                         )}
                       </label>
                       <input
+                        autoComplete="off"
                         type="number"
                         step="0.01"
                         value={shipCost}
@@ -1267,6 +1273,7 @@ export default function BatchDetailPage({ params }: { params: Promise<{ id: stri
                   <div className={batch.channel === 'MFN' ? 'col-span-1' : 'col-span-2'}>
                     <label className="text-[10px] uppercase tracking-widest text-text-tertiary">Supplier</label>
                     <input
+                      autoComplete="off"
                       value={supplier}
                       onChange={(e) => setSupplier(e.target.value)}
                       placeholder="Walmart, Target, …"
@@ -1419,6 +1426,7 @@ export default function BatchDetailPage({ params }: { params: Promise<{ id: stri
                       <td className="px-4 py-2 text-right text-sm font-mono text-text-secondary">
                         {isEditing ? (
                           <input
+                            autoComplete="off"
                             type="number"
                             min="1"
                             value={editForm.quantity}
@@ -1431,6 +1439,7 @@ export default function BatchDetailPage({ params }: { params: Promise<{ id: stri
                       <td className="px-4 py-2 text-right text-sm font-mono text-text-secondary">
                         {isEditing ? (
                           <input
+                            autoComplete="off"
                             type="number"
                             step="0.01"
                             value={editForm.buyPrice}
@@ -1443,6 +1452,7 @@ export default function BatchDetailPage({ params }: { params: Promise<{ id: stri
                       <td className="px-4 py-2 text-right text-sm font-mono text-text-primary">
                         {isEditing && batch.status === 'draft' ? (
                           <input
+                            autoComplete="off"
                             type="number"
                             step="0.01"
                             value={editForm.listPrice}
@@ -2040,6 +2050,7 @@ function BoxingWorkflow({
                                       <span className="text-text-secondary font-mono w-10 text-right">× {quantity}</span>
                                     ) : (
                                       <input
+                                        autoComplete="off"
                                         type="number"
                                         min="0"
                                         max={batchItem.quantity}
@@ -2395,6 +2406,7 @@ function PrintRowButton({
           <div className="text-[11px] uppercase tracking-widest text-text-tertiary mb-2">Print FNSKU labels</div>
           <div className="flex items-center gap-2 mb-2">
             <input
+              autoComplete="off"
               type="number"
               min="1"
               max="200"
@@ -2554,6 +2566,7 @@ function UnassignedItemRow({
       <span className="text-text-tertiary font-mono">{item.sku}</span>
       <span className="text-amber-400 font-mono w-14 text-right">{remaining} left</span>
       <input
+        autoComplete="off"
         type="number"
         min="1"
         max={remaining}
@@ -2617,6 +2630,7 @@ function DimensionInput({
     <div>
       <label className="text-[10px] uppercase tracking-widest text-text-tertiary">{label}</label>
       <input
+        autoComplete="off"
         type="number"
         step="0.1"
         min="0"
