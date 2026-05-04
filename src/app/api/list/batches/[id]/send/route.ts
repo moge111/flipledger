@@ -335,16 +335,19 @@ export async function POST(
           prepTypes: ['ITEM_NO_PREP'],
         })));
 
-        // Poll until the prep operation finishes (usually 3-10 seconds)
+        // Poll until the prep operation finishes (usually 3-10 seconds).
         const PREP_POLL_MS = 3000;
         const PREP_MAX_ATTEMPTS = 20; // ~60s max
         let prepDone = false;
+        let prepProblems: any[] = [];
         for (let attempt = 0; attempt < PREP_MAX_ATTEMPTS; attempt++) {
           await new Promise((r) => setTimeout(r, PREP_POLL_MS));
           const op = await getInboundOperation(creds, prepResult.operationId);
           if (op.operationStatus === 'SUCCESS') {
             prepDone = true;
-            console.log(`[send] Prep classification SUCCESS after ${(attempt + 1) * PREP_POLL_MS / 1000}s`);
+            prepProblems = op.operationProblems || [];
+            console.log(`[send] Prep classification SUCCESS after ${(attempt + 1) * PREP_POLL_MS / 1000}s` +
+              (prepProblems.length > 0 ? ` (with ${prepProblems.length} per-MSKU problem(s): ${JSON.stringify(prepProblems)})` : ''));
             break;
           }
           if (op.operationStatus === 'FAILED') {
@@ -354,6 +357,19 @@ export async function POST(
         }
         if (!prepDone) {
           console.warn('[send] Prep classification did not finish within timeout — proceeding anyway');
+        }
+
+        // CRITICAL: even after operationStatus=SUCCESS, the prep classification
+        // takes ~30-90s to propagate from Amazon's catalog service to the
+        // inbound-plans validation service. Calling createInboundPlan too soon
+        // returns a planId that then async-fails with FBA_INB_0182 "Prep
+        // classification for this SKU was missing." Empirically a 90-second
+        // wait clears it; we use a wait + a small retry loop on the create
+        // call itself in case the propagation is slower for some accounts.
+        if (prepDone) {
+          const PREP_PROPAGATION_WAIT_MS = 90_000;
+          console.log(`[send] Waiting ${PREP_PROPAGATION_WAIT_MS / 1000}s for prep classification to propagate to Inbound Plans service…`);
+          await new Promise((r) => setTimeout(r, PREP_PROPAGATION_WAIT_MS));
         }
       } catch (err) {
         console.warn('[send] setPrepDetails failed (non-fatal, continuing):', err);
@@ -386,10 +402,14 @@ export async function POST(
           //   "MSKUs are not available for inbound. Recently added..."
           //   "The following MSKUs are not valid: [...]" (more common for
           //     FBA-channel listings that exist but haven't propagated yet)
+          //   "Prep classification for this SKU was missing" / "FBA_INB_0182"
+          //     (prep details set on catalog but not yet visible to inbound)
           const isPropagationError =
             errStr.includes('not available for inbound') ||
             errStr.includes('recently added, please try again later') ||
-            errStr.includes('MSKUs are not valid');
+            errStr.includes('MSKUs are not valid') ||
+            errStr.includes('Prep classification') ||
+            errStr.includes('FBA_INB_0182');
 
           // Case B: Specific MSKUs have the wrong prepOwner. Amazon returns
           // one of two messages depending on the constraint:
