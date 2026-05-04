@@ -1143,7 +1143,16 @@ export default function BatchDetailPage({ params }: { params: Promise<{ id: stri
                   <div className="flex-1 min-w-0">
                     <div className="text-sm font-medium text-text-primary line-clamp-2">{scanned.name}</div>
                     <div className="flex items-center gap-2 mt-1 text-[11px] text-text-tertiary font-mono">
-                      <span>{scanned.asin}</span>
+                      <a
+                        href={`https://www.amazon.com/dp/${scanned.asin}`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="inline-flex items-center gap-1 hover:text-accent transition-colors"
+                        title="Open Amazon listing in a new tab"
+                      >
+                        {scanned.asin}
+                        <ExternalLink size={11} className="opacity-60" />
+                      </a>
                       {scanned.brand && <span>· {scanned.brand}</span>}
                       <span className={`ml-auto px-1.5 py-0.5 rounded ${scanned.source === 'local' ? 'bg-positive/10 text-positive' : 'bg-accent/10 text-accent'}`}>
                         {scanned.source === 'local' ? 'IN YOUR CATALOG' : 'FROM AMAZON'}
