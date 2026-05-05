@@ -1015,7 +1015,7 @@ export default function BatchDetailPage({ params }: { params: Promise<{ id: stri
               {cancelling ? 'Cancelling…' : (batch.status === 'failed' ? 'Reset & Edit' : 'Cancel & Edit')}
             </button>
           )}
-          {(batch.status === 'ready' || batch.status === 'failed') && (
+          {(batch.status === 'ready' || batch.status === 'failed' || batch.status === 'shipping' || batch.status === 'shipped') && (
             <button
               onClick={handleCloseBatch}
               className="flex items-center gap-2 h-9 px-3 bg-bg-elevated border border-border-default rounded-md text-sm text-text-secondary hover:text-text-primary hover:bg-bg-hover transition-colors"
