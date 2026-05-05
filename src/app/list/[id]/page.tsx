@@ -955,7 +955,9 @@ export default function BatchDetailPage({ params }: { params: Promise<{ id: stri
                 {initializingBoxing ? 'Loading pack groups…' : 'Box & Ship'}
               </button>
               <a
-                href="https://sellercentral.amazon.com/fba/inboundshipments"
+                href={batch.inboundPlanId
+                  ? `https://sellercentral.amazon.com/fba/sendtoamazon/pack_mixed_unit_step?wf=${batch.inboundPlanId}`
+                  : 'https://sellercentral.amazon.com/fba/inboundshipments'}
                 target="_blank"
                 rel="noopener noreferrer"
                 className="flex items-center gap-2 h-9 px-3 bg-bg-elevated border border-border-default rounded-md text-sm text-text-secondary hover:text-text-primary hover:bg-bg-hover transition-colors"
@@ -977,7 +979,7 @@ export default function BatchDetailPage({ params }: { params: Promise<{ id: stri
                 {syncingFromAmazon ? 'Syncing…' : 'Sync from Amazon'}
               </button>
               <a
-                href="https://sellercentral.amazon.com/fba/inboundshipments"
+                href={`https://sellercentral.amazon.com/fba/sendtoamazon/pack_mixed_unit_step?wf=${batch.inboundPlanId}`}
                 target="_blank"
                 rel="noopener noreferrer"
                 className="flex items-center gap-2 h-9 px-3 bg-bg-elevated border border-border-default rounded-md text-sm text-text-secondary hover:text-text-primary hover:bg-bg-hover transition-colors"
@@ -1822,6 +1824,7 @@ function BoxingWorkflow({
     boxCount: number | null;
   }>>([]);
   const [printingLabel, setPrintingLabel] = useState<string | null>(null); // key: `${type}-${shipmentId}`
+  const [copyBoxesFlash, setCopyBoxesFlash] = useState(false);
 
   useEffect(() => {
     if (batch.status !== 'shipping' && batch.status !== 'shipped') return;
@@ -1944,8 +1947,39 @@ function BoxingWorkflow({
             <Sparkles size={14} className="text-accent" />
             <h3 className="text-sm font-medium text-text-primary">Ship to Amazon</h3>
           </div>
-          <div className="text-xs text-text-tertiary font-mono">
-            {boxes.length} box{boxes.length === 1 ? '' : 'es'} · {totalBoxWeight.toFixed(1)} lb total
+          <div className="flex items-center gap-2">
+            {boxes.length > 0 && (
+              <button
+                type="button"
+                onClick={() => {
+                  const lines: string[] = [];
+                  lines.push(`Boxing layout for ${batch?.name || 'batch'} — paste-friendly`);
+                  lines.push('');
+                  boxes.forEach((box, i) => {
+                    lines.push(`Box ${i + 1}: ${box.lengthIn}×${box.widthIn}×${box.heightIn} in · ${box.weightLb} lb`);
+                    box.items.forEach((bi) => {
+                      const it = items.find((x) => x.id === bi.itemId);
+                      const name = it?.productName || it?.sku || 'unknown';
+                      const sku = it?.sku || '';
+                      lines.push(`  - ${bi.quantity}× ${name}${sku ? `  [${sku}]` : ''}`);
+                    });
+                    lines.push('');
+                  });
+                  const text = lines.join('\n');
+                  navigator.clipboard.writeText(text).then(() => {
+                    setCopyBoxesFlash(true);
+                    setTimeout(() => setCopyBoxesFlash(false), 2000);
+                  });
+                }}
+                className="text-[11px] text-text-tertiary hover:text-accent transition-colors"
+                title="Copy a paste-ready summary of your boxes for Seller Central re-entry"
+              >
+                {copyBoxesFlash ? '✓ Copied' : '📋 Copy layout'}
+              </button>
+            )}
+            <div className="text-xs text-text-tertiary font-mono">
+              {boxes.length} box{boxes.length === 1 ? '' : 'es'} · {totalBoxWeight.toFixed(1)} lb total
+            </div>
           </div>
         </div>
         {/* Three-step breadcrumb */}
@@ -2313,7 +2347,7 @@ function BoxingWorkflow({
               {/* Fallback: still expose Seller Central in case anything fails */}
               {batch.inboundPlanId && (
                 <a
-                  href="https://sellercentral.amazon.com/fba/inboundshipments"
+                  href={`https://sellercentral.amazon.com/fba/sendtoamazon/pack_mixed_unit_step?wf=${batch.inboundPlanId}`}
                   target="_blank"
                   rel="noopener noreferrer"
                   className="inline-flex items-center gap-1.5 text-[11px] text-text-tertiary hover:text-accent hover:underline"
