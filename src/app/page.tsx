@@ -104,23 +104,29 @@ export default function Dashboard() {
   useEffect(() => {
     if (!selectedDay) { setDayDetails([]); setDayRefunds([]); return; }
     setDayDetailsLoading(true);
-    // For monthly grouping (YYYY-MM-01), fetch the whole month
-    // For weekly grouping, fetch 7 days
-    // For daily, fetch single day
+    // Three modes:
+    //   '__range__' = use the current dateRange filter (Today / Yesterday / This Week / etc)
+    //   'YYYY-MM-DD' single day clicked from chart with daily grouping
+    //   'YYYY-MM-01' clicked from chart with monthly grouping → expand to full month
+    //   'YYYY-MM-DD' clicked from chart with weekly grouping → expand to 7 days
     let fetchStart = selectedDay;
     let fetchEnd = selectedDay;
-    const grouping = dailyRevenue[0]?.grouping || 'daily';
-    if (grouping === 'monthly') {
-      // selectedDay = "2026-03-01", fetch Mar 1 - Mar 31
-      const d = new Date(selectedDay + 'T00:00:00');
-      fetchStart = selectedDay;
-      fetchEnd = new Date(d.getFullYear(), d.getMonth() + 1, 0).toISOString().split('T')[0];
-    } else if (grouping === 'weekly') {
-      const d = new Date(selectedDay + 'T00:00:00');
-      const end = new Date(d.getTime() + 6 * 86400000);
-      fetchEnd = end.toISOString().split('T')[0];
+    if (selectedDay === '__range__') {
+      fetchStart = dateRange.startDate;
+      fetchEnd = dateRange.endDate;
+    } else {
+      const grouping = dailyRevenue[0]?.grouping || 'daily';
+      if (grouping === 'monthly') {
+        const d = new Date(selectedDay + 'T00:00:00');
+        fetchStart = selectedDay;
+        fetchEnd = new Date(d.getFullYear(), d.getMonth() + 1, 0).toISOString().split('T')[0];
+      } else if (grouping === 'weekly') {
+        const d = new Date(selectedDay + 'T00:00:00');
+        const end = new Date(d.getTime() + 6 * 86400000);
+        fetchEnd = end.toISOString().split('T')[0];
+      }
     }
-    fetch(`/api/data/profitloss?startDate=${fetchStart}&endDate=${fetchEnd}${marketplaceParam}`)
+    fetch(`/api/data/profitloss?startDate=${fetchStart}&endDate=${fetchEnd}${marketplaceParam}${dateBasisParam}`)
       .then(r => r.json())
       .then(d => {
         // Group by product (sku + marketplace), sum quantities and amounts
@@ -142,7 +148,7 @@ export default function Dashboard() {
         setDayDetailsLoading(false);
       })
       .catch(() => setDayDetailsLoading(false));
-  }, [selectedDay, marketplaceParam]);
+  }, [selectedDay, marketplaceParam, dateBasisParam, dateRange.startDate, dateRange.endDate, data]);
 
   if (loading || !data) {
     return <DashboardSkeleton />;
@@ -440,7 +446,21 @@ export default function Dashboard() {
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 mb-6">
         {/* Revenue & Profit Chart */}
         <div className="lg:col-span-2 bg-bg-surface border border-border-subtle rounded-lg p-5">
-          <h3 className="text-sm font-medium text-text-secondary mb-4">Revenue & Profit</h3>
+          <div className="flex items-center justify-between mb-4">
+            <h3 className="text-sm font-medium text-text-secondary">Revenue & Profit</h3>
+            <button
+              type="button"
+              onClick={() => setSelectedDay(selectedDay === '__range__' ? null : '__range__')}
+              className={`text-xs px-2.5 py-1 rounded border transition-colors ${
+                selectedDay === '__range__'
+                  ? 'bg-accent/15 text-accent border-accent/30'
+                  : 'bg-bg-elevated text-text-tertiary border-border-default hover:text-text-secondary'
+              }`}
+              title="View all transactions in the selected date range"
+            >
+              {selectedDay === '__range__' ? '✕ Hide transactions' : 'View transactions'}
+            </button>
+          </div>
           <ResponsiveContainer width="100%" height={280}>
             <BarChart data={chartData} barGap={2} style={{ cursor: 'pointer' }}>
               <CartesianGrid strokeDasharray="3 3" stroke="#1e1e24" />
@@ -531,7 +551,15 @@ export default function Dashboard() {
           <div className="flex items-center justify-between px-4 py-3 border-b border-border-subtle">
             <div className="flex items-center gap-2">
               <span className="text-sm font-semibold text-text-primary">
-                {chartGrouping === 'monthly'
+                {selectedDay === '__range__'
+                  ? (() => {
+                      // "All transactions: <preset label or date range>"
+                      const fmt = (s: string) => new Date(s + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: dateRange.startDate.slice(0, 4) !== dateRange.endDate.slice(0, 4) ? 'numeric' : undefined });
+                      return dateRange.startDate === dateRange.endDate
+                        ? new Date(dateRange.startDate + 'T00:00:00').toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })
+                        : `${fmt(dateRange.startDate)} – ${fmt(dateRange.endDate)}`;
+                    })()
+                  : chartGrouping === 'monthly'
                   ? new Date(selectedDay + 'T00:00:00').toLocaleDateString('en-US', { month: 'long', year: 'numeric' })
                   : chartGrouping === 'weekly'
                   ? `Week of ${new Date(selectedDay + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}`
