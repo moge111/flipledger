@@ -47,7 +47,7 @@ interface DayDetail {
   quantity: number;
   revenue: number;
   cogs: number;
-  gross_profit: number;
+  net_profit: number;
   posted_date: string;
 }
 
@@ -139,10 +139,10 @@ export default function Dashboard() {
             grouped[key].quantity += item.quantity;
             grouped[key].revenue += item.revenue;
             grouped[key].cogs += item.cogs;
-            grouped[key].gross_profit += item.gross_profit;
+            grouped[key].net_profit += item.net_profit;
           }
         }
-        const sales = Object.values(grouped).sort((a: any, b: any) => b.gross_profit - a.gross_profit);
+        const sales = Object.values(grouped).sort((a: any, b: any) => b.net_profit - a.net_profit);
         setDayDetails(sales);
         setDayRefunds(d.refundDetail || []);
         setDayDetailsLoading(false);
@@ -609,8 +609,8 @@ export default function Dashboard() {
                       <td className="px-4 py-2 text-right text-sm font-mono text-text-secondary">{item.quantity}</td>
                       <td className="px-4 py-2 text-right text-sm font-mono text-text-primary">{formatCurrency(item.revenue)}</td>
                       <td className="px-4 py-2 text-right text-sm font-mono text-negative">{formatCurrency(-item.cogs)}</td>
-                      <td className={`px-4 py-2 text-right text-sm font-mono font-medium ${item.gross_profit >= 0 ? 'text-positive' : 'text-negative'}`}>
-                        {formatCurrency(item.gross_profit)}
+                      <td className={`px-4 py-2 text-right text-sm font-mono font-medium ${item.net_profit >= 0 ? 'text-positive' : 'text-negative'}`}>
+                        {formatCurrency(item.net_profit)}
                       </td>
                     </tr>
                   ))}
