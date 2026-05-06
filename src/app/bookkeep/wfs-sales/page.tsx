@@ -58,9 +58,15 @@ export default function FBASalesPage() {
         <div className="min-w-[200px]">
           <div className="text-sm font-mono text-accent">{row.original.orderId}</div>
           <div className="text-sm text-text-secondary truncate max-w-[250px]">{row.original.productName || row.original.asin}</div>
-          {row.original.quantity > 1 && <span className="inline-flex items-center justify-center w-5 h-5 rounded-full bg-bg-active text-xs font-mono text-text-secondary mt-0.5">{row.original.quantity}</span>}
         </div>
       ), size: 280,
+    },
+    {
+      id: 'quantity', header: 'Qty', accessorKey: 'quantity',
+      cell: ({ getValue }) => {
+        const v = getValue() as number;
+        return <span className={`font-mono ${v > 1 ? 'text-text-primary font-medium' : 'text-text-tertiary'}`}>{v}</span>;
+      }, size: 60,
     },
     { id: 'salePrice', header: 'Order Price', accessorKey: 'salePrice', cell: ({ getValue }) => <span className="font-mono text-text-primary">{formatCurrency(getValue() as number)}</span>, size: 110 },
     {

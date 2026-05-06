@@ -97,7 +97,9 @@ export async function GET(request: NextRequest) {
     const totalProfit = items.reduce((s, i) => s + i.profit, 0);
     const totalShippingCharged = items.reduce((s, i) => s + i.shippingCharged, 0);
     const totalShippingCost = items.reduce((s, i) => s + i.shippingCost, 0);
+    const totalBuyCost = items.reduce((s, i) => s + i.buyCost, 0);
     const count = items.length;
+    const portfolioRoi = totalBuyCost > 0 ? (totalProfit / totalBuyCost) * 100 : 0;
 
     db.close();
 
@@ -111,11 +113,13 @@ export async function GET(request: NextRequest) {
         totalShippingCharged,
         totalShippingCost,
         totalShippingProfit: totalShippingCharged - totalShippingCost,
+        totalBuyCost,
       },
       averages: {
         avgOrderPrice: count > 0 ? totalSales / count : 0,
         avgFees: count > 0 ? totalFees / count : 0,
         avgProfit: count > 0 ? totalProfit / count : 0,
+        avgRoi: portfolioRoi,
       },
     });
   } catch (error) {
