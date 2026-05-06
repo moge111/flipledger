@@ -628,17 +628,58 @@ export interface ShipmentLabels {
 }
 
 /**
- * Get labels for a specific shipment within an inbound plan.
- * GET /inbound/fba/2024-03-20/inboundPlans/{inboundPlanId}/shipments/{shipmentId}/labels
+ * List the boxes for a shipment within an inbound plan.
+ * GET /inbound/fba/2024-03-20/inboundPlans/{inboundPlanId}/shipments/{shipmentId}/boxes
+ *
+ * Used internally by getShipmentLabels to derive the v0 shipmentConfirmationId
+ * (FBAxxxxxxx) from a v2024 boxId (FBAxxxxxxxU000001). Each boxId contains the
+ * confirmation ID as its prefix.
+ */
+export async function listShipmentBoxes(
+  credentials: SPAPICredentials,
+  inboundPlanId: string,
+  shipmentId: string
+): Promise<Array<{ boxId: string; quantity?: number; weight?: any; dimensions?: any }>> {
+  const data = await spApiRequest(
+    credentials,
+    `/inbound/fba/2024-03-20/inboundPlans/${encodeURIComponent(inboundPlanId)}/shipments/${encodeURIComponent(shipmentId)}/boxes`
+  );
+  return data?.boxes || [];
+}
+
+/**
+ * Derive the v0 shipmentConfirmationId from a v2024 boxId.
+ * Box ID format: FBA19CRM1CZ6U000001 (confirmation ID + 'U' + 6-digit box index)
+ * Confirmation ID: FBA19CRM1CZ6 (12 chars, "FBA" + 9 alphanumeric)
+ */
+function boxIdToShipmentConfirmationId(boxId: string): string {
+  const match = boxId.match(/^(FBA[A-Z0-9]+?)U\d{6}$/);
+  if (!match) {
+    throw new Error(`Cannot derive shipmentConfirmationId from boxId: ${boxId}`);
+  }
+  return match[1];
+}
+
+/**
+ * Get labels for a shipment.
+ *
+ * IMPORTANT — uses v0 inbound API, not v2024 (May 6, 2026):
+ * The v2024 endpoint /inbound/fba/2024-03-20/inboundPlans/.../labels returns
+ * 403 AccessDeniedException for standard seller accounts (verified empirically).
+ * The v0 endpoint /fba/inbound/v0/shipments/{confirmationId}/labels works.
+ *
+ * Four bugs the docs/SDK don't tell you about (all empirically verified):
+ *   1. Use v0 endpoint, not v2024 (v2024 is 403 for non-private apps).
+ *   2. v0 takes shipmentConfirmationId (FBA19CRM1CZ6), NOT the v2024 UUID.
+ *      Derive it by calling listShipmentBoxes first and stripping U+6digits
+ *      off any boxId.
+ *   3. PageSize is an INTEGER (pagination), not a label-format enum. The
+ *      format goes in PageType. Pass PageSize=1, PageStartIndex=0.
+ *   4. Response field is payload.DownloadURL (capital URL), not payload.URL.
  *
  * Use:
- *   - LabelType='UNIQUE' for per-unit FNSKU labels (one per product unit in this shipment)
- *   - LabelType='BARCODE_2D' for the box ID labels (one per box)
- *
- * PageType is the format. For Parker's Rollo (2×1 thermal printer) we'll use
- * PackageLabel_Letter_6 — small enough that 4 labels fit per Letter page,
- * and Rollo can crop down to 2×1 each. Amazon doesn't expose a 2×1 thermal
- * format directly, so this is the closest match.
+ *   - LabelType='UNIQUE' for per-unit FNSKU labels (one per product unit)
+ *   - LabelType='BARCODE_2D' for box ID labels (one per box)
  */
 export async function getShipmentLabels(
   credentials: SPAPICredentials,
@@ -650,11 +691,30 @@ export async function getShipmentLabels(
   const endpoint = getEndpoint(credentials.marketplaceId);
   const accessToken = await getAccessToken(credentials);
 
+  // Step 1: derive the v0 confirmation ID (FBAxxxxxxxxx) from a v2024 boxId,
+  //         and collect ALL box IDs for the PackageLabelsToPrint param.
+  const boxes = await listShipmentBoxes(credentials, inboundPlanId, shipmentId);
+  if (boxes.length === 0) {
+    throw new Error(`No boxes found for shipment ${shipmentId} — packing may not be confirmed yet`);
+  }
+  const allBoxIds = boxes.map((b) => b.boxId).filter(Boolean);
+  if (allBoxIds.length === 0) {
+    throw new Error(`No boxId on any box for shipment ${shipmentId}`);
+  }
+  const confirmationId = boxIdToShipmentConfirmationId(allBoxIds[0]);
+
+  // Step 2: call v0 labels endpoint with INTEGER pagination params.
+  // Amazon REQUIRES PackageLabelsToPrint (list of box IDs) — internally mapped
+  // to cartonIdList. Without it, request 400s with "cartonIdList must not be null".
   const url = new URL(
-    `${endpoint}/inbound/fba/2024-03-20/inboundPlans/${encodeURIComponent(inboundPlanId)}/shipments/${encodeURIComponent(shipmentId)}/labels`
+    `${endpoint}/fba/inbound/v0/shipments/${encodeURIComponent(confirmationId)}/labels`
   );
   url.searchParams.set('PageType', pageType);
   url.searchParams.set('LabelType', labelType);
+  url.searchParams.set('PageSize', '1');         // integer pagination
+  url.searchParams.set('PageStartIndex', '0');   // integer pagination
+  // List query params: SP-API uses comma-separated for List<String>.
+  url.searchParams.set('PackageLabelsToPrint', allBoxIds.join(','));
 
   const response = await fetch(url.toString(), {
     headers: {
@@ -669,7 +729,13 @@ export async function getShipmentLabels(
   }
 
   const data = await response.json();
-  return data;
+  // v0 returns { payload: { DownloadURL: "..." } } — capital URL.
+  // Normalize to our ShipmentLabels shape so callers don't need to know.
+  const downloadURL = data?.payload?.DownloadURL || data?.payload?.URL || data?.DownloadURL;
+  return {
+    downloadURL,
+    documents: downloadURL ? [{ url: downloadURL }] : undefined,
+  };
 }
 
 /**
