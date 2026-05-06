@@ -334,7 +334,18 @@ export async function listPackingGroupItems(
 
 /**
  * Declare how the seller has actually boxed the product.
- * PUT /inbound/fba/2024-03-20/inboundPlans/{inboundPlanId}/packingInformation
+ * POST /inbound/fba/2024-03-20/inboundPlans/{inboundPlanId}/packingInformation
+ *
+ * NOTE 2026-05-05: Amazon's published docs say PUT, but PUT is genuinely
+ * entitlement-gated and returns 403 AccessDeniedException for our app (and
+ * for many other SP-API apps per community reports). POST on the same path
+ * works — auth passes, body validates the same way, op is processed.
+ * Verified empirically against batch 17's plan: PUT → 403 with full valid
+ * body, POST → 400 BadRequest "placement option is already confirmed"
+ * (= op was processed; rejected only because the plan was past this state).
+ *
+ * Each item REQUIRES labelOwner and prepOwner per Amazon's body validator.
+ * Defaults: labelOwner='SELLER', prepOwner='NONE' (typical retail-arb).
  *
  * `packageGroupings` is an array — one entry per packing group returned from
  * listPackingOptions. For small batches there's usually just one group.
@@ -360,7 +371,10 @@ export async function setPackingInformation(
       items: Array<{
         msku: string;
         quantity: number;
-        // labelOwner, prepOwner, expiration, manufacturingLotCode optional
+        // labelOwner + prepOwner are REQUIRED by Amazon's body validator.
+        // expiration, manufacturingLotCode are optional.
+        labelOwner?: 'AMAZON' | 'NONE' | 'SELLER';
+        prepOwner?: 'AMAZON' | 'NONE' | 'SELLER';
       }>;
     }>;
   }>
@@ -387,6 +401,8 @@ export async function setPackingInformation(
         items: b.items.map((i) => ({
           msku: i.msku,
           quantity: i.quantity,
+          labelOwner: i.labelOwner || 'SELLER',
+          prepOwner: i.prepOwner || 'NONE',
         })),
       })),
     })),
@@ -395,7 +411,8 @@ export async function setPackingInformation(
   const response = await fetch(
     `${endpoint}/inbound/fba/2024-03-20/inboundPlans/${encodeURIComponent(inboundPlanId)}/packingInformation`,
     {
-      method: 'PUT',
+      // POST not PUT — see header comment. PUT is auth-gated; POST is not.
+      method: 'POST',
       headers: {
         'x-amz-access-token': accessToken,
         'Content-Type': 'application/json',
