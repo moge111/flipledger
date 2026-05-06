@@ -87,7 +87,11 @@ export async function GET(request: NextRequest) {
     const totalSales = items.reduce((s, i) => s + i.salePrice, 0);
     const totalFees = items.reduce((s, i) => s + i.fees, 0);
     const totalProfit = items.reduce((s, i) => s + i.profit, 0);
+    const totalBuyCost = items.reduce((s, i) => s + i.buyCost, 0);
     const count = items.length;
+    // Portfolio ROI: total profit / total cost. More accurate than averaging
+    // per-row roiPercent (which over-weights cheap items with extreme ROIs).
+    const portfolioRoi = totalBuyCost > 0 ? (totalProfit / totalBuyCost) * 100 : 0;
 
     db.close();
 
@@ -98,11 +102,13 @@ export async function GET(request: NextRequest) {
         totalSales,
         totalFees,
         totalProfit,
+        totalBuyCost,
       },
       averages: {
         avgOrderPrice: count > 0 ? totalSales / count : 0,
         avgFees: count > 0 ? totalFees / count : 0,
         avgProfit: count > 0 ? totalProfit / count : 0,
+        avgRoi: portfolioRoi,
       },
     });
   } catch (error) {

@@ -57,6 +57,13 @@ export default function MerchantSalesPage() {
         </div>
       ), size: 280,
     },
+    {
+      id: 'quantity', header: 'Qty', accessorKey: 'quantity',
+      cell: ({ getValue }) => {
+        const v = getValue() as number;
+        return <span className={`font-mono ${v > 1 ? 'text-text-primary font-medium' : 'text-text-tertiary'}`}>{v}</span>;
+      }, size: 60,
+    },
     { id: 'salePrice', header: 'Order Price', accessorKey: 'salePrice', cell: ({ getValue }) => <span className="font-mono text-text-primary">{formatCurrency(getValue() as number)}</span>, size: 100 },
     { id: 'shippingCharged', header: 'Ship Charged', accessorKey: 'shippingCharged', cell: ({ getValue }) => <span className="font-mono text-text-secondary">{formatCurrency(getValue() as number)}</span>, size: 100 },
     { id: 'shippingCost', header: 'Ship Cost', accessorKey: 'shippingCost', cell: ({ getValue }) => <span className="font-mono text-negative">{formatCurrency(getValue() as number)}</span>, size: 100 },
