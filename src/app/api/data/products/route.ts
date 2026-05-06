@@ -52,7 +52,12 @@ export async function GET() {
         s.id as supplierId,
         COALESCE(p.marketplace, p2.marketplace, p3.marketplace, li_sku.marketplace, li_asin.marketplace) as marketplace,
         1 as hasLedger,
-        0 as unitsSold
+        0 as unitsSold,
+        -- Count of historical sales with no COGS allocated. > 0 means the lot
+        -- was depleted and FIFO ran out — those sales are stuck at $0 COGS.
+        -- Adding stock or re-running FIFO won't help; the user needs to either
+        -- bump the lot quantity or create a new lot at the right cost basis.
+        (SELECT COUNT(*) FROM order_items oi_zc WHERE oi_zc.sku = il.sku AND oi_zc.cogs_per_unit = 0) as unitsZeroCogs
       FROM inventory_ledger il
       LEFT JOIN products p ON il.asin = p.asin
       LEFT JOIN products p2 ON il.sku = p2.sku AND p.asin IS NULL
@@ -78,7 +83,8 @@ export async function GET() {
         NULL as supplierId,
         oi_missing.marketplace,
         0 as hasLedger,
-        oi_missing.unitsSold
+        oi_missing.unitsSold,
+        oi_missing.unitsSold as unitsZeroCogs
       FROM (
         SELECT
           oi.sku,

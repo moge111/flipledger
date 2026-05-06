@@ -18,8 +18,9 @@ interface ProductRow {
   supplierName: string | null;
   supplierId: number | null;
   marketplace: string | null;
-  hasLedger: number;   // 1 if in inventory_ledger, 0 if sold-only
-  unitsSold: number;   // # sold with no ledger backing
+  hasLedger: number;       // 1 if in inventory_ledger, 0 if sold-only
+  unitsSold: number;       // # sold with no ledger backing
+  unitsZeroCogs: number;   // # of historical sales currently sitting at $0 COGS
 }
 
 interface EditState {
@@ -159,7 +160,12 @@ export default function ProductsPage() {
     return products.filter((p) => {
       if (marketplaceFilter !== 'all' && (p.marketplace || 'amazon') !== marketplaceFilter) return false;
       if (onlyMissingCogs) {
-        const missing = p.hasLedger === 0 || !p.costPerUnit || p.costPerUnit === 0;
+        // Three flavors of "missing COGS":
+        //   1. No inventory_ledger row (hasLedger=0)
+        //   2. Ledger row but buy_price=0
+        //   3. Ledger row with buy_price set, BUT lot is depleted and sales
+        //      are stuck at $0 COGS — same effect as truly missing.
+        const missing = p.hasLedger === 0 || !p.costPerUnit || p.costPerUnit === 0 || (p.unitsZeroCogs ?? 0) > 0;
         if (!missing) return false;
       }
       return true;
@@ -202,7 +208,12 @@ export default function ProductsPage() {
       id: 'product', header: 'Product', accessorFn: (row) => row.name || row.asin,
       cell: ({ row }) => {
         const p = row.original;
-        const missing = p.hasLedger === 0 || !p.costPerUnit || p.costPerUnit === 0;
+        // Three flavors of "missing COGS":
+        //   1. No inventory_ledger row (hasLedger=0)
+        //   2. Ledger row but buy_price=0
+        //   3. Ledger row with buy_price set, BUT lot is depleted and sales
+        //      are stuck at $0 COGS — same effect as truly missing.
+        const missing = p.hasLedger === 0 || !p.costPerUnit || p.costPerUnit === 0 || (p.unitsZeroCogs ?? 0) > 0;
         return (
           <div className="min-w-[250px]">
             <div className="flex items-center gap-2">
@@ -210,9 +221,15 @@ export default function ProductsPage() {
               {missing && (
                 <span
                   className="text-[9px] text-amber-400 bg-amber-500/10 px-1.5 py-0.5 rounded font-semibold tracking-wider"
-                  title={p.unitsSold > 0 ? `${p.unitsSold} unit${p.unitsSold === 1 ? '' : 's'} already sold with no COGS` : 'COGS not entered'}
+                  title={
+                    p.hasLedger === 0
+                      ? `${p.unitsSold} unit${p.unitsSold === 1 ? '' : 's'} sold with no COGS — no inventory entry exists`
+                      : (p.unitsZeroCogs ?? 0) > 0
+                      ? `Lot depleted — ${p.unitsZeroCogs} sale${p.unitsZeroCogs === 1 ? '' : 's'} stuck at $0 COGS. Edit to bump quantity or add a new lot.`
+                      : 'COGS not entered'
+                  }
                 >
-                  MISSING COGS
+                  {(p.unitsZeroCogs ?? 0) > 0 && p.hasLedger === 1 ? 'DEPLETED LOT' : 'MISSING COGS'}
                 </span>
               )}
             </div>
