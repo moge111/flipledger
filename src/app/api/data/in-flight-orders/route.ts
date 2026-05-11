@@ -23,6 +23,9 @@ export async function GET(request: NextRequest) {
     // Defense-in-depth: if cogs_per_unit is 0 (FIFO lot depleted), fall back to
     // the latest inventory_ledger.buy_price for this SKU. Doesn't change historical P&L
     // — this only affects the projection shown on the dashboard drill.
+    //
+    // ftv2 = Finances v2024 — per-order transaction with maturity_date when
+    // available, otherwise we fall back to shipped_at + 10 days heuristic.
     const rows = db.prepare(`
       SELECT
         o.order_id,
@@ -39,7 +42,10 @@ export async function GET(request: NextRequest) {
         (oi.price_per_unit * oi.quantity + COALESCE(oi.shipping_charged, 0)) AS revenue,
         (oi.cogs_per_unit * oi.quantity) AS cogs,
         (SELECT buy_price FROM inventory_ledger il WHERE il.sku = oi.sku ORDER BY il.id DESC LIMIT 1) AS fallback_buy_price,
-        COALESCE(p.name, li.product_name, oi.sku) AS product_name
+        COALESCE(p.name, li.product_name, oi.sku) AS product_name,
+        ftv2.maturity_date AS amazon_maturity_date,
+        ftv2.transaction_status AS ftv2_status,
+        ftv2.deferral_reason AS ftv2_deferral_reason
       FROM orders o
       JOIN order_items oi ON oi.order_id = o.order_id
       LEFT JOIN (
@@ -47,16 +53,27 @@ export async function GET(request: NextRequest) {
       ) fe ON fe.order_id = o.order_id
       LEFT JOIN products p ON p.asin = oi.asin
       LEFT JOIN live_inventory li ON li.sku = oi.sku
+      LEFT JOIN (
+        -- Latest v2024 transaction per order (a refund can come after the
+        -- shipment, so pick the Shipment-type one specifically).
+        SELECT order_id, maturity_date, transaction_status, deferral_reason
+        FROM finances_transactions_v2
+        WHERE transaction_type = 'Shipment' AND order_id IS NOT NULL
+      ) ftv2 ON ftv2.order_id = o.order_id
       WHERE o.status IN ('Shipped', 'PartiallyShipped')
         AND fe.order_id IS NULL
         AND o.purchase_date >= ?
         AND o.marketplace = ?
-      ORDER BY COALESCE(o.shipped_at, o.purchase_date) ASC, o.order_id
+      ORDER BY COALESCE(ftv2.maturity_date, o.shipped_at, o.purchase_date) ASC, o.order_id
     `).all(recentCutoff, marketplace) as any[];
 
     const items = rows.map(r => {
       const shipBase = r.shipped_at || r.purchase_date;
-      const expectedRelease = new Date(new Date(shipBase).getTime() + DDP_DAYS * 86400000).toISOString();
+      // Prefer Amazon's actual maturity_date from v2024 Finances when available.
+      // Falls back to ship_date + 10 days for orders not yet seen in v2024.
+      const expectedRelease = r.amazon_maturity_date
+        || new Date(new Date(shipBase).getTime() + DDP_DAYS * 86400000).toISOString();
+      const releaseSource: 'amazon' | 'heuristic' = r.amazon_maturity_date ? 'amazon' : 'heuristic';
       // COGS fallback: if FIFO returned 0 and we know the last buy_price for this SKU, use it.
       let cogs = r.cogs;
       let cogsSource: 'fifo' | 'fallback' | 'missing' = 'fifo';
@@ -72,7 +89,11 @@ export async function GET(request: NextRequest) {
       const estimatedFees = Math.round(r.revenue * 0.13);
       const projectedProfit = r.revenue - cogs - estimatedFees - mfnShipping;
       const daysHeld = Math.floor((Date.now() - new Date(shipBase).getTime()) / 86400000);
-      const daysUntilRelease = Math.max(0, DDP_DAYS - daysHeld);
+      // Days until release: prefer the real maturity date (precise to seconds),
+      // otherwise use the ship+10 heuristic. Floor to 0 — orders past their
+      // expected release but still un-posted will show 0 days remaining.
+      const msToRelease = new Date(expectedRelease).getTime() - Date.now();
+      const daysUntilRelease = Math.max(0, Math.ceil(msToRelease / 86400000));
       return {
         orderId: r.order_id,
         productName: r.product_name,
@@ -83,6 +104,9 @@ export async function GET(request: NextRequest) {
         purchaseDate: r.purchase_date,
         shippedAt: r.shipped_at,
         expectedRelease,
+        releaseSource,
+        deferralReason: r.ftv2_deferral_reason || null,
+        amazonStatus: r.ftv2_status || null,
         daysHeld,
         daysUntilRelease,
         revenue: r.revenue,

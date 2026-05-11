@@ -404,6 +404,32 @@ export function initializeDatabase() {
     CREATE INDEX IF NOT EXISTS idx_reserve_balance_date
       ON reserve_balance_history(posted_date);
 
+    -- Per-transaction state from SP-API Finances v2024-06-19. Critical for
+    -- DD7 (Delivery Date Policy) cash-flow timing. transaction_status =
+    -- DEFERRED → funds held until maturity_date. RELEASED → already
+    -- available (and on Express Payments, already disbursed).
+    -- DEFERRED_RELEASED → was held, now released.
+    CREATE TABLE IF NOT EXISTS finances_transactions_v2 (
+      transaction_id TEXT PRIMARY KEY,
+      transaction_type TEXT NOT NULL,
+      transaction_status TEXT NOT NULL,
+      deferral_reason TEXT,
+      posted_date TEXT NOT NULL,
+      maturity_date TEXT,
+      total_amount_cents INTEGER NOT NULL DEFAULT 0,
+      marketplace_id TEXT,
+      order_id TEXT,
+      shipment_id TEXT,
+      settlement_id TEXT,
+      financial_event_group_id TEXT,
+      description TEXT,
+      raw_data TEXT,
+      fetched_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_ftv2_order_id ON finances_transactions_v2(order_id);
+    CREATE INDEX IF NOT EXISTS idx_ftv2_status_maturity ON finances_transactions_v2(transaction_status, maturity_date);
+    CREATE INDEX IF NOT EXISTS idx_ftv2_posted_date ON finances_transactions_v2(posted_date);
+
     -- Best-Sellers-Rank snapshots from Catalog API. One row per
     -- (asin, captured_date) — daily granularity is enough.
     CREATE TABLE IF NOT EXISTS sales_rank_history (
