@@ -314,31 +314,38 @@ export async function GET(request: NextRequest) {
 
     // Limit to last 14 days — older shipped-no-event orders are stuck anomalies, not actionable.
     // Amazon's Delivery Date Policy holds funds ~7-10 days from ship (≈ delivery + 7-day cushion).
+    // Prefer Amazon's actual maturity_date from Finances v2024 when available.
     const recentCutoff = new Date(Date.now() - 14 * 86400000).toISOString();
+    const DDP_DAYS = 10;
     const shippedNotPostedData = db.prepare(`
       SELECT
         COUNT(DISTINCT o.order_id) as orders,
         COALESCE(SUM(oi.price_per_unit * oi.quantity + COALESCE(oi.shipping_charged, 0)), 0) as revenue,
         COALESCE(SUM(oi.cogs_per_unit * oi.quantity), 0) as cogs,
-        MIN(COALESCE(o.shipped_at, o.purchase_date)) as earliestShip,
-        MAX(COALESCE(o.shipped_at, o.purchase_date)) as latestShip
+        -- Earliest/latest release: use ftv2.maturity_date if available, else ship_date + DDP_DAYS
+        MIN(COALESCE(
+          ftv2.maturity_date,
+          datetime(COALESCE(o.shipped_at, o.purchase_date), '+' || ? || ' days')
+        )) as earliestRelease,
+        MAX(COALESCE(
+          ftv2.maturity_date,
+          datetime(COALESCE(o.shipped_at, o.purchase_date), '+' || ? || ' days')
+        )) as latestRelease
       FROM orders o
       JOIN order_items oi ON oi.order_id = o.order_id
       LEFT JOIN ${FE_POSTED} fe ON fe.order_id = o.order_id
+      LEFT JOIN (
+        SELECT order_id, maturity_date FROM finances_transactions_v2
+        WHERE transaction_type = 'Shipment' AND order_id IS NOT NULL
+      ) ftv2 ON ftv2.order_id = o.order_id
       WHERE o.status IN ('Shipped', 'PartiallyShipped')
         AND fe.order_id IS NULL
         AND o.purchase_date >= ?
         ${pendingMF}
-    `).get(recentCutoff) as any;
+    `).get(DDP_DAYS, DDP_DAYS, recentCutoff) as any;
 
-    // Amazon's Delivery Date Policy: funds release ~10 days after ship (typical observed window 8-10 days)
-    const DDP_DAYS = 10;
-    const earliestRelease = shippedNotPostedData.earliestShip
-      ? new Date(new Date(shippedNotPostedData.earliestShip).getTime() + DDP_DAYS * 86400000).toISOString()
-      : null;
-    const latestRelease = shippedNotPostedData.latestShip
-      ? new Date(new Date(shippedNotPostedData.latestShip).getTime() + DDP_DAYS * 86400000).toISOString()
-      : null;
+    const earliestRelease = shippedNotPostedData.earliestRelease || null;
+    const latestRelease = shippedNotPostedData.latestRelease || null;
 
     // Trailing 30d Amazon AOV — used to estimate pending order revenue (Amazon doesn't
     // return order_items or OrderTotal for Pending status until buyer payment clears)

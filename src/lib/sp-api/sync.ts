@@ -4,6 +4,7 @@
  */
 
 import { syncFinancialEvents, resetServiceFeeTracker } from './finances';
+import { syncFinancesV2024Transactions } from './financesV2024';
 import { dedupAmazonReimbursements } from './dedupReimbursements';
 import { syncOrders } from './orders';
 import { syncFBAInventory } from './inventory';
@@ -95,6 +96,23 @@ export async function runFullSync(
     currentSync.results.push(finSyncResult);
     totalRecords += finResult.eventsProcessed;
     console.log(`[Sync] Financial events: ${finResult.eventsProcessed} events, ${finResult.errors.length} errors`);
+
+    // 2b. Finances v2024 — per-transaction deferral status + maturityDate.
+    // The v0 sync above doesn't expose DD7 hold info; v2024 does. Keeps both
+    // in sync — we use v0 for event ingestion and v2024 for cash-flow timing.
+    // Default window: last 30 days (matches Amazon's max per-call window).
+    console.log('[Sync] Starting finances v2024 transactions sync...');
+    const fin2Start = Date.now();
+    const fin2Result = await syncFinancesV2024Transactions(credentials);
+    const fin2SyncResult: SyncResult = {
+      syncType: 'finances_v2024',
+      recordsFetched: fin2Result.inserted + fin2Result.updated,
+      errors: fin2Result.errors,
+      duration: Date.now() - fin2Start,
+    };
+    currentSync.results.push(fin2SyncResult);
+    totalRecords += fin2Result.inserted + fin2Result.updated;
+    console.log(`[Sync] Finances v2024: ${fin2Result.inserted} new, ${fin2Result.updated} updated, ${fin2Result.pagesFetched} page(s), ${fin2Result.errors.length} errors`);
 
     // 3. FBA Inventory — current stock levels
     console.log('[Sync] Starting FBA inventory sync...');

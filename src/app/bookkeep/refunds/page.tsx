@@ -20,6 +20,9 @@ interface RefundRow {
   itemReturned: boolean;
   feeClawback: number;
   netImpact: number;
+  cashImpact?: 'held-fund' | 'real' | 'unknown';
+  shipmentStatus?: string | null;
+  shipmentMaturity?: string | null;
 }
 
 export default function RefundsPage() {
@@ -70,6 +73,30 @@ export default function RefundsPage() {
       cell: ({ getValue }) => <span className="font-mono font-medium text-negative">{formatCurrency(getValue() as number)}</span>,
       size: 110,
     },
+    {
+      id: 'cashImpact', header: 'Cash Impact', accessorKey: 'cashImpact',
+      cell: ({ row }) => {
+        const c = row.original.cashImpact;
+        if (c === 'held-fund') {
+          return (
+            <span className="text-[10px] font-semibold px-2 py-0.5 rounded bg-positive-muted text-positive"
+              title={`Refund cancelled held funds — no real cash out. Shipment was still DEFERRED (DD7) when refunded${row.original.shipmentMaturity ? `, maturity ${row.original.shipmentMaturity.slice(0,10)}` : ''}.`}>
+              HELD-FUND
+            </span>
+          );
+        }
+        if (c === 'real') {
+          return (
+            <span className="text-[10px] font-semibold px-2 py-0.5 rounded bg-negative-muted text-negative"
+              title="Real cash deduction. Original shipment funds had already released/disbursed before the refund posted.">
+              REAL CASH
+            </span>
+          );
+        }
+        return <span className="text-[10px] text-text-tertiary">—</span>;
+      },
+      size: 100,
+    },
   ], []);
 
   if (loading) return <div className="space-y-4"><div className="skeleton h-6 w-32" /><div className="skeleton h-[400px] w-full" /></div>;
@@ -85,6 +112,41 @@ export default function RefundsPage() {
         <StatCard label="Total Fee Clawbacks" value={totals?.totalClawback || 0} format="currency" accentColor="positive" />
         <StatCard label="Net Impact" value={totals?.totalNetImpact || 0} format="currency" accentColor="negative" />
       </div>
+      {/* Cash-flow split: did the refund cancel held funds, or hit your bank? */}
+      {(totals?.heldFundImpact || totals?.realCashImpact) && (
+        <div className="mb-6 grid grid-cols-1 lg:grid-cols-3 gap-4">
+          <div className="bg-bg-surface border border-border-subtle rounded-lg p-4">
+            <div className="flex items-center justify-between mb-1">
+              <div className="text-[11px] uppercase tracking-wider text-text-tertiary">Held-fund refunds</div>
+              <div className="text-[10px] text-text-tertiary">No cash impact</div>
+            </div>
+            <div className="text-2xl font-mono text-positive">{formatCurrency(totals?.heldFundImpact || 0)}</div>
+            <div className="text-xs text-text-tertiary mt-1">
+              Refunds that cancelled DD7-held funds before they released. Amazon balanced internally — no money left your account.
+            </div>
+          </div>
+          <div className="bg-bg-surface border border-border-subtle rounded-lg p-4">
+            <div className="flex items-center justify-between mb-1">
+              <div className="text-[11px] uppercase tracking-wider text-text-tertiary">Real cash deductions</div>
+              <div className="text-[10px] text-text-tertiary">Disbursed → reversed</div>
+            </div>
+            <div className="text-2xl font-mono text-negative">{formatCurrency(totals?.realCashImpact || 0)}</div>
+            <div className="text-xs text-text-tertiary mt-1">
+              Refunds of orders whose funds had already released (and likely disbursed). Real cash out of your bank.
+            </div>
+          </div>
+          <div className="bg-bg-surface border border-border-subtle rounded-lg p-4">
+            <div className="flex items-center justify-between mb-1">
+              <div className="text-[11px] uppercase tracking-wider text-text-tertiary">Unknown (non-Amazon)</div>
+              <div className="text-[10px] text-text-tertiary">WMT/eBay/PP</div>
+            </div>
+            <div className="text-2xl font-mono text-text-tertiary">{formatCurrency(totals?.unknownImpact || 0)}</div>
+            <div className="text-xs text-text-tertiary mt-1">
+              DD7 cash-flow classification is Amazon-only. Walmart/eBay/PayPal refunds have their own timing rules.
+            </div>
+          </div>
+        </div>
+      )}
       <DataTable data={rows} columns={columns} searchPlaceholder="Search by order ID, product, or reason..." />
     </div>
   );
