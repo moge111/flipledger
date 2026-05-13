@@ -114,6 +114,13 @@ interface ShippingEstimate {
   sampleSize: number;
 }
 
+interface ExistingMsku {
+  msku: string;
+  lastBuyPriceCents: number;
+  source: 'live_inventory' | 'inventory_ledger' | 'listing_batch';
+  unitsInStock?: number | null;
+}
+
 interface CatalogResult {
   asin: string;
   name: string | null;
@@ -131,6 +138,7 @@ interface CatalogResult {
   feeEstimate?: FeeEstimate | null;
   feeEstimatePriceCents?: number;
   shippingEstimate?: ShippingEstimate | null;
+  existingMskus?: ExistingMsku[];
 }
 
 function StatusBadge({ status }: { status: string }) {
@@ -1185,6 +1193,29 @@ export default function BatchDetailPage({ params }: { params: Promise<{ id: stri
                         <span className="text-text-primary font-mono">{scanned.currentFbaStock ?? 0}</span>
                       </div>
                     </div>
+                    {scanned.existingMskus && scanned.existingMskus.length > 0 && (
+                      <div className="mt-2 flex flex-wrap items-center gap-1.5 text-[11px]">
+                        <span className="text-text-tertiary mr-1">Restock as:</span>
+                        {scanned.existingMskus.slice(0, 4).map((m) => (
+                          <button
+                            key={m.msku}
+                            type="button"
+                            onClick={() => {
+                              setSku(m.msku);
+                              setSkuManuallyEdited(true);
+                              if (m.lastBuyPriceCents > 0) {
+                                setBuyPrice((m.lastBuyPriceCents / 100).toFixed(2));
+                              }
+                            }}
+                            className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-accent/10 text-accent hover:bg-accent/20 transition-colors font-mono"
+                            title={`Use this MSKU (no new Amazon listing will be created). Buy price ${m.lastBuyPriceCents > 0 ? '$' + (m.lastBuyPriceCents / 100).toFixed(2) : 'unknown'} from ${m.source}${m.unitsInStock ? ` · ${m.unitsInStock} in FBA` : ''}`}
+                          >
+                            {m.msku}
+                            {m.unitsInStock ? <span className="text-text-tertiary">·{m.unitsInStock}</span> : null}
+                          </button>
+                        ))}
+                      </div>
+                    )}
                   </div>
                 </div>
 
