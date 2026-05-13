@@ -209,15 +209,19 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
 
   // For "shipping" labels, Amazon's Thermal_Unified PDF is a 4.25×6" page with
   // FBA carton ID at the top (~45% of page) and UPS shipping label at the bottom
-  // (~55% of page). Crop off the FBA portion so the Rollo prints only the UPS
-  // label — gives the user TWO separate physical stickers per box (one from
-  // "box labels" with FBA-only, one from "shipping labels" with UPS-only).
+  // (~55% of page). Crop off the FBA portion AND re-canvas onto a true 4×6
+  // page (288×432pt) so it prints to a 4×6 Rollo at the right physical size.
+  // No rotation or non-uniform scaling — barcodes stay scannable. Some whitespace
+  // ends up at the bottom of the 4×6 sticker (the UPS portion's natural aspect
+  // ratio is wider than 4×6).
   if (type === 'shipping') {
     try {
-      const { cropPagesBottomPortion } = await import('@/lib/pdf-crop');
-      pdfBuffer = await cropPagesBottomPortion(pdfBuffer, 0.55);
+      const { cropBottomAndRecanvas } = await import('@/lib/pdf-crop');
+      const FOUR_BY_SIX_W_PT = 288; // 4 in × 72 pt/in
+      const FOUR_BY_SIX_H_PT = 432; // 6 in × 72 pt/in
+      pdfBuffer = await cropBottomAndRecanvas(pdfBuffer, 0.55, FOUR_BY_SIX_W_PT, FOUR_BY_SIX_H_PT);
     } catch (err) {
-      console.warn('[labels] PDF crop failed; sending unmodified Unified label:', err);
+      console.warn('[labels] PDF crop+recanvas failed; sending unmodified Unified label:', err);
     }
   }
 
