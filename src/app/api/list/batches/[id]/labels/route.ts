@@ -84,11 +84,17 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
   let creds: SPAPICredentials | null;
   let inboundPlanId: string | null;
   let printerName: string;
+  let isPartneredCarrier = false;
   try {
     const batch = db.prepare(`
-      SELECT id, status, channel, inbound_plan_id as inboundPlanId
+      SELECT id, status, channel, inbound_plan_id as inboundPlanId,
+             transportation_status as transportationStatus,
+             transportation_shipping_mode as transportationShippingMode,
+             transportation_carrier as transportationCarrier
       FROM listing_batches WHERE id = ?
-    `).get(batchId) as { id: number; status: string; channel: string; inboundPlanId: string | null } | undefined;
+    `).get(batchId) as { id: number; status: string; channel: string; inboundPlanId: string | null;
+      transportationStatus: string | null; transportationShippingMode: string | null; transportationCarrier: string | null;
+    } | undefined;
     if (!batch) {
       return NextResponse.json({ error: 'Batch not found' }, { status: 404 });
     }
@@ -109,6 +115,13 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
     creds = getAmazonCredentials(db);
     inboundPlanId = batch.inboundPlanId;
     printerName = getSetting(db, 'listing_rollo_printer_name') || 'Printer ThermalPrinter';
+    // If transportation is CONFIRMED and shipping_mode is small parcel, the seller
+    // is on Amazon Partnered Carrier (UPS) — Amazon generates combined FBA+UPS
+    // labels and the right PageType is one of the "_Unified" variants. We use this
+    // hint to default to a Rollo-friendly thermal_unified format.
+    isPartneredCarrier = batch.transportationStatus === 'CONFIRMED'
+      && (batch.transportationCarrier || '').toLowerCase().includes('ups')
+      && batch.transportationShippingMode === 'GROUND_SMALL_PARCEL';
   } finally {
     db.close();
   }
@@ -122,16 +135,39 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
   // Map (type, action) → SP-API params.
   // FNSKU per-unit labels = LabelType=UNIQUE
   // Box ID labels        = LabelType=BARCODE_2D
-  // PageType: thermal (4×6) when printing to Rollo, Letter_6 when downloading
-  // for the user to print on standard paper.
+  //
+  // PageType selection (verified empirically against Amazon's spec):
+  //   FNSKU labels are always per-unit Amazon stickers — same format regardless
+  //   of carrier choice. Use Letter_6 for download, Thermal for Rollo print.
+  //
+  //   Box labels: for Partnered Carrier (UPS SPD) Amazon generates a COMBINED
+  //   FBA carton ID + UPS shipping label in one document. The right PageType is:
+  //     - PackageLabel_Thermal_Unified  for Rollo thermal (single 4×6 with both)
+  //     - PackageLabel_Plain_Paper_CarrierBottom  for letter-size download
+  //   For non-Partnered (own carrier), only FBA carton ID is generated:
+  //     - PackageLabel_Thermal_NonPCP   for Rollo
+  //     - PackageLabel_Plain_Paper       for download
   const labelType: LabelType = type === 'fnsku' ? 'UNIQUE' : 'BARCODE_2D';
   let pageType: LabelPageType;
   if (pageTypeOverride) {
     pageType = pageTypeOverride;
   } else if (action === 'print') {
-    pageType = 'PackageLabel_Thermal'; // Rollo is thermal
+    if (type === 'box' && isPartneredCarrier) {
+      pageType = 'PackageLabel_Thermal_Unified';
+    } else if (type === 'box') {
+      pageType = 'PackageLabel_Thermal_NonPCP';
+    } else {
+      pageType = 'PackageLabel_Thermal'; // FNSKU on Rollo
+    }
   } else {
-    pageType = type === 'fnsku' ? 'PackageLabel_Letter_6' : 'PackageLabel_Plain_Paper';
+    // Download path
+    if (type === 'box' && isPartneredCarrier) {
+      pageType = 'PackageLabel_Plain_Paper_CarrierBottom';
+    } else if (type === 'fnsku') {
+      pageType = 'PackageLabel_Letter_6';
+    } else {
+      pageType = 'PackageLabel_Plain_Paper';
+    }
   }
 
   let labelsResponse;
