@@ -57,7 +57,8 @@ export async function GET() {
         -- was depleted and FIFO ran out — those sales are stuck at $0 COGS.
         -- Adding stock or re-running FIFO won't help; the user needs to either
         -- bump the lot quantity or create a new lot at the right cost basis.
-        (SELECT COUNT(*) FROM order_items oi_zc WHERE oi_zc.sku = il.sku AND oi_zc.cogs_per_unit = 0) as unitsZeroCogs
+        (SELECT COUNT(*) FROM order_items oi_zc WHERE oi_zc.sku = il.sku AND oi_zc.cogs_per_unit = 0) as unitsZeroCogs,
+        COALESCE(il.intentional_zero_cogs, 0) as intentionalZeroCogs
       FROM inventory_ledger il
       LEFT JOIN products p ON il.asin = p.asin
       LEFT JOIN products p2 ON il.sku = p2.sku AND p.asin IS NULL
@@ -84,7 +85,8 @@ export async function GET() {
         oi_missing.marketplace,
         0 as hasLedger,
         oi_missing.unitsSold,
-        oi_missing.unitsSold as unitsZeroCogs
+        oi_missing.unitsSold as unitsZeroCogs,
+        0 as intentionalZeroCogs
       FROM (
         SELECT
           oi.sku,
@@ -126,7 +128,7 @@ export async function GET() {
 
 export async function POST(request: NextRequest) {
   const body = await request.json();
-  const { sku, asin, buyPrice, supplier, datePurchased, quantity } = body;
+  const { sku, asin, buyPrice, supplier, datePurchased, quantity, intentionalZeroCogs } = body;
 
   if (!sku && !asin) {
     return NextResponse.json({ error: 'SKU or ASIN required' }, { status: 400 });
@@ -135,7 +137,10 @@ export async function POST(request: NextRequest) {
   const db = getDb();
   try {
     const now = new Date().toISOString();
-    const buyPriceCents = Math.round((buyPrice || 0) * 100);
+    // Self-pulled / gift / no-cost-basis items: force buy_price to 0 and mark
+    // the row so the UI knows the $0 is intentional (no "MISSING COGS" warning).
+    const isIntentionalZero = !!intentionalZeroCogs;
+    const buyPriceCents = isIntentionalZero ? 0 : Math.round((buyPrice || 0) * 100);
 
     // Upsert supplier if name provided
     let supplierId = null;
@@ -167,9 +172,10 @@ export async function POST(request: NextRequest) {
             quantity = ?,
             quantity_remaining = quantity_remaining + ?,
             supplier_id = COALESCE(?, supplier_id),
-            date_purchased = COALESCE(?, date_purchased)
+            date_purchased = COALESCE(?, date_purchased),
+            intentional_zero_cogs = ?
           WHERE sku = ?
-        `).run(buyPriceCents, desiredQty, qtyDelta, supplierId, datePurchased, sku);
+        `).run(buyPriceCents, desiredQty, qtyDelta, supplierId, datePurchased, isIntentionalZero ? 1 : 0, sku);
       } else {
         // New ledger row. If the user is back-filling COGS for a SKU that has
         // already been SOLD (common for eBay items that were never pre-entered),
@@ -189,9 +195,9 @@ export async function POST(request: NextRequest) {
         // quantity_remaining starts at the seed qty; the FIFO recalc below
         // will immediately decrement it to reflect past sales.
         db.prepare(`
-          INSERT INTO inventory_ledger (asin, sku, buy_price, quantity, quantity_remaining, supplier_id, date_purchased, created_at)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        `).run(asin || sku, sku, buyPriceCents, seedQty, seedQty, supplierId, datePurchased || now, now);
+          INSERT INTO inventory_ledger (asin, sku, buy_price, quantity, quantity_remaining, supplier_id, date_purchased, intentional_zero_cogs, created_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `).run(asin || sku, sku, buyPriceCents, seedQty, seedQty, supplierId, datePurchased || now, isIntentionalZero ? 1 : 0, now);
       }
     } else if (asin) {
       // Update all entries for this ASIN

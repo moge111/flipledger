@@ -18,9 +18,10 @@ interface ProductRow {
   supplierName: string | null;
   supplierId: number | null;
   marketplace: string | null;
-  hasLedger: number;       // 1 if in inventory_ledger, 0 if sold-only
-  unitsSold: number;       // # sold with no ledger backing
-  unitsZeroCogs: number;   // # of historical sales currently sitting at $0 COGS
+  hasLedger: number;          // 1 if in inventory_ledger, 0 if sold-only
+  unitsSold: number;          // # sold with no ledger backing
+  unitsZeroCogs: number;      // # of historical sales currently sitting at $0 COGS
+  intentionalZeroCogs: number; // 1 = $0 COGS is deliberate (self-pulled / gift)
 }
 
 interface EditState {
@@ -29,6 +30,7 @@ interface EditState {
   buyPrice: string;
   supplier: string;
   datePurchased: string;
+  intentionalZeroCogs: boolean;
 }
 
 interface Lot {
@@ -165,7 +167,10 @@ export default function ProductsPage() {
         //   2. Ledger row but buy_price=0
         //   3. Ledger row with buy_price set, BUT lot is depleted and sales
         //      are stuck at $0 COGS — same effect as truly missing.
-        const missing = p.hasLedger === 0 || !p.costPerUnit || p.costPerUnit === 0 || (p.unitsZeroCogs ?? 0) > 0;
+        // EXCEPT: intentionalZeroCogs=1 means the user marked this SKU as
+        // self-pulled / gift / no cost basis. $0 is correct, not missing.
+        const intentional = (p.intentionalZeroCogs ?? 0) === 1;
+        const missing = !intentional && (p.hasLedger === 0 || !p.costPerUnit || p.costPerUnit === 0 || (p.unitsZeroCogs ?? 0) > 0);
         if (!missing) return false;
       }
       return true;
@@ -196,6 +201,7 @@ export default function ProductsPage() {
         buyPrice: parseFloat(editing.buyPrice) || 0,
         supplier: editing.supplier,
         datePurchased: editing.datePurchased || null,
+        intentionalZeroCogs: editing.intentionalZeroCogs,
       }),
     });
     setEditing(null);
@@ -213,7 +219,10 @@ export default function ProductsPage() {
         //   2. Ledger row but buy_price=0
         //   3. Ledger row with buy_price set, BUT lot is depleted and sales
         //      are stuck at $0 COGS — same effect as truly missing.
-        const missing = p.hasLedger === 0 || !p.costPerUnit || p.costPerUnit === 0 || (p.unitsZeroCogs ?? 0) > 0;
+        // EXCEPT: intentionalZeroCogs=1 means the user marked this SKU as
+        // self-pulled / gift / no cost basis. $0 is correct, not missing.
+        const intentional = (p.intentionalZeroCogs ?? 0) === 1;
+        const missing = !intentional && (p.hasLedger === 0 || !p.costPerUnit || p.costPerUnit === 0 || (p.unitsZeroCogs ?? 0) > 0);
         return (
           <div className="min-w-[250px]">
             <div className="flex items-center gap-2">
@@ -230,6 +239,14 @@ export default function ProductsPage() {
                   }
                 >
                   {(p.unitsZeroCogs ?? 0) > 0 && p.hasLedger === 1 ? 'DEPLETED LOT' : 'MISSING COGS'}
+                </span>
+              )}
+              {intentional && (
+                <span
+                  className="text-[9px] text-blue-400 bg-blue-500/10 px-1.5 py-0.5 rounded font-semibold tracking-wider"
+                  title="Marked as self-pulled / no-cost-basis. $0 COGS is intentional — full sale price counts as profit."
+                >
+                  SELF-PULLED
                 </span>
               )}
             </div>
@@ -295,6 +312,7 @@ export default function ProductsPage() {
               buyPrice: row.original.costPerUnit?.toString() || '',
               supplier: row.original.supplierName || '',
               datePurchased: row.original.datePurchased?.split('T')[0] || '',
+              intentionalZeroCogs: (row.original.intentionalZeroCogs ?? 0) === 1,
             })}
             className="text-xs text-accent hover:text-accent-hover transition-colors"
           >
@@ -401,9 +419,26 @@ export default function ProductsPage() {
                 <input
                   type="number" step="0.01" value={editing.buyPrice}
                   onChange={e => setEditing({ ...editing, buyPrice: e.target.value })}
-                  className="w-full h-9 px-3 bg-bg-input border border-border-default rounded-md text-sm text-text-primary focus:border-accent focus:outline-none"
+                  disabled={editing.intentionalZeroCogs}
+                  className="w-full h-9 px-3 bg-bg-input border border-border-default rounded-md text-sm text-text-primary focus:border-accent focus:outline-none disabled:opacity-50 disabled:cursor-not-allowed"
                   autoFocus
                 />
+              </div>
+              <div className="bg-bg-elevated border border-border-subtle rounded-md p-3">
+                <label className="flex items-start gap-2 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={editing.intentionalZeroCogs}
+                    onChange={e => setEditing({ ...editing, intentionalZeroCogs: e.target.checked, buyPrice: e.target.checked ? '0' : editing.buyPrice })}
+                    className="mt-0.5"
+                  />
+                  <div className="flex-1">
+                    <div className="text-sm font-medium text-text-primary">Self-pulled / no cost basis</div>
+                    <div className="text-xs text-text-tertiary mt-0.5">
+                      Mark this SKU as having $0 COGS on purpose (e.g. trading cards you pulled from packs, gifts, items inherited). Suppresses the &quot;missing COGS&quot; warning. Full sale price will count as profit.
+                    </div>
+                  </div>
+                </label>
               </div>
               <div>
                 <label className="block text-xs font-medium tracking-wide uppercase text-text-tertiary mb-1">Supplier</label>
