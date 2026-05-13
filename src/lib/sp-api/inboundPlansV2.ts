@@ -252,8 +252,18 @@ export interface PackingConfiguration {
     heightIn: number;
     weightLb: number;
   };
-  // Items packed in this box — msku + quantity. Must match the plan's items.
-  items: Array<{ msku: string; quantity: number }>;
+  // Items packed in this box. Must match the plan's items exactly — Amazon
+  // validates labelOwner + prepOwner against what was registered when the
+  // inbound plan was created. Mismatch returns 400 "Package group X did not
+  // contain expected items and/or quantities".
+  items: Array<{
+    msku: string;
+    quantity: number;
+    labelOwner?: 'SELLER' | 'AMAZON' | 'NONE';
+    prepOwner?: 'SELLER' | 'AMAZON' | 'NONE';
+    expiration?: string;
+    manufacturingLotCode?: string;
+  }>;
 }
 
 export interface PackingGroup {
@@ -398,15 +408,40 @@ export async function setPackingInformation(
           value: b.weight.value,
         },
         quantity: b.quantity,
-        items: b.items.map((i) => ({
-          msku: i.msku,
-          quantity: i.quantity,
-          labelOwner: i.labelOwner || 'SELLER',
-          prepOwner: i.prepOwner || 'NONE',
-        })),
+        items: b.items.map((i) => {
+          // Amazon validates the box's item set against the pack group's
+          // registered items by comparing the FULL Item shape, including
+          // mlc/expiration. Per the error response:
+          //   "expected: Item(msku=..., mlc=null, expiration=null,
+          //    labelOwner=SELLER, prepOwner=NONE)"
+          // Including the optional fields explicitly with null values matches
+          // the expected shape exactly. We only include expiration/mlc when
+          // the caller specified them; otherwise we omit so Amazon treats as null.
+          const out: Record<string, unknown> = {
+            msku: i.msku,
+            quantity: i.quantity,
+            labelOwner: i.labelOwner || 'SELLER',
+            prepOwner: i.prepOwner || 'NONE',
+          };
+          if (i.expiration) out.expiration = i.expiration;
+          if (i.manufacturingLotCode) out.manufacturingLotCode = i.manufacturingLotCode;
+          return out;
+        }),
       })),
     })),
   };
+
+  console.log('[setPackingInformation] request body:', JSON.stringify(body, null, 2));
+  // Persist the body so we can inspect it server-side after a failure.
+  // (The error message dialog truncates; the file gives us the full body.)
+  try {
+    const fs = await import('fs');
+    const path = await import('path');
+    fs.writeFileSync(
+      path.join(process.cwd(), 'data', 'debug-set-packing-information.json'),
+      JSON.stringify(body, null, 2)
+    );
+  } catch { /* non-fatal */ }
 
   const response = await fetch(
     `${endpoint}/inbound/fba/2024-03-20/inboundPlans/${encodeURIComponent(inboundPlanId)}/packingInformation`,

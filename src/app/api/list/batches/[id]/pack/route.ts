@@ -235,9 +235,21 @@ export async function POST(
             value: box.weightLb,
           },
           quantity: 1,
+          // labelOwner + prepOwner MUST match what was registered with the
+          // pack group at createInboundPlan/confirmPackingOption time. Amazon
+          // validates the item set against what it expects and rejects with:
+          //   "Package group X did not contain expected items and/or
+          //    quantities. ... expected: Item(msku=..., labelOwner=SELLER, ...)"
+          // We default both to SELLER/NONE here — matching the defaults in
+          // src/lib/sp-api/inboundPlansV2.ts createInboundPlan.
           items: boxItems
             .filter((bi) => bi.boxId === box.id)
-            .map((bi) => ({ msku: bi.msku, quantity: bi.quantity })),
+            .map((bi) => ({
+              msku: bi.msku,
+              quantity: bi.quantity,
+              labelOwner: 'SELLER' as const,
+              prepOwner: 'NONE' as const,
+            })),
         })),
       };
     });
