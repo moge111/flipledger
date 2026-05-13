@@ -255,26 +255,23 @@ export async function POST(
       }
     }
 
-    console.log(`[pack] Sending ${packageGroupings.length} pack group(s) with ${boxes.length} total box(es) to setPackingInformation`);
+    // ORDER MATTERS (corrected 2026-05-11): confirmPackingOption must be
+    // called BEFORE setPackingInformation. Amazon's contract:
+    //
+    //   confirmPackingOption associates the chosen packingOption (and its
+    //   packingGroupId) with the inbound plan. Until that happens,
+    //   setPackingInformation fails with FBA_INB-style 400:
+    //   "Package grouping ID not found in the inbound plan. You can associate
+    //    a packaging grouping ID with an inbound plan by calling the
+    //    ConfirmPackingOption operation."
+    //
+    // The earlier ordering (set → confirm) worked when this endpoint was
+    // entitlement-blocked anyway, so the actual contract surfaced as soon as
+    // the 403 lifted. Now we always confirm first.
 
-    let setPackingOp: { operationId: string };
-    try {
-      setPackingOp = await setPackingInformation(creds, batch.inboundPlanId, packageGroupings);
-    } catch (err) {
-      updateBatchPacking(batchId, { status: 'FAILED', error: `setPackingInformation: ${err}` });
-      return NextResponse.json({ error: String(err) }, { status: 500 });
-    }
-
-    // If setPackingInformation returned an operation id, wait for it.
-    if (setPackingOp.operationId) {
-      const op2 = await waitForOperation(creds, setPackingOp.operationId, 120_000);
-      if (!op2.success) {
-        updateBatchPacking(batchId, { status: 'FAILED', error: `setPackingInformation op failed: ${op2.error}` });
-        return NextResponse.json({ error: op2.error }, { status: 500 });
-      }
-    }
-
-    // 4. confirmPackingOption — commits to the chosen option.
+    // Step 3: confirmPackingOption — commits to the chosen option, associates
+    // its packingGroupId with the plan so subsequent calls can reference it.
+    console.log(`[pack] Confirming packing option ${packingOptionId} (associates group(s) with plan)`);
     let confirmOp: { operationId: string };
     try {
       confirmOp = await confirmPackingOption(creds, batch.inboundPlanId, packingOptionId);
@@ -282,12 +279,29 @@ export async function POST(
       updateBatchPacking(batchId, { status: 'FAILED', error: `confirmPackingOption: ${err}` });
       return NextResponse.json({ error: String(err) }, { status: 500 });
     }
-
     if (confirmOp.operationId) {
       const op3 = await waitForOperation(creds, confirmOp.operationId, 120_000);
       if (!op3.success) {
         updateBatchPacking(batchId, { status: 'FAILED', error: `confirmPackingOption op failed: ${op3.error}` });
         return NextResponse.json({ error: op3.error }, { status: 500 });
+      }
+    }
+
+    // Step 4: setPackingInformation — push our box dimensions/contents now
+    // that the group is associated with the plan.
+    console.log(`[pack] Sending ${packageGroupings.length} pack group(s) with ${boxes.length} total box(es) to setPackingInformation`);
+    let setPackingOp: { operationId: string };
+    try {
+      setPackingOp = await setPackingInformation(creds, batch.inboundPlanId, packageGroupings);
+    } catch (err) {
+      updateBatchPacking(batchId, { status: 'FAILED', error: `setPackingInformation: ${err}` });
+      return NextResponse.json({ error: String(err) }, { status: 500 });
+    }
+    if (setPackingOp.operationId) {
+      const op2 = await waitForOperation(creds, setPackingOp.operationId, 120_000);
+      if (!op2.success) {
+        updateBatchPacking(batchId, { status: 'FAILED', error: `setPackingInformation op failed: ${op2.error}` });
+        return NextResponse.json({ error: op2.error }, { status: 500 });
       }
     }
 
