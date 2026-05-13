@@ -791,3 +791,178 @@ export async function downloadLabelPdf(downloadUrl: string): Promise<Buffer> {
   const arrayBuffer = await res.arrayBuffer();
   return Buffer.from(arrayBuffer);
 }
+
+// ─── Transportation (carrier booking) ───────────────────────────────────────
+//
+// After placement is confirmed and shipments are created, the seller needs to
+// register a carrier for the actual transit from their warehouse to Amazon's
+// FC. The flow:
+//
+//   1. POST /inboundPlans/{id}/transportationOptions  — generate options
+//      (async; returns operationId, poll until SUCCESS)
+//   2. GET  /inboundPlans/{id}/transportationOptions?placementOptionId=X
+//      — list the proposed transportation options
+//   3. POST /inboundPlans/{id}/transportationOptions/confirmation
+//      — commit to one option per shipment (async)
+//
+// Verified empirically 2026-05-13 against Parker's account:
+//   - generate returns 10 options ranging from USPS GROUND_SMALL_PARCEL to
+//     LTL freight carriers.
+//   - AMAZON_PARTNERED_CARRIER options will only appear if Partnered Carrier
+//     is enabled in Seller Central settings. USE_YOUR_OWN_CARRIER always
+//     appears as a fallback.
+//   - When using USE_YOUR_OWN_CARRIER, the seller must generate their own
+//     shipping labels via the carrier's tools (UPS WorldShip, USPS
+//     Click-N-Ship, etc.) — Amazon does NOT generate carrier labels.
+//   - When using AMAZON_PARTNERED_CARRIER, Amazon generates labels and
+//     they're fetched via the existing getShipmentLabels v0 endpoint.
+
+export interface TransportationContactInfo {
+  name: string;
+  email: string;
+  phoneNumber: string;
+}
+
+export interface TransportationOption {
+  transportationOptionId: string;
+  shipmentId: string;
+  shippingSolution: 'USE_YOUR_OWN_CARRIER' | 'AMAZON_PARTNERED_CARRIER';
+  shippingMode: 'GROUND_SMALL_PARCEL' | 'FREIGHT_LTL' | 'FREIGHT_FTL_PALLET' | 'OCEAN_LCL' | 'OCEAN_FCL' | 'AIR_SMALL_PARCEL' | 'AIR_SMALL_PARCEL_EXPRESS' | string;
+  carrier?: { name?: string; alphaCode?: string };
+  quote?: { cost?: { amount: number; code: string }; voidableUntil?: string } | null;
+  preconditions?: string[];
+}
+
+/**
+ * POST /inboundPlans/{planId}/transportationOptions
+ * Generate transportation options for a placement. Async — poll the returned
+ * operationId until SUCCESS via getInboundOperation, then call
+ * listTransportationOptions to retrieve the populated array.
+ *
+ * Body shape (validated empirically 2026-05-13):
+ *   placementOptionId (required)
+ *   shipmentTransportationConfigurations[] (required, non-empty):
+ *     - shipmentId (required)
+ *     - contactInformation { name, email, phoneNumber } (required)
+ *     - readyToShipWindow.start (required, ISO 8601 like 2026-05-14T20:59Z)
+ *     - freightInformation (optional, for LTL only)
+ */
+export async function generateTransportationOptions(
+  credentials: SPAPICredentials,
+  inboundPlanId: string,
+  params: {
+    placementOptionId: string;
+    shipmentConfigurations: Array<{
+      shipmentId: string;
+      contactInformation: TransportationContactInfo;
+      readyToShipDate: string; // ISO date — when the seller will tender to carrier
+    }>;
+  }
+): Promise<{ operationId: string }> {
+  const endpoint = getEndpoint(credentials.marketplaceId);
+  const accessToken = await getAccessToken(credentials);
+
+  // Amazon's ISO 8601 parser is strict — accepts these formats only:
+  //   yyyy-MM-dd'T'HH:mm'Z'
+  //   yyyy-MM-dd'T'HH:mm:ss'Z'
+  //   yyyy-MM-dd'T'HH:mm:ss.SSS'Z'
+  // The Date.toISOString() output (with milliseconds) works fine.
+  const body = {
+    placementOptionId: params.placementOptionId,
+    shipmentTransportationConfigurations: params.shipmentConfigurations.map((c) => ({
+      shipmentId: c.shipmentId,
+      contactInformation: c.contactInformation,
+      readyToShipWindow: { start: c.readyToShipDate },
+    })),
+  };
+
+  const response = await fetch(
+    `${endpoint}/inbound/fba/2024-03-20/inboundPlans/${encodeURIComponent(inboundPlanId)}/transportationOptions`,
+    {
+      method: 'POST',
+      headers: {
+        'x-amz-access-token': accessToken,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(body),
+    }
+  );
+
+  if (!response.ok) {
+    const errorBody = await response.text();
+    throw new Error(`SP-API generateTransportationOptions ${response.status}: ${errorBody}`);
+  }
+  const data = await response.json();
+  if (!data?.operationId) {
+    throw new Error(`generateTransportationOptions: missing operationId: ${JSON.stringify(data)}`);
+  }
+  return { operationId: data.operationId };
+}
+
+/**
+ * GET /inboundPlans/{planId}/transportationOptions?placementOptionId=X
+ * Returns Amazon's proposed transportation options for the placement.
+ * Empty array until generateTransportationOptions has completed.
+ */
+export async function listTransportationOptions(
+  credentials: SPAPICredentials,
+  inboundPlanId: string,
+  placementOptionId: string
+): Promise<TransportationOption[]> {
+  const endpoint = getEndpoint(credentials.marketplaceId);
+  const accessToken = await getAccessToken(credentials);
+
+  const url = new URL(
+    `${endpoint}/inbound/fba/2024-03-20/inboundPlans/${encodeURIComponent(inboundPlanId)}/transportationOptions`
+  );
+  url.searchParams.set('placementOptionId', placementOptionId);
+
+  const response = await fetch(url.toString(), {
+    headers: {
+      'x-amz-access-token': accessToken,
+      'Content-Type': 'application/json',
+    },
+  });
+  if (!response.ok) {
+    const errorBody = await response.text();
+    throw new Error(`SP-API listTransportationOptions ${response.status}: ${errorBody}`);
+  }
+  const data = await response.json();
+  return data?.transportationOptions || [];
+}
+
+/**
+ * POST /inboundPlans/{planId}/transportationOptions/confirmation
+ * Commit to one transportationOptionId per shipment. Async — poll the
+ * returned operationId.
+ */
+export async function confirmTransportationOptions(
+  credentials: SPAPICredentials,
+  inboundPlanId: string,
+  transportationOptionIds: string[]
+): Promise<{ operationId: string }> {
+  const endpoint = getEndpoint(credentials.marketplaceId);
+  const accessToken = await getAccessToken(credentials);
+
+  const response = await fetch(
+    `${endpoint}/inbound/fba/2024-03-20/inboundPlans/${encodeURIComponent(inboundPlanId)}/transportationOptions/confirmation`,
+    {
+      method: 'POST',
+      headers: {
+        'x-amz-access-token': accessToken,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ transportationOptionIds }),
+    }
+  );
+
+  if (!response.ok) {
+    const errorBody = await response.text();
+    throw new Error(`SP-API confirmTransportationOptions ${response.status}: ${errorBody}`);
+  }
+  const data = await response.json();
+  if (!data?.operationId) {
+    throw new Error(`confirmTransportationOptions: missing operationId: ${JSON.stringify(data)}`);
+  }
+  return { operationId: data.operationId };
+}

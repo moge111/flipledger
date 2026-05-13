@@ -452,6 +452,13 @@ export function initializeDatabase() {
       placement_fee_cents INTEGER,    -- fee for the chosen placement option
       placement_confirmed_at TEXT,
       placement_error TEXT,
+      -- Phase 4: Transportation (carrier booking) ────────────────────────
+      transportation_status TEXT,             -- CONFIRMED | FAILED | (null = not yet booked)
+      transportation_option_id TEXT,
+      transportation_carrier TEXT,            -- e.g. "United States Postal Service"
+      transportation_shipping_mode TEXT,      -- GROUND_SMALL_PARCEL | FREIGHT_LTL | etc.
+      transportation_confirmed_at TEXT,
+      transportation_error TEXT,
       notes TEXT,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
