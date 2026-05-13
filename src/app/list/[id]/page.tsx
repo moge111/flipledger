@@ -2734,8 +2734,12 @@ function CarrierBookingPanel({ batchId }: { batchId: number }) {
     }
   }
 
-  // Group + sort: cheapest small parcel first, then LTL, then others
+  // Sort: Amazon Partnered first (they include a quote and Amazon-generated
+  // shipping labels), then small parcel by carrier, then LTL.
   const sorted = [...options].sort((a, b) => {
+    const aPartnered = a.shippingSolution === 'AMAZON_PARTNERED_CARRIER' ? 0 : 1;
+    const bPartnered = b.shippingSolution === 'AMAZON_PARTNERED_CARRIER' ? 0 : 1;
+    if (aPartnered !== bPartnered) return aPartnered - bPartnered;
     const aSmall = a.shippingMode === 'GROUND_SMALL_PARCEL' ? 0 : 1;
     const bSmall = b.shippingMode === 'GROUND_SMALL_PARCEL' ? 0 : 1;
     if (aSmall !== bSmall) return aSmall - bSmall;
@@ -2747,9 +2751,9 @@ function CarrierBookingPanel({ batchId }: { batchId: number }) {
       <div>
         <div className="text-sm font-semibold text-text-primary mb-0.5">Choose a carrier</div>
         <div className="text-[11px] text-text-tertiary">
-          Pick the carrier you&apos;ll use to ship these boxes to Amazon. Amazon needs to know so the
-          shipment can be tracked. For &quot;use your own carrier&quot; options you&apos;ll generate the actual
-          shipping labels via your carrier&apos;s own tools (UPS WorldShip, USPS Click-N-Ship, etc.).
+          <span className="text-positive">Amazon Partnered</span> options come with discounted rates AND Amazon-generated UPS labels —
+          you&apos;ll be able to print everything from inside FlipLedger.
+          &quot;Own carrier&quot; options leave label generation to you (UPS WorldShip, USPS Click-N-Ship, etc.).
         </div>
       </div>
       {loading && <div className="text-[11px] text-text-tertiary italic">Loading carrier options…</div>}
@@ -2762,6 +2766,7 @@ function CarrierBookingPanel({ batchId }: { batchId: number }) {
           {sorted.map((o) => {
             const isSelected = selected === o.transportationOptionId;
             const cost = o.quote?.cost?.amount;
+            const isPartnered = o.shippingSolution === 'AMAZON_PARTNERED_CARRIER';
             return (
               <button
                 key={o.transportationOptionId}
@@ -2769,22 +2774,36 @@ function CarrierBookingPanel({ batchId }: { batchId: number }) {
                 onClick={() => setSelected(o.transportationOptionId)}
                 className={`text-left border rounded p-2.5 transition-colors ${
                   isSelected
-                    ? 'border-accent bg-accent/10'
-                    : 'border-border-subtle bg-bg-surface hover:border-border-default'
+                    ? 'border-accent bg-accent/15 ring-1 ring-accent'
+                    : isPartnered
+                      ? 'border-positive/40 bg-positive/5 hover:border-positive/60'
+                      : 'border-border-subtle bg-bg-surface hover:border-border-default'
                 }`}
               >
-                <div className="text-xs font-medium text-text-primary truncate">
-                  {o.carrier?.name || o.shippingSolution}
+                <div className="flex items-center gap-1.5 mb-0.5">
+                  <div className="text-xs font-medium text-text-primary truncate flex-1">
+                    {o.carrier?.name || o.shippingSolution}
+                  </div>
+                  {isPartnered && (
+                    <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-positive/20 text-positive uppercase tracking-wider shrink-0">
+                      Partnered
+                    </span>
+                  )}
                 </div>
-                <div className="text-[10px] text-text-tertiary mt-0.5 uppercase tracking-wider">
-                  {o.shippingMode.replace(/_/g, ' ')} · {o.shippingSolution === 'AMAZON_PARTNERED_CARRIER' ? 'AMAZON PARTNERED' : 'OWN CARRIER'}
+                <div className="text-[10px] text-text-tertiary uppercase tracking-wider">
+                  {o.shippingMode.replace(/_/g, ' ')}
                 </div>
                 {cost !== undefined && (
-                  <div className="text-xs font-mono text-positive mt-1">${cost.toFixed(2)}</div>
+                  <div className="text-sm font-mono text-positive mt-1 font-medium">${cost.toFixed(2)}</div>
                 )}
                 {(!cost && o.shippingSolution === 'USE_YOUR_OWN_CARRIER') && (
                   <div className="text-[10px] text-text-tertiary mt-1 italic">
                     Pricing via your own carrier account
+                  </div>
+                )}
+                {isPartnered && (
+                  <div className="text-[10px] text-positive/80 mt-1">
+                    ✓ Amazon generates the UPS labels
                   </div>
                 )}
               </button>
