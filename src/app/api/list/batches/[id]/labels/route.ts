@@ -207,6 +207,20 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
     return NextResponse.json({ error: `Failed to download label PDF: ${err}` }, { status: 500 });
   }
 
+  // For "shipping" labels, Amazon's Thermal_Unified PDF is a 4.25×6" page with
+  // FBA carton ID at the top (~45% of page) and UPS shipping label at the bottom
+  // (~55% of page). Crop off the FBA portion so the Rollo prints only the UPS
+  // label — gives the user TWO separate physical stickers per box (one from
+  // "box labels" with FBA-only, one from "shipping labels" with UPS-only).
+  if (type === 'shipping') {
+    try {
+      const { cropPagesBottomPortion } = await import('@/lib/pdf-crop');
+      pdfBuffer = await cropPagesBottomPortion(pdfBuffer, 0.55);
+    } catch (err) {
+      console.warn('[labels] PDF crop failed; sending unmodified Unified label:', err);
+    }
+  }
+
   // ─── Action: download ─── return the PDF directly to the browser ───────
   if (action === 'download') {
     const filename = `${type}-labels-${shipmentId}.pdf`;
