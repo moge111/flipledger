@@ -385,6 +385,8 @@ export async function setPackingInformation(
         // expiration, manufacturingLotCode are optional.
         labelOwner?: 'AMAZON' | 'NONE' | 'SELLER';
         prepOwner?: 'AMAZON' | 'NONE' | 'SELLER';
+        expiration?: string;
+        manufacturingLotCode?: string;
       }>;
     }>;
   }>
