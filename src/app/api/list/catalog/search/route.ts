@@ -51,6 +51,13 @@ function getAmazonCredentials(): SPAPICredentials | null {
  *   - currentFbaStock: from live_inventory
  *   - lastBuyPrice: most recent buy_price from inventory_ledger
  */
+export interface ExistingMsku {
+  msku: string;
+  lastBuyPriceCents: number;
+  source: 'live_inventory' | 'inventory_ledger' | 'listing_batch';
+  unitsInStock?: number;     // fulfillable + inbound, from live_inventory if known
+}
+
 function enrichWithHistory(item: CatalogItem): CatalogItem & {
   avgFeeRate?: number;
   avgSalePrice?: number;
@@ -58,6 +65,7 @@ function enrichWithHistory(item: CatalogItem): CatalogItem & {
   unitsSoldLast90d?: number;
   currentFbaStock?: number;
   lastBuyPrice?: number;
+  existingMskus?: ExistingMsku[];
 } {
   const dbPath = path.join(process.cwd(), 'data', 'flipledger.db');
   const db = new Database(dbPath, { readonly: true });
@@ -117,6 +125,58 @@ function enrichWithHistory(item: CatalogItem): CatalogItem & {
       LIMIT 1
     `).get(item.asin) as any;
 
+    // Existing MSKUs for this ASIN — surface them so the user can pick "restock
+    // existing" instead of letting the auto-MSKU generator create a fresh one.
+    // Combine three sources and de-dupe by MSKU keeping the most authoritative
+    // (live_inventory > inventory_ledger > listing_batch). FBA-stocked MSKUs
+    // come first, then any-history MSKUs.
+    const existingRows = db.prepare(`
+      SELECT sku as msku,
+             COALESCE(buy_price, 0) as lastBuyPriceCents,
+             'inventory_ledger' as source,
+             NULL as unitsInStock
+      FROM inventory_ledger
+      WHERE asin = ? AND sku IS NOT NULL AND sku != ''
+      UNION ALL
+      SELECT sku as msku,
+             0 as lastBuyPriceCents,
+             'live_inventory' as source,
+             COALESCE(fulfillable_qty, 0) + COALESCE(inbound_qty, 0) as unitsInStock
+      FROM live_inventory
+      WHERE asin = ? AND sku IS NOT NULL AND sku != '' AND marketplace = 'amazon'
+      UNION ALL
+      SELECT sku as msku,
+             COALESCE(buy_price_cents, 0) as lastBuyPriceCents,
+             'listing_batch' as source,
+             NULL as unitsInStock
+      FROM listing_batch_items
+      WHERE asin = ? AND sku IS NOT NULL AND sku != ''
+    `).all(item.asin, item.asin, item.asin) as any[];
+
+    const byMsku = new Map<string, ExistingMsku>();
+    const priority: Record<string, number> = { live_inventory: 3, inventory_ledger: 2, listing_batch: 1 };
+    for (const row of existingRows) {
+      const existing = byMsku.get(row.msku);
+      if (!existing || priority[row.source] > priority[existing.source]) {
+        byMsku.set(row.msku, {
+          msku: row.msku,
+          lastBuyPriceCents: row.lastBuyPriceCents || existing?.lastBuyPriceCents || 0,
+          source: row.source,
+          unitsInStock: row.unitsInStock ?? existing?.unitsInStock,
+        });
+      } else if (row.lastBuyPriceCents && !existing.lastBuyPriceCents) {
+        // Fill in buy price from a lower-priority source if the higher one didn't have it
+        existing.lastBuyPriceCents = row.lastBuyPriceCents;
+      }
+    }
+    const existingMskus = Array.from(byMsku.values()).sort((a, b) => {
+      // FBA-stocked first, then by most-recent-feeling source
+      const aStock = a.unitsInStock || 0;
+      const bStock = b.unitsInStock || 0;
+      if (aStock !== bStock) return bStock - aStock;
+      return priority[b.source] - priority[a.source];
+    });
+
     return {
       ...item,
       avgFeeRate: avgFeeRate ?? undefined,
@@ -125,6 +185,7 @@ function enrichWithHistory(item: CatalogItem): CatalogItem & {
       unitsSoldLast90d: velocity?.last90 ?? 0,
       currentFbaStock: stock?.qty ?? 0,
       lastBuyPrice: lastBuy?.buy_price ?? undefined,
+      existingMskus: existingMskus.length > 0 ? existingMskus : undefined,
     };
   } finally {
     db.close();
