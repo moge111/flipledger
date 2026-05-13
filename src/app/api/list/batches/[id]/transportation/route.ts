@@ -183,7 +183,12 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
       return NextResponse.json({ error: 'None of the provided IDs matched current options' }, { status: 400 });
     }
 
-    const confirmResult = await confirmTransportationOptions(creds, batch.inbound_plan_id, optionIds);
+    // Build the {shipmentId, transportationOptionId} pairs Amazon's API requires
+    const selections = selected.map((o) => ({
+      shipmentId: o.shipmentId,
+      transportationOptionId: o.transportationOptionId,
+    }));
+    const confirmResult = await confirmTransportationOptions(creds, batch.inbound_plan_id, selections);
     const opResult = await waitForOp(creds, confirmResult.operationId);
     if (!opResult.success) {
       const db = getDb();

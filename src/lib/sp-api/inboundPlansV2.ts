@@ -933,13 +933,22 @@ export async function listTransportationOptions(
 
 /**
  * POST /inboundPlans/{planId}/transportationOptions/confirmation
- * Commit to one transportationOptionId per shipment. Async — poll the
- * returned operationId.
+ *
+ * Body shape (verified empirically — Amazon's docs use `transportationOptionIds`
+ * but the actual validator wants `transportationSelections`):
+ *
+ *   {
+ *     "transportationSelections": [
+ *       { "shipmentId": "sh...", "transportationOptionId": "to..." }
+ *     ]
+ *   }
+ *
+ * Each selection maps one shipment to one of its transportation options.
  */
 export async function confirmTransportationOptions(
   credentials: SPAPICredentials,
   inboundPlanId: string,
-  transportationOptionIds: string[]
+  selections: Array<{ shipmentId: string; transportationOptionId: string }>
 ): Promise<{ operationId: string }> {
   const endpoint = getEndpoint(credentials.marketplaceId);
   const accessToken = await getAccessToken(credentials);
@@ -952,7 +961,7 @@ export async function confirmTransportationOptions(
         'x-amz-access-token': accessToken,
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify({ transportationOptionIds }),
+      body: JSON.stringify({ transportationSelections: selections }),
     }
   );
 
