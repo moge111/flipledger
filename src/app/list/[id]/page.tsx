@@ -1880,16 +1880,17 @@ function BoxingWorkflow({
     return () => { cancelled = true; };
   }, [batch.status, batch.id, shipments.length]);
 
-  async function handlePrintLabels(shipmentId: string, type: 'fnsku' | 'box') {
+  async function handlePrintLabels(shipmentId: string, type: 'fnsku' | 'box' | 'shipping') {
     const key = `${type}-${shipmentId}`;
     setPrintingLabel(key);
+    const labelName = type === 'fnsku' ? 'FNSKU' : type === 'box' ? 'Box ID' : 'Shipping';
     try {
       const res = await fetch(
         `/api/list/batches/${batch.id}/labels?type=${type}&shipmentId=${encodeURIComponent(shipmentId)}&action=print`
       );
       const data = await res.json();
       if (data.success) {
-        alert(`✓ Printed ${type === 'fnsku' ? 'FNSKU' : 'Box ID'} labels for ${shipmentId}\nPrinter: ${data.printer}${data.jobId ? ' (job ' + data.jobId + ')' : ''}`);
+        alert(`✓ Printed ${labelName} labels for ${shipmentId}\nPrinter: ${data.printer}${data.jobId ? ' (job ' + data.jobId + ')' : ''}`);
       } else {
         const hint = data.hint ? `\n\n${data.hint}` : '';
         alert(`Print failed: ${data.error}${hint}\n\nTry "Download PDF" instead and print manually.`);
@@ -1900,7 +1901,7 @@ function BoxingWorkflow({
     setPrintingLabel(null);
   }
 
-  function handleDownloadLabels(shipmentId: string, type: 'fnsku' | 'box') {
+  function handleDownloadLabels(shipmentId: string, type: 'fnsku' | 'box' | 'shipping') {
     // Use a simple link click — the browser handles the PDF download via Content-Disposition
     const url = `/api/list/batches/${batch.id}/labels?type=${type}&shipmentId=${encodeURIComponent(shipmentId)}&action=download`;
     window.open(url, '_blank');
@@ -2382,6 +2383,28 @@ function BoxingWorkflow({
                           >
                             PDF
                           </button>
+                          {/* Shipping labels — Partnered carrier only (combined FBA + UPS) */}
+                          {batch.transportationStatus === 'CONFIRMED' && (batch.transportationCarrier || '').toLowerCase().includes('ups') && (
+                            <>
+                              <span className="text-text-tertiary text-[11px]">·</span>
+                              <button
+                                onClick={() => handlePrintLabels(s.shipmentId, 'shipping')}
+                                disabled={printingLabel === `shipping-${s.shipmentId}`}
+                                className="h-7 px-2.5 bg-positive/15 border border-positive/30 rounded text-[11px] font-medium text-positive hover:bg-positive/25 disabled:opacity-50 transition-colors flex items-center gap-1"
+                                title="Print combined FBA + UPS shipping labels to Rollo (Partnered carrier)"
+                              >
+                                {printingLabel === `shipping-${s.shipmentId}` ? <Loader2 size={10} className="animate-spin" /> : null}
+                                Print shipping labels
+                              </button>
+                              <button
+                                onClick={() => handleDownloadLabels(s.shipmentId, 'shipping')}
+                                className="h-7 px-2 bg-bg-surface border border-border-default rounded text-[11px] text-text-secondary hover:text-text-primary hover:bg-bg-hover transition-colors"
+                                title="Download shipping labels as PDF (FBA top + UPS bottom)"
+                              >
+                                PDF
+                              </button>
+                            </>
+                          )}
                         </div>
                       </div>
                     );
