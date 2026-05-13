@@ -65,7 +65,7 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
   }
 
   const url = new URL(request.url);
-  const type = url.searchParams.get('type') || 'fnsku';      // fnsku | box
+  const type = url.searchParams.get('type') || 'fnsku';        // fnsku | box | shipping
   const shipmentId = url.searchParams.get('shipmentId') || '';
   const action = url.searchParams.get('action') || 'download'; // download | print
   const pageTypeOverride = url.searchParams.get('pageType') as LabelPageType | null;
@@ -73,8 +73,8 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
   if (!shipmentId) {
     return NextResponse.json({ error: 'shipmentId is required' }, { status: 400 });
   }
-  if (type !== 'fnsku' && type !== 'box') {
-    return NextResponse.json({ error: "type must be 'fnsku' or 'box'" }, { status: 400 });
+  if (type !== 'fnsku' && type !== 'box' && type !== 'shipping') {
+    return NextResponse.json({ error: "type must be 'fnsku', 'box', or 'shipping'" }, { status: 400 });
   }
   if (action !== 'download' && action !== 'print') {
     return NextResponse.json({ error: "action must be 'download' or 'print'" }, { status: 400 });
@@ -132,41 +132,53 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
 
   clearTokenCache();
 
-  // Map (type, action) → SP-API params.
-  // FNSKU per-unit labels = LabelType=UNIQUE
-  // Box ID labels        = LabelType=BARCODE_2D
+  // Three logical label types, each with its own LabelType + PageType:
   //
-  // PageType selection (verified empirically against Amazon's spec):
-  //   FNSKU labels are always per-unit Amazon stickers — same format regardless
-  //   of carrier choice. Use Letter_6 for download, Thermal for Rollo print.
+  //   fnsku    — per-UNIT Amazon stickers. Applied INSIDE the box over each
+  //              item's original UPC. Always same format regardless of carrier.
+  //              LabelType=UNIQUE
   //
-  //   Box labels: for Partnered Carrier (UPS SPD) Amazon generates a COMBINED
-  //   FBA carton ID + UPS shipping label in one document. The right PageType is:
-  //     - PackageLabel_Thermal_Unified  for Rollo thermal (single 4×6 with both)
-  //     - PackageLabel_Plain_Paper_CarrierBottom  for letter-size download
-  //   For non-Partnered (own carrier), only FBA carton ID is generated:
-  //     - PackageLabel_Thermal_NonPCP   for Rollo
-  //     - PackageLabel_Plain_Paper       for download
+  //   box      — per-CARTON FBA box ID barcode ONLY (no carrier info).
+  //              Goes on the OUTSIDE of each box. For sellers using their own
+  //              carrier (USPS/UPS/etc.) — they'll attach their own shipping
+  //              label separately. Even for Partnered shipments, we use the
+  //              NonPCP format so this is consistently FBA-only.
+  //              LabelType=BARCODE_2D + PageType=*_NonPCP / *_Plain_Paper
+  //
+  //   shipping — per-CARTON COMBINED FBA carton ID + carrier shipping label
+  //              (Amazon Partnered only). One physical sticker that gets
+  //              applied to the outside — covers both Amazon FC receiving
+  //              and UPS pickup. Rejects when transportation isn't Partnered.
+  //              LabelType=BARCODE_2D + PageType=*_Unified / *_Plain_Paper_CarrierBottom
+
+  if (type === 'shipping' && !isPartneredCarrier) {
+    return NextResponse.json({
+      error: 'Shipping labels are only available for Amazon Partnered carrier shipments. ' +
+             'For own-carrier shipments, print Box labels (FBA carton ID) and generate ' +
+             'shipping labels via your carrier\'s own tools.',
+    }, { status: 400 });
+  }
+
   const labelType: LabelType = type === 'fnsku' ? 'UNIQUE' : 'BARCODE_2D';
   let pageType: LabelPageType;
   if (pageTypeOverride) {
     pageType = pageTypeOverride;
   } else if (action === 'print') {
-    if (type === 'box' && isPartneredCarrier) {
-      pageType = 'PackageLabel_Thermal_Unified';
+    if (type === 'shipping') {
+      pageType = 'PackageLabel_Thermal_Unified';   // combined FBA + UPS on 4×6 thermal
     } else if (type === 'box') {
-      pageType = 'PackageLabel_Thermal_NonPCP';
+      pageType = 'PackageLabel_Thermal_NonPCP';    // FBA carton ID only on 4×6 thermal
     } else {
-      pageType = 'PackageLabel_Thermal'; // FNSKU on Rollo
+      pageType = 'PackageLabel_Thermal';           // FNSKU per-unit on Rollo
     }
   } else {
-    // Download path
-    if (type === 'box' && isPartneredCarrier) {
-      pageType = 'PackageLabel_Plain_Paper_CarrierBottom';
-    } else if (type === 'fnsku') {
-      pageType = 'PackageLabel_Letter_6';
+    // Download path (PDF for the user to print on standard paper)
+    if (type === 'shipping') {
+      pageType = 'PackageLabel_Plain_Paper_CarrierBottom'; // letter, FBA top + UPS bottom
+    } else if (type === 'box') {
+      pageType = 'PackageLabel_Plain_Paper';                // letter, FBA only
     } else {
-      pageType = 'PackageLabel_Plain_Paper';
+      pageType = 'PackageLabel_Letter_6';                   // 6 FNSKU per letter
     }
   }
 
