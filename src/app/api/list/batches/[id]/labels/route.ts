@@ -219,7 +219,13 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
       const { cropBottomAndRecanvas } = await import('@/lib/pdf-crop');
       const FOUR_BY_SIX_W_PT = 288; // 4 in × 72 pt/in
       const FOUR_BY_SIX_H_PT = 432; // 6 in × 72 pt/in
-      pdfBuffer = await cropBottomAndRecanvas(pdfBuffer, 0.55, FOUR_BY_SIX_W_PT, FOUR_BY_SIX_H_PT);
+      // keepFraction 0.47 is the empirically-tuned sweet spot for the
+      // Amazon Partnered Thermal_Unified label (4.25×6 source): after
+      // cropping bottom 47% + rotating 90° CW + uniform scale, the UPS
+      // portion fills 3.98×6.00 in of the target 4×6 sticker — essentially
+      // edge-to-edge. Lower fractions miss UPS content; higher fractions
+      // include the FBA "PLEASE LEAVE THIS LABEL UNCOVERED" bleed.
+      pdfBuffer = await cropBottomAndRecanvas(pdfBuffer, 0.47, FOUR_BY_SIX_W_PT, FOUR_BY_SIX_H_PT);
     } catch (err) {
       console.warn('[labels] PDF crop+recanvas failed; sending unmodified Unified label:', err);
     }
