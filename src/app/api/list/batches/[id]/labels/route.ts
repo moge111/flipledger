@@ -238,7 +238,12 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
         'Content-Type': 'application/pdf',
         'Content-Disposition': `attachment; filename="${filename}"`,
         'Content-Length': String(pdfBuffer.length),
-        'Cache-Control': 'private, max-age=300',
+        // Don't cache — labels change as cropping/rotation logic improves,
+        // and a stale cached PDF was confusing users in May 2026 ("you didn't
+        // fix anything" — server was serving the new layout, browser was
+        // returning the cached old one).
+        'Cache-Control': 'no-store, no-cache, must-revalidate',
+        'Pragma': 'no-cache',
       },
     });
   }
