@@ -240,15 +240,20 @@ export async function POST(
           // validates the item set against what it expects and rejects with:
           //   "Package group X did not contain expected items and/or
           //    quantities. ... expected: Item(msku=..., labelOwner=SELLER, ...)"
-          // We default both to SELLER/NONE here — matching the defaults in
-          // src/lib/sp-api/inboundPlansV2.ts createInboundPlan.
+          //
+          // Verified 2026-05-11 via GET /packingGroups/{id}/items: Amazon
+          // registers items with labelOwner=SELLER and a prepInstructions array
+          // including ITEM_LABELING (FNSKU labels), each with prepOwner=SELLER.
+          // When ANY prep is required, the item-level prepOwner must be SELLER,
+          // not NONE. NONE is only correct when no prepInstructions exist.
+          // For our typical flow (seller-applied FNSKU labels), prepOwner=SELLER.
           items: boxItems
             .filter((bi) => bi.boxId === box.id)
             .map((bi) => ({
               msku: bi.msku,
               quantity: bi.quantity,
               labelOwner: 'SELLER' as const,
-              prepOwner: 'NONE' as const,
+              prepOwner: 'SELLER' as const,
             })),
         })),
       };
