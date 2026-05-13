@@ -10,7 +10,7 @@
  * For sellers who want them as TWO separate physical stickers, we fetch the
  * Unified PDF and crop each page to keep just the bottom portion.
  */
-import { PDFDocument } from 'pdf-lib';
+import { PDFDocument, degrees } from 'pdf-lib';
 
 /**
  * Crop each page of a PDF, keeping only the bottom `keepFraction` of the page.
@@ -51,17 +51,22 @@ export async function cropPagesBottomPortion(
 }
 
 /**
- * Extract the bottom `keepFraction` of each page in `inputPdf` and place it on
- * a fresh page of `targetWidthPt × targetHeightPt`, scaled uniformly to fit
- * the target width and anchored at the top (with whitespace at the bottom).
+ * Extract the bottom `keepFraction` of each page in `inputPdf`, ROTATE it 90°
+ * so its long axis becomes vertical, and place it on a fresh portrait page of
+ * `targetWidthPt × targetHeightPt`, scaled uniformly to fill the page.
  *
- * Use case: Amazon's Partnered Thermal_Unified label is 4.25×6". After cropping
- * just the UPS portion (~4.25×3.3"), we want to print on a 4×6 Rollo. This
- * helper outputs a true 4×6 page with the UPS label at the top — the Rollo
- * prints the right physical size, and Parker can ignore (or scissor off) the
- * whitespace at the bottom.
+ * Use case: Amazon's Partnered Thermal_Unified label is 4.25×6". The UPS
+ * portion (~4.25×3.3") is laid out in LANDSCAPE — designed to be read with
+ * the label turned sideways. For a portrait 4×6 Rollo sticker, we want the
+ * UPS content rotated 90° so it reads top-to-bottom and fills the sticker.
  *
- * No rotation, no non-uniform scaling — barcodes remain undistorted.
+ * After rotation:
+ *   - Pre-rotation: 4.25 wide × 3.3 tall (landscape UPS portion)
+ *   - Post-rotation: 3.3 wide × 4.25 tall (portrait)
+ *   - Uniform scale to fit 4×6 target: factor 1.21 → 4.0 × 5.14 inches
+ *   - ~0.86 inches of whitespace at one edge — much smaller than before
+ *
+ * Barcodes scan in any orientation, so rotation is safe.
  */
 export async function cropBottomAndRecanvas(
   inputPdf: Buffer,
@@ -80,9 +85,7 @@ export async function cropBottomAndRecanvas(
     const { width: srcW, height: srcH } = srcPage.getSize();
     const keepH = srcH * keepFraction;
 
-    // Embed the bottom portion of the source page so we can place it on the
-    // new canvas. The 'bottom/top' here defines the bounding box of the source
-    // region we want to keep (in PDF coords, origin lower-left).
+    // Embed the bottom portion of the source page.
     const embedded = await dst.embedPage(srcPage, {
       left: 0,
       bottom: 0,
@@ -90,20 +93,27 @@ export async function cropBottomAndRecanvas(
       top: keepH,
     });
 
-    // Uniform scale to fit target width — preserves aspect, no distortion
-    const scale = targetWidthPt / srcW;
-    const drawW = srcW * scale;
-    const drawH = keepH * scale;
+    // After 90° CCW rotation, srcW becomes the vertical dim, keepH the horizontal.
+    // Compute uniform scale to fit the rotated content into the target page.
+    const scale = Math.min(targetWidthPt / keepH, targetHeightPt / srcW);
+    const preRotW = srcW * scale;
+    const preRotH = keepH * scale;
 
-    // Top-aligned on the new page so the label appears at the top, whitespace
-    // below. The Rollo will print the full target page; if the user wants to
-    // trim whitespace they can scissor it.
     const newPage = dst.addPage([targetWidthPt, targetHeightPt]);
+    // pdf-lib drawPage with rotate: angle is CCW around (x, y). For 90° CW
+    // (which is what we want — Amazon's UPS content reads correctly when
+    // rotated 90° clockwise from its landscape orientation in the source),
+    // pass -90 degrees.
+    //
+    // Pre-rotation rectangle: (x, y) to (x+preRotW, y+preRotH)
+    // After 90° CW around (x, y): rectangle occupies (x, y-preRotW) to (x+preRotH, y)
+    // To anchor the post-rotation lower-left at (0, 0): set x=0, y=preRotW.
     newPage.drawPage(embedded, {
       x: 0,
-      y: targetHeightPt - drawH,
-      width: drawW,
-      height: drawH,
+      y: preRotW,
+      width: preRotW,
+      height: preRotH,
+      rotate: degrees(-90),
     });
   }
 
