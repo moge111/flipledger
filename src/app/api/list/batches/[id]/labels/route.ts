@@ -164,26 +164,22 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
   if (pageTypeOverride) {
     pageType = pageTypeOverride;
   } else if (type === 'shipping') {
-    // For shipping labels (Partnered), we ALWAYS use the Thermal_Unified source
-    // regardless of print/download — it's 4.25×6 with FBA top + UPS bottom in
-    // known proportions. We then crop the FBA off and re-canvas to 4×6 for the
-    // Rollo. Using a different source for download would produce a wildly
-    // different layout (Plain_Paper_CarrierBottom is 8.5×11 letter with the
-    // UPS label as a small portion at the bottom — crop math wouldn't line up).
+    // Shipping labels: ALWAYS use Thermal_Unified, then crop+rotate to 4×6
+    // (handled below). Same source for download and print to keep layouts in
+    // sync — the alternative letter sources have wildly different proportions.
     pageType = 'PackageLabel_Thermal_Unified';
+  } else if (type === 'box') {
+    // Box labels: ALWAYS use Thermal_NonPCP — this is the only PageType that
+    // reliably returns the FBA carton ID label ALONE (no UPS shipping bundled)
+    // even for Partnered shipments. Plain_Paper for Partnered shipments still
+    // includes the UPS portion below the FBA section.
+    pageType = 'PackageLabel_Thermal_NonPCP';
   } else if (action === 'print') {
-    if (type === 'box') {
-      pageType = 'PackageLabel_Thermal_NonPCP';    // FBA carton ID only on 4×6 thermal
-    } else {
-      pageType = 'PackageLabel_Thermal';           // FNSKU per-unit on Rollo
-    }
+    // FNSKU on Rollo
+    pageType = 'PackageLabel_Thermal';
   } else {
-    // Download path (PDF for the user to print on standard paper)
-    if (type === 'box') {
-      pageType = 'PackageLabel_Plain_Paper';                // letter, FBA only
-    } else {
-      pageType = 'PackageLabel_Letter_6';                   // 6 FNSKU per letter
-    }
+    // FNSKU download — 6 per letter for cheap inkjet/laser printing
+    pageType = 'PackageLabel_Letter_6';
   }
 
   let labelsResponse;
