@@ -163,19 +163,23 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
   let pageType: LabelPageType;
   if (pageTypeOverride) {
     pageType = pageTypeOverride;
+  } else if (type === 'shipping') {
+    // For shipping labels (Partnered), we ALWAYS use the Thermal_Unified source
+    // regardless of print/download — it's 4.25×6 with FBA top + UPS bottom in
+    // known proportions. We then crop the FBA off and re-canvas to 4×6 for the
+    // Rollo. Using a different source for download would produce a wildly
+    // different layout (Plain_Paper_CarrierBottom is 8.5×11 letter with the
+    // UPS label as a small portion at the bottom — crop math wouldn't line up).
+    pageType = 'PackageLabel_Thermal_Unified';
   } else if (action === 'print') {
-    if (type === 'shipping') {
-      pageType = 'PackageLabel_Thermal_Unified';   // combined FBA + UPS on 4×6 thermal
-    } else if (type === 'box') {
+    if (type === 'box') {
       pageType = 'PackageLabel_Thermal_NonPCP';    // FBA carton ID only on 4×6 thermal
     } else {
       pageType = 'PackageLabel_Thermal';           // FNSKU per-unit on Rollo
     }
   } else {
     // Download path (PDF for the user to print on standard paper)
-    if (type === 'shipping') {
-      pageType = 'PackageLabel_Plain_Paper_CarrierBottom'; // letter, FBA top + UPS bottom
-    } else if (type === 'box') {
+    if (type === 'box') {
       pageType = 'PackageLabel_Plain_Paper';                // letter, FBA only
     } else {
       pageType = 'PackageLabel_Letter_6';                   // 6 FNSKU per letter
