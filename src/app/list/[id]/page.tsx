@@ -29,6 +29,13 @@ interface Batch {
   placementFeeCents?: number | null;
   placementError?: string | null;
   placementConfirmedAt?: string | null;
+  // Phase 4: transportation (carrier booking)
+  transportationStatus?: string | null;
+  transportationOptionId?: string | null;
+  transportationCarrier?: string | null;
+  transportationShippingMode?: string | null;
+  transportationConfirmedAt?: string | null;
+  transportationError?: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -2300,10 +2307,17 @@ function BoxingWorkflow({
                   </span>
                 </div>
                 <p className="text-[11px] text-text-tertiary">
-                  Print FNSKU labels (one per unit, applied over original UPC) and box ID labels (one per box, taped to outside) for each shipment below.
-                  Carrier booking still happens in Seller Central.
+                  {batch.transportationStatus === 'CONFIRMED'
+                    ? <>Carrier booked: <span className="font-medium text-text-secondary">{batch.transportationCarrier}</span> ({batch.transportationShippingMode}). Print FBA box ID labels below + generate your own carrier shipping labels via your carrier&apos;s tools.</>
+                    : <>Print FNSKU labels (one per unit, applied over original UPC) and box ID labels (one per box, taped to outside) for each shipment below. Choose a carrier in the next section to commit the shipment for transit.</>
+                  }
                 </p>
               </div>
+
+              {/* Carrier (transportation) booking — only show if not yet confirmed */}
+              {batch.transportationStatus !== 'CONFIRMED' && (
+                <CarrierBookingPanel batchId={batch.id} />
+              )}
 
               {/* Per-shipment print cards */}
               {shipments.length === 0 ? (
@@ -2659,6 +2673,138 @@ function UnassignedItemRow({
       >
         Add
       </button>
+    </div>
+  );
+}
+
+interface TransportationOption {
+  transportationOptionId: string;
+  shipmentId: string;
+  shippingSolution: 'USE_YOUR_OWN_CARRIER' | 'AMAZON_PARTNERED_CARRIER' | string;
+  shippingMode: string;
+  carrier?: { name?: string; alphaCode?: string };
+  quote?: { cost?: { amount: number; code: string } } | null;
+  preconditions?: string[];
+}
+
+function CarrierBookingPanel({ batchId }: { batchId: number }) {
+  const [loading, setLoading] = useState(true);
+  const [options, setOptions] = useState<TransportationOption[]>([]);
+  const [selected, setSelected] = useState<string | null>(null);
+  const [confirming, setConfirming] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    fetch(`/api/list/batches/${batchId}/transportation`)
+      .then((r) => r.json())
+      .then((d) => {
+        if (cancelled) return;
+        if (d.error) { setError(d.error); setLoading(false); return; }
+        setOptions(d.options || []);
+        setSelected(d.transportationOptionId || null);
+        setLoading(false);
+      })
+      .catch((err) => { if (!cancelled) { setError(String(err)); setLoading(false); } });
+    return () => { cancelled = true; };
+  }, [batchId]);
+
+  async function handleConfirm() {
+    if (!selected) return;
+    setConfirming(true);
+    setError(null);
+    try {
+      const res = await fetch(`/api/list/batches/${batchId}/transportation`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ transportationOptionId: selected }),
+      });
+      const data = await res.json();
+      if (!res.ok || data.error) {
+        setError(data.error || `HTTP ${res.status}`);
+        setConfirming(false);
+        return;
+      }
+      // Reload the page so batch state refreshes — simplest correct UX
+      window.location.reload();
+    } catch (err) {
+      setError(String(err));
+      setConfirming(false);
+    }
+  }
+
+  // Group + sort: cheapest small parcel first, then LTL, then others
+  const sorted = [...options].sort((a, b) => {
+    const aSmall = a.shippingMode === 'GROUND_SMALL_PARCEL' ? 0 : 1;
+    const bSmall = b.shippingMode === 'GROUND_SMALL_PARCEL' ? 0 : 1;
+    if (aSmall !== bSmall) return aSmall - bSmall;
+    return (a.carrier?.name || '').localeCompare(b.carrier?.name || '');
+  });
+
+  return (
+    <div className="border border-border-subtle rounded-lg bg-bg-elevated p-4 space-y-3">
+      <div>
+        <div className="text-sm font-semibold text-text-primary mb-0.5">Choose a carrier</div>
+        <div className="text-[11px] text-text-tertiary">
+          Pick the carrier you&apos;ll use to ship these boxes to Amazon. Amazon needs to know so the
+          shipment can be tracked. For &quot;use your own carrier&quot; options you&apos;ll generate the actual
+          shipping labels via your carrier&apos;s own tools (UPS WorldShip, USPS Click-N-Ship, etc.).
+        </div>
+      </div>
+      {loading && <div className="text-[11px] text-text-tertiary italic">Loading carrier options…</div>}
+      {error && <div className="text-[11px] text-negative">{error}</div>}
+      {!loading && !error && sorted.length === 0 && (
+        <div className="text-[11px] text-text-tertiary italic">No carrier options returned by Amazon. Try refreshing.</div>
+      )}
+      {!loading && sorted.length > 0 && (
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-2 max-h-96 overflow-y-auto">
+          {sorted.map((o) => {
+            const isSelected = selected === o.transportationOptionId;
+            const cost = o.quote?.cost?.amount;
+            return (
+              <button
+                key={o.transportationOptionId}
+                type="button"
+                onClick={() => setSelected(o.transportationOptionId)}
+                className={`text-left border rounded p-2.5 transition-colors ${
+                  isSelected
+                    ? 'border-accent bg-accent/10'
+                    : 'border-border-subtle bg-bg-surface hover:border-border-default'
+                }`}
+              >
+                <div className="text-xs font-medium text-text-primary truncate">
+                  {o.carrier?.name || o.shippingSolution}
+                </div>
+                <div className="text-[10px] text-text-tertiary mt-0.5 uppercase tracking-wider">
+                  {o.shippingMode.replace(/_/g, ' ')} · {o.shippingSolution === 'AMAZON_PARTNERED_CARRIER' ? 'AMAZON PARTNERED' : 'OWN CARRIER'}
+                </div>
+                {cost !== undefined && (
+                  <div className="text-xs font-mono text-positive mt-1">${cost.toFixed(2)}</div>
+                )}
+                {(!cost && o.shippingSolution === 'USE_YOUR_OWN_CARRIER') && (
+                  <div className="text-[10px] text-text-tertiary mt-1 italic">
+                    Pricing via your own carrier account
+                  </div>
+                )}
+              </button>
+            );
+          })}
+        </div>
+      )}
+      {!loading && sorted.length > 0 && (
+        <div className="flex justify-end">
+          <button
+            type="button"
+            onClick={handleConfirm}
+            disabled={!selected || confirming}
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded bg-accent text-white text-xs font-medium hover:bg-accent/90 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+          >
+            {confirming ? <Loader2 size={12} className="animate-spin" /> : <CheckCircle size={12} />}
+            {confirming ? 'Confirming…' : 'Confirm carrier'}
+          </button>
+        </div>
+      )}
     </div>
   );
 }
