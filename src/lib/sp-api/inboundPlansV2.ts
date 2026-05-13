@@ -748,8 +748,11 @@ export async function getShipmentLabels(
   );
   url.searchParams.set('PageType', pageType);
   url.searchParams.set('LabelType', labelType);
-  url.searchParams.set('PageSize', '1');         // integer pagination
-  url.searchParams.set('PageStartIndex', '0');   // integer pagination
+  // PageSize = number of labels to return in this paginated response. Set it
+  // to the box count so we get ALL labels in one PDF. Previously set to 1,
+  // which limited the response to just the first label.
+  url.searchParams.set('PageSize', String(allBoxIds.length));
+  url.searchParams.set('PageStartIndex', '0');
   // List query params: SP-API uses comma-separated for List<String>.
   url.searchParams.set('PackageLabelsToPrint', allBoxIds.join(','));
 
