@@ -360,6 +360,24 @@ export function initializeDatabase() {
     CREATE INDEX IF NOT EXISTS idx_reserve_balance_date
       ON reserve_balance_history(posted_date);
 
+    -- Settlement headers from the V2 settlement report. One row per Amazon
+    -- disbursement: the authoritative period + payout total ("what hit the
+    -- bank"). Populated from the settlement summary row (blank order-id, a
+    -- populated total-amount). The per-settlement reconciliation view
+    -- attributes order revenue/fees/COGS to each settlement by its date window.
+    CREATE TABLE IF NOT EXISTS settlements (
+      settlement_id TEXT PRIMARY KEY,
+      marketplace TEXT NOT NULL DEFAULT 'amazon',
+      start_date TEXT,
+      end_date TEXT,
+      deposit_date TEXT,
+      total_amount_cents INTEGER NOT NULL DEFAULT 0,
+      currency TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_settlements_deposit ON settlements(deposit_date);
+    CREATE INDEX IF NOT EXISTS idx_settlements_end ON settlements(end_date);
+
     -- Per-transaction state from SP-API Finances v2024-06-19. Critical for
     -- DD7 (Delivery Date Policy) cash-flow timing. transaction_status =
     -- DEFERRED → funds held until maturity_date. RELEASED → already

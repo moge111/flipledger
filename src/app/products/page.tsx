@@ -180,7 +180,12 @@ export default function ProductsPage() {
   const missingCogsCounts = useMemo(() => {
     const counts: Record<string, number> = { amazon: 0, walmart: 0, ebay: 0, all: 0 };
     for (const p of products) {
-      const missing = p.hasLedger === 0 || !p.costPerUnit || p.costPerUnit === 0;
+      // Use the SAME predicate as the row badge + the filter so the banner
+      // count never disagrees with what's actually flagged. Self-pulled /
+      // intentional-$0 SKUs are NOT missing (the badge already excludes them);
+      // depleted lots (unitsZeroCogs > 0) ARE.
+      const intentional = (p.intentionalZeroCogs ?? 0) === 1;
+      const missing = !intentional && (p.hasLedger === 0 || !p.costPerUnit || p.costPerUnit === 0 || (p.unitsZeroCogs ?? 0) > 0);
       if (!missing) continue;
       const mkt = p.marketplace || 'amazon';
       counts[mkt] = (counts[mkt] || 0) + 1;

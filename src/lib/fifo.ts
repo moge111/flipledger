@@ -27,6 +27,7 @@ interface SaleItem {
   quantity: number;
   purchaseDate: string;
   currentCogs: number;
+  isReturned: number; // 1 if the full quantity was returned to inventory
 }
 
 interface FIFOResult {
@@ -110,9 +111,25 @@ export function recalculateFIFO(options: {
       ORDER BY date_purchased ASC, id ASC
     `);
 
+    // An order_item counts as "returned" when there's a refund for the same
+    // order + product with item_returned = 1 covering the full quantity. A
+    // returned unit re-enters sellable inventory (FBA sellable disposition,
+    // or an MFN customer return shipped back to the seller), so its COGS
+    // belongs to the eventual resale — not this refunded sale.
+    const RETURNED_FLAG = `
+      EXISTS (
+        SELECT 1 FROM refunds r
+        WHERE r.order_id = oi.order_id
+          AND r.item_returned = 1
+          AND r.quantity >= oi.quantity
+          AND (r.sku = oi.sku OR r.asin = oi.asin OR r.sku = oi.asin)
+      ) as isReturned
+    `;
+
     // Get sales for a SKU — match by sku first (primary), then by asin (fallback)
     const getSalesBySku = db.prepare(`
-      SELECT oi.id, oi.order_id as orderId, oi.sku, oi.asin, oi.quantity, o.purchase_date as purchaseDate, oi.cogs_per_unit as currentCogs
+      SELECT oi.id, oi.order_id as orderId, oi.sku, oi.asin, oi.quantity, o.purchase_date as purchaseDate, oi.cogs_per_unit as currentCogs,
+        ${RETURNED_FLAG}
       FROM order_items oi
       JOIN orders o ON oi.order_id = o.order_id
       WHERE oi.sku = ?
@@ -120,7 +137,8 @@ export function recalculateFIFO(options: {
     `);
 
     const getSalesByAsin = db.prepare(`
-      SELECT oi.id, oi.order_id as orderId, oi.sku, oi.asin, oi.quantity, o.purchase_date as purchaseDate, oi.cogs_per_unit as currentCogs
+      SELECT oi.id, oi.order_id as orderId, oi.sku, oi.asin, oi.quantity, o.purchase_date as purchaseDate, oi.cogs_per_unit as currentCogs,
+        ${RETURNED_FLAG}
       FROM order_items oi
       JOIN orders o ON oi.order_id = o.order_id
       WHERE oi.asin = ? AND (oi.sku IS NULL OR oi.sku = '' OR oi.sku NOT IN (SELECT DISTINCT sku FROM inventory_ledger WHERE buy_price > 0))
@@ -164,6 +182,17 @@ export function recalculateFIFO(options: {
 
         // Walk through sales, consuming from earliest batches
         for (const sale of sales) {
+          // Returned sale: the physical unit came back to sellable inventory,
+          // so it doesn't permanently consume a batch and carries no COGS —
+          // the cost flows to whatever sale consumes that unit next.
+          if (sale.isReturned) {
+            if (sale.currentCogs !== 0) {
+              updateCogs.run(0, sale.id);
+              result.itemsUpdated++;
+            }
+            continue;
+          }
+
           let unitsNeeded = sale.quantity;
           let totalCost = 0;
           let batchIdx = 0;

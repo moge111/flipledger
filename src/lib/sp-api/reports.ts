@@ -127,11 +127,63 @@ function parseSettlementReport(content: string): number {
     const amountIdx = colIndex('amount');
     const postedDateColIdx = colIndex('posted-date') >= 0 ? colIndex('posted-date') : colIndex('posted-date-time');
 
+    // Settlement header columns (constant across all rows of a report; the
+    // payout total lives only on the summary row, which has a blank order-id).
+    const settlementIdIdx = colIndex('settlement-id');
+    const startDateIdx = colIndex('settlement-start-date');
+    const endDateIdx = colIndex('settlement-end-date');
+    const depositDateIdx = colIndex('deposit-date');
+    const totalAmountIdx = colIndex('total-amount');
+    const currencyIdx = colIndex('currency');
+
     if (orderIdIdx === -1 || amountIdx === -1) {
       // Try V1 format columns
       const altOrderIdx = colIndex('order id');
       const altAmountIdx = colIndex('total');
       if (altOrderIdx === -1) return 0;
+    }
+
+    // ── Capture the settlement header (one disbursement per report) ──
+    // settlement-id / start / end / deposit are identical on every row; the
+    // total-amount (net payout) appears only on the summary row.
+    // Settlement dates come in several shapes: "2026-05-08 20:23:56 UTC",
+    // ISO "2026-05-08T20:23:56Z", or monthly "18.03.2026 16:05:21 UTC".
+    // Normalize all to a clean YYYY-MM-DD (date-level is enough for window
+    // attribution; payout total is exact regardless).
+    const normDate = (d: string): string => {
+      if (!d) return d;
+      d = d.trim();
+      const dm = d.match(/^(\d{2})\.(\d{2})\.(\d{4})/); // DD.MM.YYYY[ time]
+      if (dm) return `${dm[3]}-${dm[2]}-${dm[1]}`;
+      const iso = d.match(/^(\d{4}-\d{2}-\d{2})/); // YYYY-MM-DD[ T/space time]
+      if (iso) return iso[1];
+      return d;
+    };
+    if (settlementIdIdx >= 0 && totalAmountIdx >= 0) {
+      let sid = '', sStart = '', sEnd = '', sDeposit = '', sCurrency = '';
+      let sTotalCents: number | null = null;
+      for (let i = 1; i < lines.length; i++) {
+        const c = lines[i].split('\t').map((x) => x.trim().replace(/"/g, ''));
+        if (!sid && c[settlementIdIdx]) {
+          sid = c[settlementIdIdx];
+          sStart = normDate(c[startDateIdx] || '');
+          sEnd = normDate(c[endDateIdx] || '');
+          sDeposit = normDate(c[depositDateIdx] || '');
+          sCurrency = currencyIdx >= 0 ? c[currencyIdx] : 'USD';
+        }
+        const ta = totalAmountIdx >= 0 ? c[totalAmountIdx] : '';
+        if (ta && !isNaN(parseFloat(ta))) sTotalCents = Math.round(parseFloat(ta) * 100);
+      }
+      if (sid && sTotalCents !== null) {
+        db.prepare(`
+          INSERT INTO settlements (settlement_id, marketplace, start_date, end_date, deposit_date, total_amount_cents, currency, created_at)
+          VALUES (?, 'amazon', ?, ?, ?, ?, ?, datetime('now'))
+          ON CONFLICT(settlement_id) DO UPDATE SET
+            start_date = excluded.start_date, end_date = excluded.end_date,
+            deposit_date = excluded.deposit_date, total_amount_cents = excluded.total_amount_cents,
+            currency = excluded.currency
+        `).run(sid, sStart, sEnd, sDeposit, sTotalCents, sCurrency || 'USD');
+      }
     }
 
     for (let i = 1; i < lines.length; i++) {

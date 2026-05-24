@@ -354,13 +354,31 @@ function processRefundEvent(db: Database.Database, event: any) {
   const now = new Date().toISOString();
   const items = event.ShipmentItemAdjustmentList || [];
 
+  // Is this an MFN order? For merchant-fulfilled returns the customer ships
+  // the item back to the seller, so the physical unit re-enters sellable
+  // inventory — its COGS should follow the unit to its eventual resale, not
+  // be eaten as a loss on the refund. FBA returns get item_returned set later
+  // by the customer-returns sync, which has Amazon's actual disposition data.
+  const orderRow = db
+    .prepare('SELECT fulfillment_channel FROM orders WHERE order_id = ?')
+    .get(orderId) as { fulfillment_channel?: string } | undefined;
+  const isMfn =
+    orderRow?.fulfillment_channel === 'MFN' || orderRow?.fulfillment_channel === 'Seller';
+  const itemReturned = isMfn ? 1 : 0;
+
   for (const item of items) {
     let refundAmount = 0;
     let feeClawback = 0;
 
-    // Charges being refunded to customer
+    // Charges being refunded to customer.
+    // Sales tax is EXCLUDED — Amazon collects & remits it as marketplace
+    // facilitator, so it was never the seller's income and is not the
+    // seller's refund expense. Excluding it keeps refund_amount on the same
+    // basis as order_items.total_price (Principal only), so a full refund
+    // correctly nets the sale to zero in the P&L.
     const charges = item.ItemChargeAdjustmentList || [];
     for (const charge of charges) {
+      if (typeof charge.ChargeType === 'string' && charge.ChargeType.includes('Tax')) continue;
       refundAmount += Math.abs(toCents(charge.ChargeAmount));
     }
 
@@ -377,7 +395,7 @@ function processRefundEvent(db: Database.Database, event: any) {
       INSERT OR IGNORE INTO refunds (order_id, refund_date, asin, sku, quantity, refund_amount, reason, item_returned, fee_clawback, marketplace, created_at)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(orderId, postedDate, item.ASIN || null, item.SellerSKU, item.QuantityShipped || 1,
-      refundAmount, 'CUSTOMER_RETURN', 0, feeClawback, 'amazon', now);
+      refundAmount, 'CUSTOMER_RETURN', itemReturned, feeClawback, 'amazon', now);
 
     // Also insert fee details for the clawback
     const result = db.prepare(`
@@ -418,22 +436,30 @@ function processServiceFeeEvent(db: Database.Database, event: any) {
     const sku = event.SellerSKU || null;
     const currency = fee.FeeAmount?.CurrencyCode || 'USD';
 
-    // Build a dedup key: fee_type + amount + currency + asin + day
-    const dedupKey = `${feeType}|${amount}|${currency}|${asin || ''}|${sku || ''}|${postedDate.substring(0, 10)}`;
+    // Dedup is MONTH-scoped, not day-scoped. Amazon's Financial Events API
+    // returns pending/un-settled service fees (subscription, storage, inbound
+    // transportation, etc.) with a ROLLING PostedDate — every daily sync gets
+    // the same fee re-dated to "today", so day-scoped dedup let the same fee
+    // in once per day. Storage/subscription/inbound fees are charged at most
+    // once per calendar month, so collapsing to one per (fee_type, amount,
+    // asin, month) is correct. The monthly transaction-report import remains
+    // the authoritative source and re-dates them precisely.
+    const month = postedDate.substring(0, 7);
+    const dedupKey = `${feeType}|${amount}|${currency}|${asin || ''}|${sku || ''}|${month}`;
 
     // Count how many of this exact fee we've seen in this sync batch
     const batchCount = (serviceFeeTracker.get(dedupKey) || 0) + 1;
     serviceFeeTracker.set(dedupKey, batchCount);
 
-    // Count how many already exist in the DB for this day
+    // Count how many already exist in the DB for this calendar month
     const dbCount = (db.prepare(`
-      SELECT COUNT(*) as cnt FROM financial_events
-      WHERE event_type = 'ServiceFeeEvent'
-        AND total_amount = ?
-        AND date(posted_date) = ?
+      SELECT COUNT(*) as cnt FROM fee_details
+      WHERE fee_type = ?
+        AND amount = ?
         AND COALESCE(asin, '') = ?
-        AND COALESCE(sku, '') = ?
-    `).get(amount, postedDate.substring(0, 10), asin || '', sku || '') as any).cnt;
+        AND (order_id IS NULL OR order_id = '')
+        AND strftime('%Y-%m', posted_date) = ?
+    `).get(feeType, amount, asin || '', month) as any).cnt;
 
     // Only insert if this batch has seen more than the DB already has
     if (batchCount <= dbCount) continue;

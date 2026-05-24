@@ -59,7 +59,8 @@ next-env.d.ts
 *.swo
 .cache/
 
-# backups
+# backups (DB snapshots only — anchored so it doesn't match src/app/api/backup/)
 *.bak
 *.bak-*
-backup/
+/data/backups/
+/data/*.db-shm

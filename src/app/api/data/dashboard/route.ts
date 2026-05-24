@@ -161,10 +161,18 @@ export async function GET(request: NextRequest) {
     `).get(prevStart, startDate) as any;
 
     // ─── Other expenses ───────────────────────────────────────────────
-    const expenseData = db.prepare(`
+    // Business-wide expenses (insurance, subscriptions, etc.) — only counted
+    // in the "All Marketplaces" view, matching the P&L's behavior. Per-
+    // marketplace views exclude them because they're not attributable to
+    // any single channel.
+    const expenseData = marketplace ? { totalExpenses: 0 } : db.prepare(`
       SELECT COALESCE(SUM(amount), 0) as totalExpenses
       FROM expenses WHERE date >= ? AND date < ?
     `).get(startDate, endDateNext) as any;
+    const prevExpenseData = marketplace ? { totalExpenses: 0 } : db.prepare(`
+      SELECT COALESCE(SUM(amount), 0) as totalExpenses
+      FROM expenses WHERE date >= ? AND date < ?
+    `).get(prevStart, startDate) as any;
 
     // ─── Chart data (daily/weekly/monthly depending on range) ─────────
     const rangeDays = Math.ceil((new Date(endDateNext).getTime() - new Date(startDate).getTime()) / 86400000);
@@ -285,16 +293,23 @@ export async function GET(request: NextRequest) {
     const allFees = orderFeeData.totalFees + serviceFeeData.totalFees;
     const promos = salesData.totalPromos;
     const shippingCost = salesData.totalShippingCost;
-    const netRefunds = refundData.totalRefunds - refundData.totalClawbacks;
-    const totalProfit = totalRevenue - totalCogs - allFees - shippingCost - netRefunds + reimbData.total;
+    // Clawbacks are already netted into allFees via fee_details (Amazon posts
+    // the returned referral fee as a positive Commission line). Subtracting
+    // (totalRefunds - totalClawbacks) would credit the clawback a second time.
+    const netRefunds = refundData.totalRefunds;
+    // Mirror P&L formula exactly so Dashboard and P&L always agree:
+    //   netProfit = revenue - cogs - fees - shipping - otherExpenses - refunds + reimbursements
+    // otherExpenses (insurance, subscriptions, etc.) is only nonzero in the
+    // All-Marketplaces view (gated above).
+    const totalProfit = totalRevenue - totalCogs - allFees - shippingCost - expenseData.totalExpenses - netRefunds + reimbData.total;
 
     const prevRevenue = prevSalesData.totalRevenue;
     const prevCogs = prevCogsData.totalCogs;
     const prevAllFees = prevOrderFeeData.totalFees + prevServiceFeeData.totalFees;
     const prevPromos = prevSalesData.totalPromos;
     const prevShippingCost = prevSalesData.totalShippingCost;
-    const prevNetRefunds = prevRefundData.totalRefunds - prevRefundData.totalClawbacks;
-    const prevProfit = prevRevenue - prevCogs - prevAllFees - prevShippingCost - prevNetRefunds + prevReimbData.total;
+    const prevNetRefunds = prevRefundData.totalRefunds;
+    const prevProfit = prevRevenue - prevCogs - prevAllFees - prevShippingCost - prevExpenseData.totalExpenses - prevNetRefunds + prevReimbData.total;
 
     const roi = totalCogs > 0 ? (totalProfit / totalCogs) * 100 : 0;
     const prevRoi = prevCogs > 0 ? (prevProfit / prevCogs) * 100 : 0;

@@ -53,11 +53,20 @@ export async function GET() {
         COALESCE(p.marketplace, p2.marketplace, p3.marketplace, li_sku.marketplace, li_asin.marketplace) as marketplace,
         1 as hasLedger,
         0 as unitsSold,
-        -- Count of historical sales with no COGS allocated. > 0 means the lot
-        -- was depleted and FIFO ran out — those sales are stuck at $0 COGS.
-        -- Adding stock or re-running FIFO won't help; the user needs to either
-        -- bump the lot quantity or create a new lot at the right cost basis.
-        (SELECT COUNT(*) FROM order_items oi_zc WHERE oi_zc.sku = il.sku AND oi_zc.cogs_per_unit = 0) as unitsZeroCogs,
+        -- Count of historical sales genuinely stuck at $0 COGS because the lot
+        -- was depleted and FIFO ran out. RETURNED units are EXCLUDED: FIFO
+        -- intentionally zeroes COGS on returns (you got the item back, so it's
+        -- not a cost), so a returned $0-COGS sale is correct, not a depleted
+        -- lot. Counting them flagged every SKU that ever had a return as
+        -- "DEPLETED LOT" (false positive). A real >0 here means bump the lot
+        -- quantity or add a new lot at the right cost basis.
+        (SELECT COUNT(*) FROM order_items oi_zc
+           WHERE oi_zc.sku = il.sku AND oi_zc.cogs_per_unit = 0
+             AND NOT EXISTS (
+               SELECT 1 FROM refunds r
+               WHERE r.order_id = oi_zc.order_id AND COALESCE(r.item_returned, 0) = 1
+             )
+        ) as unitsZeroCogs,
         COALESCE(il.intentional_zero_cogs, 0) as intentionalZeroCogs
       FROM inventory_ledger il
       LEFT JOIN products p ON il.asin = p.asin

@@ -194,7 +194,11 @@ export async function GET(request: NextRequest) {
     const totalIncome = salesIncome.total + shippingCredits.total + otherIncomeTotal.total;
     const totalFees = Object.values(feeHierarchy).reduce((sum: number, cat: any) => sum + cat.total, 0);
     const totalAllExpenses = cogsTotal.total + totalFees + shippingCosts.total + totalExpenses.total;
-    const netProfit = totalIncome - totalAllExpenses - refundTotal.total + refundTotal.clawback + reimbTotal.total;
+    // NOTE: refund clawbacks (referral fees Amazon returns on a refund) are
+    // NOT added back here — Amazon posts the clawback as a positive Commission
+    // line in fee_details, so it's already netted into totalFees. Adding
+    // refundTotal.clawback again would double-count it.
+    const netProfit = totalIncome - totalAllExpenses - refundTotal.total + reimbTotal.total;
 
     // Sales detail — individual products sold in the period, with per-order fees
     const salesDetail = db.prepare(`

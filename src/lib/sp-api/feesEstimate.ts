@@ -12,7 +12,7 @@
  */
 import Database from 'better-sqlite3';
 import path from 'path';
-import { getAccessToken, getEndpoint } from './auth';
+import { getAccessToken, getEndpoint, fetchWithRetry } from './auth';
 import type { SPAPICredentials } from './types';
 
 function getDb() {
@@ -191,7 +191,7 @@ async function fetchFeesEstimateRaw(
   };
 
   const url = `${endpoint}/products/fees/v0/items/${encodeURIComponent(asin)}/feesEstimate`;
-  const response = await fetch(url, {
+  const response = await fetchWithRetry(url, {
     method: 'POST',
     headers: {
       'x-amz-access-token': accessToken,

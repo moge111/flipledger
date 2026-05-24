@@ -89,6 +89,7 @@ const navSections: NavSection[] = [
       { label: 'WFS Sales', href: '/bookkeep/wfs-sales', icon: <ShoppingCart size={18} /> },
       { label: 'Merchant Sales', href: '/bookkeep/merchant-sales', icon: <ShoppingCart size={18} /> },
       { label: 'eBay Sales', href: '/bookkeep/ebay-sales', icon: <ShoppingCart size={18} /> },
+      { label: 'Settlements', href: '/bookkeep/settlements', icon: <Wallet size={18} /> },
       { label: 'Refunds', href: '/bookkeep/refunds', icon: <Undo2 size={18} /> },
       { label: 'Reimbursements', href: '/bookkeep/reimbursements', icon: <HandCoins size={18} /> },
       { label: 'Claims to File', href: '/bookkeep/claims-to-file', icon: <HandCoins size={18} /> },

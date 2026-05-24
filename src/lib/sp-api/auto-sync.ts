@@ -18,6 +18,7 @@ import { syncAmazonDisputeCandidates } from './amazonDisputeCandidates';
 import { syncWalmartDisputeCandidates } from '../walmart-api/disputeCandidates';
 import { generateRecurringExpenses } from '../recurring-expenses';
 import { recalculateFIFO } from '../fifo';
+import { createBackup } from '../backup';
 import type { SPAPICredentials } from './types';
 import Database from 'better-sqlite3';
 import path from 'path';
@@ -43,6 +44,10 @@ const SALES_RANK_INTERVAL_HOURS = 24;
 // Weekly is enough to catch them well within the 60-day claim window.
 const REIMBURSEMENT_CANDIDATES_INTERVAL_HOURS = 24 * 7;
 const REIMBURSEMENT_CANDIDATES_LOOKBACK_DAYS = 90;
+
+// Database backup — once a day. FlipLedger's entire books live in one local
+// SQLite file, so an automated consistent snapshot is the durability floor.
+const BACKUP_INTERVAL_HOURS = 24;
 
 function getAmazonCredentials(): SPAPICredentials | null {
   try {
@@ -287,6 +292,25 @@ async function autoSyncTick() {
     }
   } catch (err) {
     console.error('[AutoSync] FIFO error:', err);
+  }
+
+  // Daily database backup — consistent SQLite snapshot, runs last so it
+  // captures everything this tick just synced.
+  const backupLastRun = getLastSyncTime('backup_last_run');
+  if (hoursSince(backupLastRun) >= BACKUP_INTERVAL_HOURS) {
+    try {
+      const result = await createBackup();
+      if (result.success) {
+        console.log(
+          `[AutoSync] Backup created: ${result.file?.name} (${((result.file?.sizeBytes || 0) / 1048576).toFixed(1)}MB)` +
+            (result.pruned ? `, pruned ${result.pruned} old` : '')
+        );
+      } else {
+        console.error('[AutoSync] Backup error:', result.error);
+      }
+    } catch (err) {
+      console.error('[AutoSync] Backup error:', err);
+    }
   }
 }
 

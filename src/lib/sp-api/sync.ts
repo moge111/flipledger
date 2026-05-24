@@ -6,6 +6,7 @@
 import { syncFinancialEvents, resetServiceFeeTracker } from './finances';
 import { syncFinancesV2024Transactions } from './financesV2024';
 import { dedupAmazonReimbursements } from './dedupReimbursements';
+import { dedupServiceFees } from './dedupServiceFees';
 import { syncOrders } from './orders';
 import { syncFBAInventory } from './inventory';
 import { enrichProductCatalog } from './catalog';
@@ -168,6 +169,23 @@ export async function runFullSync(
     // Self-healing dedup: ADJ-* / SETTLEMENT-* placeholders shadowed by canonical
     // numeric reimbursements (from FBA Reimbursements Report). Idempotent.
     dedupAmazonReimbursements();
+
+    // Self-healing dedup: ServiceFeeEvent rolling-date duplicates. Amazon
+    // re-dates pending service fees on every poll; if a stale module ever
+    // re-introduces day-scoped dedup behavior we collapse them here.
+    // Idempotent — no-op when there are no dupes.
+    try {
+      const sfResult = dedupServiceFees();
+      if (sfResult.feeDetailsDeleted > 0) {
+        console.log(
+          `[Sync] Service-fee dedup swept ${sfResult.feeDetailsDeleted} dupes ` +
+            `($${(Math.abs(sfResult.dollarsRemoved) / 100).toFixed(2)}), ` +
+            `${sfResult.eventsDeleted} orphan events removed`
+        );
+      }
+    } catch (err) {
+      console.error('[Sync] Service-fee dedup error:', err);
+    }
 
     // Collect all errors
     currentSync.totalErrors = [

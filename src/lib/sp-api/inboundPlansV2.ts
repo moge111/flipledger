@@ -6,7 +6,7 @@
  *
  * Docs: https://developer-docs.amazon.com/sp-api/docs/fulfillment-inbound-api-v2024-03-20-reference
  */
-import { getAccessToken, getEndpoint, spApiRequest } from './auth';
+import { getAccessToken, getEndpoint, spApiRequest, fetchWithRetry } from './auth';
 import type { SPAPICredentials } from './types';
 
 export interface SourceAddress {
@@ -80,7 +80,7 @@ export async function createInboundPlan(
     })),
   };
 
-  const response = await fetch(`${endpoint}/inbound/fba/2024-03-20/inboundPlans`, {
+  const response = await fetchWithRetry(`${endpoint}/inbound/fba/2024-03-20/inboundPlans`, {
     method: 'POST',
     headers: {
       'x-amz-access-token': accessToken,
@@ -168,7 +168,7 @@ export async function setPrepDetails(
     })),
   };
 
-  const response = await fetch(`${endpoint}/inbound/fba/2024-03-20/items/prepDetails`, {
+  const response = await fetchWithRetry(`${endpoint}/inbound/fba/2024-03-20/items/prepDetails`, {
     method: 'POST',
     headers: {
       'x-amz-access-token': accessToken,
@@ -285,7 +285,7 @@ export async function generatePackingOptions(
   const endpoint = getEndpoint(credentials.marketplaceId);
   const accessToken = await getAccessToken(credentials);
 
-  const response = await fetch(
+  const response = await fetchWithRetry(
     `${endpoint}/inbound/fba/2024-03-20/inboundPlans/${encodeURIComponent(inboundPlanId)}/packingOptions`,
     {
       method: 'POST',
@@ -445,7 +445,7 @@ export async function setPackingInformation(
     );
   } catch { /* non-fatal */ }
 
-  const response = await fetch(
+  const response = await fetchWithRetry(
     `${endpoint}/inbound/fba/2024-03-20/inboundPlans/${encodeURIComponent(inboundPlanId)}/packingInformation`,
     {
       // POST not PUT — see header comment. PUT is auth-gated; POST is not.
@@ -479,7 +479,7 @@ export async function confirmPackingOption(
   const endpoint = getEndpoint(credentials.marketplaceId);
   const accessToken = await getAccessToken(credentials);
 
-  const response = await fetch(
+  const response = await fetchWithRetry(
     `${endpoint}/inbound/fba/2024-03-20/inboundPlans/${encodeURIComponent(inboundPlanId)}/packingOptions/${encodeURIComponent(packingOptionId)}/confirmation`,
     {
       method: 'POST',
@@ -536,7 +536,7 @@ export async function generatePlacementOptions(
   const endpoint = getEndpoint(credentials.marketplaceId);
   const accessToken = await getAccessToken(credentials);
 
-  const response = await fetch(
+  const response = await fetchWithRetry(
     `${endpoint}/inbound/fba/2024-03-20/inboundPlans/${encodeURIComponent(inboundPlanId)}/placementOptions`,
     {
       method: 'POST',
@@ -587,7 +587,7 @@ export async function confirmPlacementOption(
   const endpoint = getEndpoint(credentials.marketplaceId);
   const accessToken = await getAccessToken(credentials);
 
-  const response = await fetch(
+  const response = await fetchWithRetry(
     `${endpoint}/inbound/fba/2024-03-20/inboundPlans/${encodeURIComponent(inboundPlanId)}/placementOptions/${encodeURIComponent(placementOptionId)}/confirmation`,
     {
       method: 'POST',
@@ -756,7 +756,7 @@ export async function getShipmentLabels(
   // List query params: SP-API uses comma-separated for List<String>.
   url.searchParams.set('PackageLabelsToPrint', allBoxIds.join(','));
 
-  const response = await fetch(url.toString(), {
+  const response = await fetchWithRetry(url.toString(), {
     headers: {
       'x-amz-access-token': accessToken,
       'Content-Type': 'application/json',
@@ -876,7 +876,7 @@ export async function generateTransportationOptions(
     })),
   };
 
-  const response = await fetch(
+  const response = await fetchWithRetry(
     `${endpoint}/inbound/fba/2024-03-20/inboundPlans/${encodeURIComponent(inboundPlanId)}/transportationOptions`,
     {
       method: 'POST',
@@ -917,7 +917,7 @@ export async function listTransportationOptions(
   );
   url.searchParams.set('placementOptionId', placementOptionId);
 
-  const response = await fetch(url.toString(), {
+  const response = await fetchWithRetry(url.toString(), {
     headers: {
       'x-amz-access-token': accessToken,
       'Content-Type': 'application/json',
@@ -953,7 +953,7 @@ export async function confirmTransportationOptions(
   const endpoint = getEndpoint(credentials.marketplaceId);
   const accessToken = await getAccessToken(credentials);
 
-  const response = await fetch(
+  const response = await fetchWithRetry(
     `${endpoint}/inbound/fba/2024-03-20/inboundPlans/${encodeURIComponent(inboundPlanId)}/transportationOptions/confirmation`,
     {
       method: 'POST',

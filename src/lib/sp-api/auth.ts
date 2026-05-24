@@ -86,6 +86,43 @@ export function getEndpoint(marketplaceId: string, sandbox: boolean = false): st
 }
 
 /**
+ * Transport-level retry wrapper around fetch for SP-API write/POST calls that
+ * build their own request (method, body, headers) and parse their own response.
+ *
+ * Unlike spApiRequest (which is GET-only and returns parsed JSON), this returns
+ * the raw Response so each caller keeps its bespoke error messages and body
+ * parsing unchanged — it ONLY adds retry on the transient, retryable statuses:
+ *   - 429 (rate limited): honors Retry-After, exponential backoff
+ *   - 5xx (server error): exponential backoff
+ * Non-retryable statuses (400/403/404/etc.) are returned as-is so the caller's
+ * own handling runs — important because, e.g., a 403 on setPackingInformation
+ * means "use POST not PUT", not "token expired", and a 400 carries the
+ * "MSKUs not available for inbound" string the send route retries on.
+ *
+ * The Fulfillment Inbound API has very low rate limits and a full shipment
+ * fires 15+ calls in a burst, so without this a single 429 kills the batch.
+ */
+export async function fetchWithRetry(
+  url: string,
+  init: RequestInit,
+  retries: number = 4
+): Promise<Response> {
+  let response!: Response;
+  for (let attempt = 0; attempt < retries; attempt++) {
+    response = await fetch(url, init);
+    const retryable = response.status === 429 || response.status >= 500;
+    if (!retryable || attempt === retries - 1) return response;
+    const base = response.status === 429
+      ? parseInt(response.headers.get('Retry-After') || '2')
+      : 3;
+    const waitSec = base * Math.pow(2, attempt); // 429: 2,4,8 · 5xx: 3,6,12
+    console.warn(`SP-API ${response.status} on ${url}, retrying in ${waitSec}s (attempt ${attempt + 1}/${retries})`);
+    await new Promise((r) => setTimeout(r, waitSec * 1000));
+  }
+  return response;
+}
+
+/**
  * Make an authenticated SP-API request.
  * Handles token refresh, rate limiting (429), and retries.
  */

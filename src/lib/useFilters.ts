@@ -35,8 +35,14 @@ export function useFilters(defaultPreset: string = '30d') {
   const [marketplace, setMarketplaceState] = useState(initialMarketplace);
   const [dateBasis, setDateBasisState] = useState(initialDateBasis);
   const [dateRange, setDateRangeState] = useState<DateRange>(() => {
-    if (initialStartDate && initialEndDate) {
-      return { preset: initialPreset, startDate: initialStartDate, endDate: initialEndDate };
+    // Only a 'custom' preset uses the explicit dates persisted in the URL.
+    // Every relative preset (ytd, 30d, this-month, this-quarter, today, …)
+    // MUST re-resolve against today on each load. Otherwise the resolved end
+    // date that got written to the URL when the preset was first clicked
+    // freezes — so "Year to Date" (and 30d/this-month/etc.) silently stop
+    // including new days and the number looks stuck even though data is syncing.
+    if (initialPreset === 'custom' && initialStartDate && initialEndDate) {
+      return { preset: 'custom', startDate: initialStartDate, endDate: initialEndDate };
     }
     return createDateRange(initialPreset);
   });

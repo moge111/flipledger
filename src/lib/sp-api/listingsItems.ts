@@ -9,7 +9,7 @@
  */
 import Database from 'better-sqlite3';
 import path from 'path';
-import { getAccessToken, getEndpoint, spApiRequest } from './auth';
+import { getAccessToken, getEndpoint, spApiRequest, fetchWithRetry } from './auth';
 import type { SPAPICredentials } from './types';
 
 function getDb() {
@@ -281,7 +281,7 @@ export async function createOrUpdateListing(
   );
   url.searchParams.set('marketplaceIds', credentials.marketplaceId);
 
-  const response = await fetch(url.toString(), {
+  const response = await fetchWithRetry(url.toString(), {
     method: 'PUT',
     headers: {
       'x-amz-access-token': accessToken,

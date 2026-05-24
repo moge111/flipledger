@@ -91,6 +91,7 @@ export function estimateAndBackfillFees(): { estimated: number; skipped: number 
       JOIN orders o ON oi.order_id = o.order_id
       LEFT JOIN fee_details fd ON oi.order_id = fd.order_id
       WHERE fd.order_id IS NULL
+      AND o.marketplace = 'amazon'
       AND o.status = 'Shipped'
       AND oi.total_price > 0
     `).all() as any[];
@@ -127,6 +128,7 @@ export function estimateAndBackfillFees(): { estimated: number; skipped: number 
       FROM order_items oi
       JOIN orders o ON oi.order_id = o.order_id
       WHERE o.fulfillment_channel = 'FBA'
+      AND o.marketplace = 'amazon'
       AND o.status = 'Shipped'
       AND EXISTS (SELECT 1 FROM fee_details WHERE order_id = oi.order_id AND fee_type = 'Commission')
       AND NOT EXISTS (SELECT 1 FROM fee_details WHERE order_id = oi.order_id AND fee_type = 'FBAPerUnitFulfillmentFee')

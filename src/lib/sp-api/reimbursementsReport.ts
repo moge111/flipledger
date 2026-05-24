@@ -14,7 +14,7 @@
  *     payouts (so we don't show "pending" for stuff Amazon already paid)
  *   - Gives the user a single complete history
  */
-import { getAccessToken, getEndpoint } from './auth';
+import { getAccessToken, getEndpoint, fetchWithRetry } from './auth';
 import { downloadReport } from './reports';
 import Database from 'better-sqlite3';
 import path from 'path';
@@ -77,7 +77,7 @@ export async function createReimbursementsReport(
     dataEndTime: endDate,
   };
 
-  const r = await fetch(`${endpoint}/reports/2021-06-30/reports`, {
+  const r = await fetchWithRetry(`${endpoint}/reports/2021-06-30/reports`, {
     method: 'POST',
     headers: { 'x-amz-access-token': accessToken, 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
@@ -97,7 +97,7 @@ export async function waitForReimbursementsReport(
   const startedAt = Date.now();
   while (Date.now() - startedAt < maxWaitMs) {
     const accessToken = await getAccessToken(credentials);
-    const r = await fetch(`${endpoint}/reports/2021-06-30/reports/${encodeURIComponent(reportId)}`, {
+    const r = await fetchWithRetry(`${endpoint}/reports/2021-06-30/reports/${encodeURIComponent(reportId)}`, {
       headers: { 'x-amz-access-token': accessToken, 'Content-Type': 'application/json' },
     });
     if (!r.ok) throw new Error(`getReport ${r.status}: ${await r.text()}`);

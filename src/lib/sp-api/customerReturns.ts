@@ -26,7 +26,7 @@
  *   - The report is date-range based, not incremental. Re-running it for a
  *     range just refreshes the reasons for refunds in that range.
  */
-import { getAccessToken, getEndpoint } from './auth';
+import { getAccessToken, getEndpoint, fetchWithRetry } from './auth';
 import { downloadReport } from './reports';
 import Database from 'better-sqlite3';
 import path from 'path';
@@ -77,7 +77,7 @@ export async function createCustomerReturnsReport(
     dataEndTime: endDate,
   };
 
-  const response = await fetch(`${endpoint}/reports/2021-06-30/reports`, {
+  const response = await fetchWithRetry(`${endpoint}/reports/2021-06-30/reports`, {
     method: 'POST',
     headers: {
       'x-amz-access-token': accessToken,
@@ -115,7 +115,7 @@ export async function waitForReport(
 
   while (Date.now() - startedAt < maxWaitMs) {
     const accessToken = await getAccessToken(credentials);
-    const response = await fetch(
+    const response = await fetchWithRetry(
       `${endpoint}/reports/2021-06-30/reports/${encodeURIComponent(reportId)}`,
       {
         headers: {
@@ -257,17 +257,19 @@ export async function syncFbaCustomerReturns(
 
   try {
     const findBySkuStmt = db.prepare(
-      `SELECT id, reason FROM refunds WHERE order_id = ? AND sku = ? AND marketplace = 'amazon'`
+      `SELECT id, reason, item_returned as itemReturned FROM refunds WHERE order_id = ? AND sku = ? AND marketplace = 'amazon'`
     );
     const findByAsinStmt = db.prepare(
-      `SELECT id, reason FROM refunds WHERE order_id = ? AND asin = ? AND marketplace = 'amazon' AND asin != ''`
+      `SELECT id, reason, item_returned as itemReturned FROM refunds WHERE order_id = ? AND asin = ? AND marketplace = 'amazon' AND asin != ''`
     );
     const findByOrderOnlyStmt = db.prepare(
-      `SELECT id, reason FROM refunds WHERE order_id = ? AND marketplace = 'amazon'`
+      `SELECT id, reason, item_returned as itemReturned FROM refunds WHERE order_id = ? AND marketplace = 'amazon'`
     );
     const updateStmt = db.prepare(
-      `UPDATE refunds SET reason = ? WHERE id = ?`
+      `UPDATE refunds SET reason = ?, item_returned = ? WHERE id = ?`
     );
+
+    type RefundMatch = { id: number; reason: string; itemReturned: number };
 
     const tx = db.transaction(() => {
       for (const row of rows) {
@@ -276,19 +278,28 @@ export async function syncFbaCustomerReturns(
         // Tally the reason regardless of whether we match — useful diagnostic
         reasonBreakdown[row.reason] = (reasonBreakdown[row.reason] || 0) + 1;
 
+        // detailed-disposition tells us whether the returned unit went back
+        // to fulfillable stock. SELLABLE → the unit will be resold, so its
+        // COGS should follow it to that future sale, not be a loss on this
+        // refund (item_returned = 1). Anything else (CUSTOMER_DAMAGED,
+        // DEFECTIVE, CARRIER_DAMAGED, ...) → the unit is gone, COGS stays a
+        // loss (item_returned = 0); Amazon typically issues a reimbursement
+        // for those, which offsets it elsewhere.
+        const itemReturned = row.detailedDisposition === 'SELLABLE' ? 1 : 0;
+
         // Try SKU first (exact match)
         let matches = row.sku
-          ? (findBySkuStmt.all(row.orderId, row.sku) as { id: number; reason: string }[])
+          ? (findBySkuStmt.all(row.orderId, row.sku) as RefundMatch[])
           : [];
 
         // Fall back to ASIN
         if (matches.length === 0 && row.asin) {
-          matches = findByAsinStmt.all(row.orderId, row.asin) as { id: number; reason: string }[];
+          matches = findByAsinStmt.all(row.orderId, row.asin) as RefundMatch[];
         }
 
         // Last resort: only match if there's exactly one refund for the order
         if (matches.length === 0) {
-          const candidates = findByOrderOnlyStmt.all(row.orderId) as { id: number; reason: string }[];
+          const candidates = findByOrderOnlyStmt.all(row.orderId) as RefundMatch[];
           if (candidates.length === 1) matches = candidates;
         }
 
@@ -299,9 +310,10 @@ export async function syncFbaCustomerReturns(
 
         refundsMatched += matches.length;
         for (const m of matches) {
-          // Only UPDATE if the reason would actually change — keeps transaction small on re-runs
-          if (m.reason !== row.reason) {
-            updateStmt.run(row.reason, m.id);
+          // Only UPDATE if reason or item_returned would actually change —
+          // keeps the transaction small on re-runs
+          if (m.reason !== row.reason || m.itemReturned !== itemReturned) {
+            updateStmt.run(row.reason, itemReturned, m.id);
             refundsUpdated++;
           }
         }
