@@ -116,6 +116,17 @@ export function recalculateFIFO(options: {
     // returned unit re-enters sellable inventory (FBA sellable disposition,
     // or an MFN customer return shipped back to the seller), so its COGS
     // belongs to the eventual resale — not this refunded sale.
+    //
+    // Marketplace timing: Amazon/eBay refunds settle immediately, so the
+    // refund row is enough. WALMART refunds are multi-stage (return initiated
+    // → Walmart refunds customer → Walmart deducts seller in recon 1-3 weeks
+    // later). item_returned=1 is set at initiation, but the refund/revenue
+    // reversal is only recognized once it SETTLES (a WalmartRefundEvent
+    // Product Price row exists — same gate the P&L/Dashboard use). Zeroing
+    // COGS before settlement, while revenue is still fully counted, makes a
+    // returned order show phantom profit. So for Walmart, only treat as
+    // returned once the refund has settled — keeping COGS and refund
+    // recognition in lockstep.
     const RETURNED_FLAG = `
       EXISTS (
         SELECT 1 FROM refunds r
@@ -123,6 +134,15 @@ export function recalculateFIFO(options: {
           AND r.item_returned = 1
           AND r.quantity >= oi.quantity
           AND (r.sku = oi.sku OR r.asin = oi.asin OR r.sku = oi.asin)
+          AND (
+            r.marketplace != 'walmart'
+            OR EXISTS (
+              SELECT 1 FROM financial_events fe
+              WHERE fe.event_type = 'WalmartRefundEvent'
+                AND fe.order_id = r.order_id
+                AND json_extract(fe.raw_data, '$."Amount Type"') = 'Product Price'
+            )
+          )
       ) as isReturned
     `;
 
