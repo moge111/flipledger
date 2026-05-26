@@ -19,6 +19,7 @@ interface SaleRow {
   salePrice: number;
   buyCost: number;
   fees: number;
+  incentives: number;
   profit: number;
   profitPercent: number;
   roiPercent: number;
@@ -76,6 +77,15 @@ export default function FBASalesPage() {
     },
     { id: 'fees', header: 'Fees', accessorKey: 'fees', cell: ({ getValue }) => <span className="font-mono text-negative">{formatCurrency(getValue() as number)}</span>, size: 90 },
     {
+      id: 'incentives', header: 'Incentive', accessorKey: 'incentives',
+      cell: ({ getValue }) => {
+        const v = getValue() as number;
+        return v > 0
+          ? <span className="font-mono text-positive" title="Walmart-funded incentive / commission incentive income for this order">{formatCurrency(v)}</span>
+          : <span className="font-mono text-text-tertiary">—</span>;
+      }, size: 90,
+    },
+    {
       id: 'profit', header: 'Net Profit', accessorKey: 'profit',
       cell: ({ getValue }) => {
         const v = getValue() as number;
@@ -99,10 +109,11 @@ export default function FBASalesPage() {
   ], []);
 
   function handleExport() {
-    const headers = ['Date', 'Order ID', 'ASIN', 'SKU', 'Product', 'Qty', 'Sale Price', 'Buy Cost', 'Fees', 'Profit', 'Margin %', 'ROI %'];
+    const headers = ['Date', 'Order ID', 'ASIN', 'SKU', 'Product', 'Qty', 'Sale Price', 'Buy Cost', 'Fees', 'Incentive', 'Profit', 'Margin %', 'ROI %'];
     const csvRows = rows.map(r => [
       r.date.split('T')[0], r.orderId, r.asin, r.sku, `"${r.productName}"`, r.quantity,
       (r.salePrice / 100).toFixed(2), (r.buyCost / 100).toFixed(2), (r.fees / 100).toFixed(2),
+      ((r.incentives || 0) / 100).toFixed(2),
       (r.profit / 100).toFixed(2), r.profitPercent.toFixed(1), r.roiPercent.toFixed(1),
     ].join(','));
     const csv = [headers.join(','), ...csvRows].join('\n');

@@ -251,6 +251,56 @@ function processReconEntry(db: Database.Database, entry: Record<string, string>,
     return;
   }
 
+  // ----- Walmart-funded price incentive (e.g. item $140 → customer $123,
+  // "Walmart funded -$17") -----
+  // Walmart settles the seller against the FULL pre-incentive item price and
+  // funds the discount itself — the recon "Commission on Product" row confirms
+  // this (commission is charged on the full price, not the discounted one).
+  // The Orders API only hands us the post-incentive CUSTOMER price as revenue,
+  // so this funded amount is real seller income we'd otherwise drop entirely.
+  // Capture it as a reimbursement (income), mirroring the commission-incentive
+  // handling below. Idempotent via the synthetic reimbursement_id.
+  if (amountType === 'Total Walmart Funded Savings') {
+    const savings = Math.abs(amount);
+    if (savings > 0) {
+      db.prepare(`
+        INSERT OR IGNORE INTO financial_events (event_type, posted_date, order_id, asin, sku, marketplace, total_amount, raw_data, created_at)
+        VALUES ('WalmartIncentive', ?, ?, ?, ?, 'walmart', ?, ?, ?)
+      `).run(refundIsoDate, orderId, sku, sku, savings, JSON.stringify(entry), now);
+
+      db.prepare(`
+        INSERT OR IGNORE INTO reimbursements (reimbursement_id, reimbursement_date, asin, sku, reason, amount, quantity, status, marketplace, created_at)
+        VALUES (?, ?, ?, ?, 'Walmart Funded Incentive', ?, 1, 'Approved', 'walmart', ?)
+      `).run(`WMT-FUNDED-${orderId}-${sku}`, refundIsoDate, sku, sku, savings, now);
+    }
+    return;
+  }
+
+  // ----- Walmart shipping claim payouts (lost/damaged shipment reimbursements) -----
+  // These arrive as a POSITIVE "Fee/Reimbursement" adjustment with a description
+  // like "Shipping Protection Claim Payout" / "Shipping Insurance claim payout".
+  // They're income (Walmart paying out a claim for a lost/damaged shipment), NOT
+  // a fee credit — route to the reimbursements table so they're visible as
+  // reimbursements instead of buried in "Walmart Fees". The matching
+  // WalmartIncentive financial_event keeps per-order WFS Sales profit consistent
+  // (and prevents a double-count: this replaces the fee-credit, doesn't add to it).
+  // NOTE: the descriptive text for these lives in "Transaction Description"
+  // ("Shipping Protection Claim Payout" / "Shipping Insurance claim payout"),
+  // NOT "Amount Description" (which is empty on these rows).
+  const txnDescription = (entry['Transaction Description'] || '').toString();
+  if (amountType === 'Fee/Reimbursement' && amount > 0 && /claim payout/i.test(txnDescription)) {
+    db.prepare(`
+      INSERT OR IGNORE INTO financial_events (event_type, posted_date, order_id, asin, sku, marketplace, total_amount, raw_data, created_at)
+      VALUES ('WalmartIncentive', ?, ?, ?, ?, 'walmart', ?, ?, ?)
+    `).run(refundIsoDate, orderId, sku, sku, amount, JSON.stringify(entry), now);
+
+    db.prepare(`
+      INSERT OR IGNORE INTO reimbursements (reimbursement_id, reimbursement_date, asin, sku, reason, amount, quantity, status, marketplace, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, 1, 'Approved', 'walmart', ?)
+    `).run(`WMT-SHIPCLAIM-${orderId}-${refundIsoDate.substring(0,10)}`, refundIsoDate, sku, sku, txnDescription || 'Walmart Shipping Claim Payout', amount, now);
+    return;
+  }
+
   // Map Walmart amount types to our fee categories
   let feeType: string;
   let feeCategory: string;
@@ -272,8 +322,8 @@ function processReconEntry(db: Database.Database, entry: Record<string, string>,
     case 'Product tax':
     case 'Product tax withheld':
     case 'Net Payable':
-    case 'Total Walmart Funded Savings':
-      // Not fees — skip these
+      // Not fees — skip these. ('Total Walmart Funded Savings' is handled
+      // above as income, not skipped.)
       return;
     default:
       feeType = amountType.replace(/[^a-zA-Z0-9]/g, '');

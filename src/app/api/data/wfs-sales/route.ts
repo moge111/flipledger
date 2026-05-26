@@ -46,6 +46,13 @@ export async function GET(request: NextRequest) {
           THEN CAST(COALESCE(fd.totalFees, 0) * oi.total_price * 1.0 / ot.order_total AS INTEGER)
           ELSE COALESCE(fd.totalFees, 0)
         END as fees,
+        -- Walmart incentive income (funded price incentives + commission
+        -- incentives) — money Walmart pays the seller for this order. Pro-rated
+        -- across line items the same way fees are.
+        CASE WHEN ot.order_total > 0
+          THEN CAST(COALESCE(inc.totalInc, 0) * oi.total_price * 1.0 / ot.order_total AS INTEGER)
+          ELSE COALESCE(inc.totalInc, 0)
+        END as incentives,
         o.is_estimated as isEstimated
       FROM orders o
       JOIN order_items oi ON o.order_id = oi.order_id
@@ -54,6 +61,10 @@ export async function GET(request: NextRequest) {
       LEFT JOIN (
         SELECT order_id, SUM(ABS(amount)) as totalFees FROM fee_details WHERE order_id IS NOT NULL AND order_id != '' GROUP BY order_id
       ) fd ON o.order_id = fd.order_id
+      LEFT JOIN (
+        SELECT order_id, SUM(total_amount) as totalInc FROM financial_events
+        WHERE event_type = 'WalmartIncentive' AND order_id IS NOT NULL AND order_id != '' GROUP BY order_id
+      ) inc ON o.order_id = inc.order_id
       LEFT JOIN (
         SELECT order_id, SUM(total_price) as order_total FROM order_items GROUP BY order_id
       ) ot ON o.order_id = ot.order_id
@@ -64,7 +75,8 @@ export async function GET(request: NextRequest) {
 
     const items = rows.map((row) => {
       const buyCost = row.buyCostPerUnit * row.quantity;
-      const profit = row.salePrice - buyCost - row.fees;
+      const incentives = row.incentives || 0;
+      const profit = row.salePrice - buyCost - row.fees + incentives;
       const profitPercent = row.salePrice > 0 ? (profit / row.salePrice) * 100 : 0;
       const roiPercent = buyCost > 0 ? (profit / buyCost) * 100 : 0;
       return {
@@ -77,6 +89,7 @@ export async function GET(request: NextRequest) {
         salePrice: row.salePrice,
         buyCost,
         fees: row.fees,
+        incentives,
         profit,
         profitPercent,
         roiPercent,
@@ -86,6 +99,7 @@ export async function GET(request: NextRequest) {
 
     const totalSales = items.reduce((s, i) => s + i.salePrice, 0);
     const totalFees = items.reduce((s, i) => s + i.fees, 0);
+    const totalIncentives = items.reduce((s, i) => s + i.incentives, 0);
     const totalProfit = items.reduce((s, i) => s + i.profit, 0);
     const totalBuyCost = items.reduce((s, i) => s + i.buyCost, 0);
     const count = items.length;
@@ -99,6 +113,7 @@ export async function GET(request: NextRequest) {
         count,
         totalSales,
         totalFees,
+        totalIncentives,
         totalProfit,
         totalBuyCost,
       },
