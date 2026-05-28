@@ -4,7 +4,7 @@ import { useEffect, useState, useRef, useCallback, use } from 'react';
 import Link from 'next/link';
 import { formatCurrency } from '@/lib/formatters';
 import { generateMSKU } from '@/lib/listing-msku';
-import { ArrowLeft, Search, Plus, Trash2, Package, TrendingUp, DollarSign, Percent, Send, ExternalLink, CheckCircle, AlertCircle, Loader2, Archive, Box as BoxIcon, MapPin, Sparkles, Pencil, X as XIcon, Check, ChevronDown } from 'lucide-react';
+import { ArrowLeft, Search, Plus, Trash2, Package, TrendingUp, DollarSign, Percent, Send, ExternalLink, CheckCircle, AlertCircle, Loader2, Archive, Box as BoxIcon, MapPin, Sparkles, Pencil, X as XIcon, Check, ChevronDown, RefreshCw } from 'lucide-react';
 
 interface Batch {
   id: number;
@@ -1896,7 +1896,8 @@ function BoxingWorkflow({
     const labelName = type === 'fnsku' ? 'FNSKU' : type === 'box' ? 'Box ID' : 'Shipping';
     try {
       const res = await fetch(
-        `/api/list/batches/${batch.id}/labels?type=${type}&shipmentId=${encodeURIComponent(shipmentId)}&action=print`
+        `/api/list/batches/${batch.id}/labels?type=${type}&shipmentId=${encodeURIComponent(shipmentId)}&action=print&_=${Date.now()}`,
+        { cache: 'no-store' }
       );
       const data = await res.json();
       if (data.success) {
@@ -2722,26 +2723,43 @@ interface TransportationOption {
 
 function CarrierBookingPanel({ batchId }: { batchId: number }) {
   const [loading, setLoading] = useState(true);
+  const [regenerating, setRegenerating] = useState(false);
   const [options, setOptions] = useState<TransportationOption[]>([]);
   const [selected, setSelected] = useState<string | null>(null);
   const [confirming, setConfirming] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const autoRegenTried = useRef(false);
 
-  useEffect(() => {
-    let cancelled = false;
-    setLoading(true);
-    fetch(`/api/list/batches/${batchId}/transportation`)
-      .then((r) => r.json())
-      .then((d) => {
-        if (cancelled) return;
-        if (d.error) { setError(d.error); setLoading(false); return; }
-        setOptions(d.options || []);
-        setSelected(d.transportationOptionId || null);
-        setLoading(false);
-      })
-      .catch((err) => { if (!cancelled) { setError(String(err)); setLoading(false); } });
-    return () => { cancelled = true; };
+  const load = useCallback(async (regenerate: boolean) => {
+    if (regenerate) setRegenerating(true); else setLoading(true);
+    setError(null);
+    try {
+      const url = `/api/list/batches/${batchId}/transportation${regenerate ? '?regenerate=1' : ''}`;
+      const r = await fetch(url);
+      const d = await r.json();
+      if (d.error) { setError(d.error); return; }
+      setOptions(d.options || []);
+      setSelected((prev) => prev ?? d.transportationOptionId ?? null);
+    } catch (err) {
+      setError(String(err));
+    } finally {
+      setLoading(false);
+      setRegenerating(false);
+    }
   }, [batchId]);
+
+  useEffect(() => { load(false); }, [load]);
+
+  // Amazon computes the Amazon-Partnered (UPS) rate lazily after placement
+  // confirmation. If the first load came back with options but no Partnered
+  // one, it's likely still warming up — auto-regenerate once to chase it.
+  useEffect(() => {
+    if (loading || regenerating || autoRegenTried.current) return;
+    if (options.length > 0 && !options.some((o) => o.shippingSolution === 'AMAZON_PARTNERED_CARRIER')) {
+      autoRegenTried.current = true;
+      load(true);
+    }
+  }, [loading, regenerating, options, load]);
 
   async function handleConfirm() {
     if (!selected) return;
@@ -2781,18 +2799,40 @@ function CarrierBookingPanel({ batchId }: { batchId: number }) {
 
   return (
     <div className="border border-border-subtle rounded-lg bg-bg-elevated p-4 space-y-3">
-      <div>
-        <div className="text-sm font-semibold text-text-primary mb-0.5">Choose a carrier</div>
-        <div className="text-[11px] text-text-tertiary">
-          <span className="text-positive">Amazon Partnered</span> options come with discounted rates AND Amazon-generated UPS labels —
-          you&apos;ll be able to print everything from inside FlipLedger.
-          &quot;Own carrier&quot; options leave label generation to you (UPS WorldShip, USPS Click-N-Ship, etc.).
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <div className="text-sm font-semibold text-text-primary mb-0.5">Choose a carrier</div>
+          <div className="text-[11px] text-text-tertiary">
+            <span className="text-positive">Amazon Partnered</span> options come with discounted rates AND Amazon-generated UPS labels —
+            you&apos;ll be able to print everything from inside FlipLedger.
+            &quot;Own carrier&quot; options leave label generation to you (UPS WorldShip, USPS Click-N-Ship, etc.).
+          </div>
         </div>
+        <button
+          type="button"
+          onClick={() => load(true)}
+          disabled={loading || regenerating}
+          title="Re-fetch carrier options from Amazon (chases the Partnered UPS rate, which can take a moment to appear)"
+          className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded border border-border-subtle bg-bg-surface text-[11px] text-text-secondary hover:border-border-default disabled:opacity-40 disabled:cursor-not-allowed transition-colors shrink-0"
+        >
+          <RefreshCw size={12} className={regenerating ? 'animate-spin' : ''} />
+          {regenerating ? 'Refreshing…' : 'Refresh'}
+        </button>
       </div>
       {loading && <div className="text-[11px] text-text-tertiary italic">Loading carrier options…</div>}
+      {regenerating && !loading && (
+        <div className="text-[11px] text-text-tertiary italic flex items-center gap-1.5">
+          <Loader2 size={11} className="animate-spin" /> Checking Amazon for Partnered UPS rates… (this can take up to a minute)
+        </div>
+      )}
       {error && <div className="text-[11px] text-negative">{error}</div>}
-      {!loading && !error && sorted.length === 0 && (
-        <div className="text-[11px] text-text-tertiary italic">No carrier options returned by Amazon. Try refreshing.</div>
+      {!loading && !regenerating && !error && sorted.length === 0 && (
+        <div className="text-[11px] text-text-tertiary italic">No carrier options returned by Amazon. Try Refresh.</div>
+      )}
+      {!loading && !regenerating && sorted.length > 0 && !sorted.some((o) => o.shippingSolution === 'AMAZON_PARTNERED_CARRIER') && (
+        <div className="text-[11px] text-amber-400/90 italic">
+          No Amazon Partnered rate yet — it&apos;s computed a moment after placement and may need another Refresh to appear.
+        </div>
       )}
       {!loading && sorted.length > 0 && (
         <div className="grid grid-cols-1 md:grid-cols-2 gap-2 max-h-96 overflow-y-auto">

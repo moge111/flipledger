@@ -164,10 +164,13 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
   if (pageTypeOverride) {
     pageType = pageTypeOverride;
   } else if (type === 'shipping') {
-    // Shipping labels: ALWAYS use Thermal_Unified, then crop+rotate to 4×6
-    // (handled below). Same source for download and print to keep layouts in
-    // sync — the alternative letter sources have wildly different proportions.
-    pageType = 'PackageLabel_Thermal_Unified';
+    // Shipping labels: use PackageLabel_Thermal — Amazon returns the FBA box ID
+    // and the UPS shipping label on SEPARATE upright 4.25×6 thermal pages. This
+    // is exactly what Seller Central's thermal print produces (verified against
+    // Parker's working Amazon print, May 28 2026) and it prints correctly on a
+    // 4×6 Rollo as-is. Do NOT use Thermal_Unified here — that stacks the UPS
+    // label sideways on the bottom half and forces a fragile crop+rotate+stretch.
+    pageType = 'PackageLabel_Thermal';
   } else if (type === 'box') {
     // Box labels: ALWAYS use Thermal_NonPCP — this is the only PageType that
     // reliably returns the FBA carton ID label ALONE (no UPS shipping bundled)
@@ -207,23 +210,10 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
     return NextResponse.json({ error: `Failed to download label PDF: ${err}` }, { status: 500 });
   }
 
-  // For "shipping" labels, Amazon's Thermal_Unified PDF is a 4.25×6" page with
-  // FBA carton ID at the top (~45% of page) and UPS shipping label at the bottom
-  // (~55% of page). Crop off the FBA portion AND re-canvas onto a true 4×6
-  // page (288×432pt) so it prints to a 4×6 Rollo at the right physical size.
-  // No rotation or non-uniform scaling — barcodes stay scannable. Some whitespace
-  // ends up at the bottom of the 4×6 sticker (the UPS portion's natural aspect
-  // ratio is wider than 4×6).
-  if (type === 'shipping') {
-    try {
-      const { cropBottomAndRecanvas } = await import('@/lib/pdf-crop');
-      const FOUR_BY_SIX_W_PT = 288; // 4 in × 72 pt/in
-      const FOUR_BY_SIX_H_PT = 432; // 6 in × 72 pt/in
-      pdfBuffer = await cropBottomAndRecanvas(pdfBuffer, 0.47, FOUR_BY_SIX_W_PT, FOUR_BY_SIX_H_PT);
-    } catch (err) {
-      console.error('[labels] PDF crop+recanvas FAILED; sending UNMODIFIED Unified label:', err);
-    }
-  }
+  // Shipping labels (PackageLabel_Thermal) come back print-ready — upright
+  // 4.25×6 thermal pages, FBA box ID and UPS label on separate pages. Serve
+  // them as-is; no crop/rotate/stretch (that was only needed for the old
+  // Thermal_Unified sideways layout).
 
   // ─── Action: download ─── return the PDF directly to the browser ───────
   if (action === 'download') {
@@ -273,5 +263,9 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
     bytesQueued: printResult.bytesQueued,
     type,
     shipmentId,
+  }, {
+    // A print is a side-effecting action — never let the browser replay a
+    // cached response instead of actually spooling a new job.
+    headers: { 'Cache-Control': 'no-store, no-cache, must-revalidate' },
   });
 }

@@ -81,10 +81,47 @@ async function waitForOp(creds: SPAPICredentials, opId: string, maxMs = 90_000):
   return { success: false, error: 'operation timed out' };
 }
 
+const hasPartnered = (opts: { shippingSolution?: string }[]) =>
+  opts.some((o) => String(o.shippingSolution || '').includes('PARTNERED'));
+
+// Fire one generateTransportationOptions call (minimal body) and wait for it.
+// The minimal body is deliberate: adding readyToShipWindow.end, pallets, or
+// freightInformation makes Amazon suppress the Amazon-Partnered (UPS) option.
+async function generateOnce(creds: SPAPICredentials, inboundPlanId: string, placementOptionId: string): Promise<void> {
+  const plan = await getInboundPlan(creds, inboundPlanId);
+  const shipments = (plan as { shipments?: Array<{ shipmentId: string }> })?.shipments || [];
+  if (shipments.length === 0) throw new Error('No shipments on plan yet — placement may not be confirmed');
+
+  const db = getDb();
+  const settingsRows = db.prepare('SELECT key, value FROM settings').all() as { key: string; value: string }[];
+  db.close();
+  const settings: Record<string, string> = {};
+  for (const r of settingsRows) settings[r.key] = r.value;
+
+  const contactInformation = {
+    name: settings.listing_ship_from_name || 'Your Business',
+    phoneNumber: settings.listing_ship_from_phone || '0000000000',
+    email: settings.listing_ship_from_email || 'you@example.com',
+  };
+  // Ready to ship tomorrow (gives buffer to actually pack)
+  const readyToShipDate = new Date(Date.now() + 86400000).toISOString();
+
+  const gen = await generateTransportationOptions(creds, inboundPlanId, {
+    placementOptionId,
+    shipmentConfigurations: shipments.map((s) => ({ shipmentId: s.shipmentId, contactInformation, readyToShipDate })),
+  });
+  const op = await waitForOp(creds, gen.operationId);
+  if (!op.success) throw new Error(`Generation failed: ${op.error}`);
+}
+
+// Max generate attempts when chasing the lazily-computed Partnered rate.
+const MAX_GEN_TRIES = 4;
+
 export async function GET(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
   const batchId = parseInt(id);
   if (!batchId) return NextResponse.json({ error: 'Invalid batch id' }, { status: 400 });
+  const forceRegenerate = request.nextUrl.searchParams.get('regenerate') === '1';
 
   const batch = loadBatch(batchId);
   if (!batch) return NextResponse.json({ error: 'Batch not found' }, { status: 404 });
@@ -96,49 +133,22 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
   const creds = getCredentials();
 
   try {
-    // First read existing options
     let options = await listTransportationOptions(creds, batch.inbound_plan_id, batch.placement_option_id);
 
-    // If empty and generation hasn't been kicked off, generate now
-    if (options.length === 0) {
-      // Resolve shipmentIds: read plan, grab shipments
-      const plan = await getInboundPlan(creds, batch.inbound_plan_id);
-      const shipments = (plan as { shipments?: Array<{ shipmentId: string }> })?.shipments || [];
-      if (shipments.length === 0) {
-        return NextResponse.json({ error: 'No shipments on plan yet — placement may not be confirmed' }, { status: 400 });
+    // Generate when there's nothing yet, or when the caller forces a refresh —
+    // but never after a carrier has been confirmed (that would invalidate it).
+    //
+    // Amazon computes the Amazon-Partnered (UPS) rate lazily after placement
+    // confirmation, so the first generation(s) can come back own-carrier only.
+    // Retry the generate until a Partnered option appears or we hit the cap,
+    // so the user isn't stranded on "use your own carrier" by warm-up timing.
+    const alreadyConfirmed = batch.transportation_status === 'CONFIRMED';
+    if (!alreadyConfirmed && (options.length === 0 || forceRegenerate)) {
+      for (let i = 0; i < MAX_GEN_TRIES; i++) {
+        await generateOnce(creds, batch.inbound_plan_id, batch.placement_option_id);
+        options = await listTransportationOptions(creds, batch.inbound_plan_id, batch.placement_option_id);
+        if (hasPartnered(options)) break;
       }
-
-      // Default contact info from settings (Your Business ship-from)
-      const db = getDb();
-      const settingsRows = db.prepare('SELECT key, value FROM settings').all() as { key: string; value: string }[];
-      db.close();
-      const settings: Record<string, string> = {};
-      for (const r of settingsRows) settings[r.key] = r.value;
-
-      const contactInformation = {
-        name: settings.listing_ship_from_name || 'Your Business',
-        phoneNumber: settings.listing_ship_from_phone || '0000000000',
-        email: settings.listing_ship_from_email || 'you@example.com',
-      };
-
-      // Ready to ship tomorrow at noon UTC (gives buffer to actually pack)
-      const readyToShipDate = new Date(Date.now() + 86400000).toISOString();
-
-      const genResult = await generateTransportationOptions(creds, batch.inbound_plan_id, {
-        placementOptionId: batch.placement_option_id,
-        shipmentConfigurations: shipments.map((s) => ({
-          shipmentId: s.shipmentId,
-          contactInformation,
-          readyToShipDate,
-        })),
-      });
-      const opResult = await waitForOp(creds, genResult.operationId);
-      if (!opResult.success) {
-        return NextResponse.json({ error: `Generation failed: ${opResult.error}` }, { status: 500 });
-      }
-
-      // Re-list now that generation completed
-      options = await listTransportationOptions(creds, batch.inbound_plan_id, batch.placement_option_id);
     }
 
     return NextResponse.json({
