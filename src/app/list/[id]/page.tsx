@@ -777,6 +777,16 @@ export default function BatchDetailPage({ params }: { params: Promise<{ id: stri
       });
       const data = await res.json();
       if (data.success) {
+        // Kick off the Amazon listing creation for this item NOW, in the
+        // background, so its FNSKU starts propagating while you keep scanning.
+        // Fire-and-forget (don't block the next scan); refetch when it lands so
+        // the per-item status chip updates. Best-effort — failure just shows a
+        // FAILED chip and the Send flow will retry.
+        if (data.id) {
+          fetch(`/api/list/batches/${id}/items/${data.id}/create-listing`, { method: 'POST' })
+            .then(() => fetchBatch())
+            .catch(() => {});
+        }
         // Clear form for next scan
         setQuery('');
         setScanned(null);

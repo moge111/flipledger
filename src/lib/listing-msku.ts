@@ -112,11 +112,16 @@ export function slugifyProductName(name: string | null | undefined, maxWords: nu
   return camel.slice(0, maxLen);
 }
 
-/** Floor a dollar amount to an integer, returning '0' for zero/invalid. */
+/**
+ * Format a dollar amount for the MSKU, preserving cents.
+ *   9.97 → '9.97', 42.97 → '42.97', 55 → '55', 10.5 → '10.50', 0/invalid → '0'.
+ * Whole dollars stay clean (no trailing .00); fractional amounts keep 2 decimals.
+ */
 export function formatBuyCost(buyPriceDollars: number | string | null | undefined): string {
   const n = typeof buyPriceDollars === 'string' ? parseFloat(buyPriceDollars) : Number(buyPriceDollars ?? 0);
   if (!Number.isFinite(n) || n <= 0) return '0';
-  return String(Math.floor(n));
+  const rounded = Math.round(n * 100) / 100;
+  return Number.isInteger(rounded) ? String(rounded) : rounded.toFixed(2);
 }
 
 /**

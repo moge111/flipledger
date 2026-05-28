@@ -462,6 +462,74 @@ export async function POST(
         );
       }
 
+      // 9b. VERIFY the plan-creation operation actually succeeds — and auto-retry
+      //     on FBA_INB_0182.
+      //
+      //     createInboundPlan returns a planId + operationId SYNCHRONOUSLY (Amazon
+      //     accepted the request), but the plan is built by an ASYNC operation that
+      //     can then fail with FBA_INB_0182 "Prep classification for this SKU was
+      //     missing" — when prep classification hasn't yet propagated from the
+      //     catalog service to the Inbound Plans service for brand-new MSKUs. That
+      //     async failure is NOT caught by the createInboundPlan retry loop above
+      //     (which only sees synchronous throws), so historically the batch just
+      //     failed. Here we poll the operation; on a prep failure we re-affirm prep,
+      //     wait longer, and create a FRESH plan — looping until it succeeds.
+      const pollPlanOp = async (operationId: string): Promise<{ status: string; problems: any[] }> => {
+        const POLL_MS = 5000;
+        const MAX = 72; // ~6 min
+        for (let a = 0; a < MAX; a++) {
+          await new Promise((r) => setTimeout(r, POLL_MS));
+          const op = await getInboundOperation(creds, operationId);
+          if (op.operationStatus === 'SUCCESS') return { status: 'SUCCESS', problems: op.operationProblems || [] };
+          if (op.operationStatus === 'FAILED') return { status: 'FAILED', problems: op.operationProblems || [] };
+        }
+        return { status: 'TIMEOUT', problems: [] };
+      };
+
+      const PLAN_OP_ROUNDS = 5;
+      for (let round = 0; round < PLAN_OP_ROUNDS; round++) {
+        const opResult = await pollPlanOp(planResult.operationId);
+        // SUCCESS → done. TIMEOUT → leave IN_PROGRESS and let /status finish polling.
+        if (opResult.status !== 'FAILED') break;
+
+        const problemStr = JSON.stringify(opResult.problems || []);
+        const isPrepError = problemStr.includes('FBA_INB_0182') || problemStr.includes('Prep classification');
+        if (!isPrepError) {
+          return failBatch(batchId, `Inbound plan operation failed: ${problemStr}`);
+        }
+        if (round === PLAN_OP_ROUNDS - 1) {
+          return failBatch(batchId, `Inbound plan operation failed after ${PLAN_OP_ROUNDS} prep-retry rounds — prep classification never propagated to the Inbound service. ${problemStr}`);
+        }
+
+        // Re-affirm prep classification, wait for it to propagate (escalating),
+        // then create a FRESH inbound plan and re-verify next loop.
+        console.log(`[send] Plan operation failed on prep (round ${round + 1}/${PLAN_OP_ROUNDS}) — re-affirming prep + retrying with a fresh plan…`);
+        try {
+          const pr = await setPrepDetails(creds, items.map((i) => ({ msku: i.sku, prepCategory: 'NONE', prepTypes: ['ITEM_NO_PREP'] })));
+          for (let a = 0; a < 20; a++) {
+            await new Promise((r) => setTimeout(r, 3000));
+            const op = await getInboundOperation(creds, pr.operationId);
+            if (op.operationStatus === 'SUCCESS' || op.operationStatus === 'FAILED') break;
+          }
+        } catch (e) {
+          console.warn('[send] re-affirm prep failed (non-fatal):', e);
+        }
+        const waitMs = 120_000 + round * 60_000; // 2min, 3min, 4min…
+        console.log(`[send] Waiting ${waitMs / 1000}s for prep to propagate before re-creating the plan…`);
+        await new Promise((r) => setTimeout(r, waitMs));
+
+        try {
+          planResult = await createInboundPlan(creds, {
+            name: batch.name,
+            sourceAddress,
+            destinationMarketplaces: [creds.marketplaceId],
+            items: itemsForPlan,
+          });
+        } catch (err) {
+          return failBatch(batchId, `Inbound plan re-creation failed: ${err}`);
+        }
+      }
+
       // 10. Persist the plan ID and operation ID on the batch
       const db3 = getDb();
       try {

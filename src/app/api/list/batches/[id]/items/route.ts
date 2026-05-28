@@ -27,7 +27,6 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
   const body = await request.json();
   const {
     asin,
-    sku,
     msku,
     productName,
     imageUrl,
@@ -40,6 +39,9 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     estimatedFeeCents,   // already in cents (optional)
     estimatedShipCents,  // already in cents (optional) — MFN seller shipping estimate
   } = body;
+  // `sku` is mutable: the duplicate-SKU safeguard below may append a
+  // differentiator before any insert. All downstream writes use this value.
+  let sku: string = (body.sku || '').toString().trim();
 
   if (!asin) return NextResponse.json({ error: 'asin is required' }, { status: 400 });
   if (!sku) return NextResponse.json({ error: 'sku is required' }, { status: 400 });
@@ -57,6 +59,29 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     if (!batch) return NextResponse.json({ error: 'Batch not found' }, { status: 404 });
     if (batch.status !== 'draft') {
       return NextResponse.json({ error: `Cannot add items to batch in status: ${batch.status}` }, { status: 400 });
+    }
+
+    // ── Duplicate-SKU safeguard ──────────────────────────────────────────
+    // Two DIFFERENT ASINs must never share an MSKU — they'd collide onto a
+    // single Amazon listing (and, with auto-create-on-add, the 2nd add would
+    // silently overwrite the 1st's listing). The auto-generated SKU
+    // (supplier-slug-cost) CAN collide for same-named, same-priced product-line
+    // variants (e.g. Royale High Nature vs Ice Fairy, both $9.99). If the
+    // proposed SKU is already used by a DIFFERENT ASIN anywhere, append
+    // -2/-3/… until unique. Reusing a SKU for the SAME ASIN is left alone —
+    // that's an intentional restock (e.g. the Minecraft cube).
+    const skuTakenByOtherAsin = (candidate: string): boolean => !!db.prepare(`
+      SELECT 1 FROM (
+        SELECT asin, sku FROM listing_batch_items WHERE sku = ?
+        UNION SELECT asin, sku FROM inventory_ledger WHERE sku = ?
+        UNION SELECT asin, sku FROM products WHERE sku = ?
+      ) WHERE asin IS NOT NULL AND asin != ? LIMIT 1
+    `).get(candidate, candidate, candidate, asin);
+    if (skuTakenByOtherAsin(sku)) {
+      const base = sku;
+      let n = 2;
+      while (skuTakenByOtherAsin(`${base}-${n}`)) n++;
+      sku = `${base}-${n}`;
     }
 
     const now = new Date().toISOString();
@@ -140,7 +165,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     // 6. Auto-recalculate FIFO for this SKU (matches Products page behavior)
     const fifo = recalculateFIFO({ sku });
 
-    return NextResponse.json({ id: itemId, success: true, fifo });
+    return NextResponse.json({ id: itemId, success: true, fifo, sku });
   } catch (err) {
     db.close();
     return NextResponse.json({ error: String(err) }, { status: 500 });
