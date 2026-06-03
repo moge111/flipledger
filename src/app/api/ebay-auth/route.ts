@@ -2,8 +2,6 @@ import { NextRequest, NextResponse } from 'next/server';
 import Database from 'better-sqlite3';
 import path from 'path';
 
-const EBAY_RUNAME = 'YOUR_EBAY_RUNAME';
-
 /**
  * GET /api/ebay-auth — Step 1: Redirects to eBay OAuth consent page
  * GET /api/ebay-auth?code=xxx — Step 2: Handles callback, exchanges code for refresh token
@@ -18,10 +16,11 @@ export async function GET(request: NextRequest) {
 
   const clientId = (db.prepare("SELECT value FROM settings WHERE key = 'ebay_client_id'").get() as any)?.value;
   const clientSecret = (db.prepare("SELECT value FROM settings WHERE key = 'ebay_client_secret'").get() as any)?.value;
+  const runame = (db.prepare("SELECT value FROM settings WHERE key = 'ebay_runame'").get() as any)?.value;
 
-  if (!clientId || !clientSecret) {
+  if (!clientId || !clientSecret || !runame) {
     db.close();
-    return NextResponse.json({ error: 'Save your eBay Client ID and Client Secret in Settings first.' }, { status: 400 });
+    return NextResponse.json({ error: 'Save your eBay Client ID, Client Secret, and RuName in Settings first.' }, { status: 400 });
   }
 
   // Step 2: Exchange authorization code for tokens
@@ -34,7 +33,7 @@ export async function GET(request: NextRequest) {
         'Authorization': `Basic ${basicAuth}`,
         'Content-Type': 'application/x-www-form-urlencoded',
       },
-      body: `grant_type=authorization_code&code=${encodeURIComponent(code)}&redirect_uri=${encodeURIComponent(EBAY_RUNAME)}`,
+      body: `grant_type=authorization_code&code=${encodeURIComponent(code)}&redirect_uri=${encodeURIComponent(runame)}`,
     });
 
     const data = await response.json();
@@ -70,7 +69,7 @@ export async function GET(request: NextRequest) {
     'https://api.ebay.com/oauth/api_scope/sell.account',
   ].join(' '));
 
-  const ebayAuthUrl = `https://auth.ebay.com/oauth2/authorize?client_id=${encodeURIComponent(clientId)}&redirect_uri=${encodeURIComponent(EBAY_RUNAME)}&response_type=code&scope=${scopes}`;
+  const ebayAuthUrl = `https://auth.ebay.com/oauth2/authorize?client_id=${encodeURIComponent(clientId)}&redirect_uri=${encodeURIComponent(runame)}&response_type=code&scope=${scopes}`;
 
   return NextResponse.redirect(ebayAuthUrl);
 }
