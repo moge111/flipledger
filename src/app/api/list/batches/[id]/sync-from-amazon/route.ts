@@ -49,11 +49,13 @@ export async function POST(_req: NextRequest, { params }: { params: Promise<{ id
   const db = getDb();
   let creds: SPAPICredentials | null;
   let inboundPlanId: string;
+  let localPackingFailed = false;
   try {
     const batch = db.prepare(`
-      SELECT id, status, channel, inbound_plan_id as inboundPlanId
+      SELECT id, status, channel, inbound_plan_id as inboundPlanId,
+             packing_status as packingStatus, packing_error as packingError
       FROM listing_batches WHERE id = ?
-    `).get(batchId) as { id: number; status: string; channel: string; inboundPlanId: string | null } | undefined;
+    `).get(batchId) as { id: number; status: string; channel: string; inboundPlanId: string | null; packingStatus: string | null; packingError: string | null } | undefined;
     if (!batch) {
       db.close();
       return NextResponse.json({ error: 'Batch not found' }, { status: 404 });
@@ -68,6 +70,7 @@ export async function POST(_req: NextRequest, { params }: { params: Promise<{ id
     }
     creds = getAmazonCredentials(db);
     inboundPlanId = batch.inboundPlanId;
+    localPackingFailed = batch.packingStatus === 'FAILED' || !!batch.packingError;
   } catch (e) {
     db.close();
     throw e;
@@ -115,6 +118,7 @@ export async function POST(_req: NextRequest, { params }: { params: Promise<{ id
   let newStatus: string | null = null;
   let newPackingStatus: string | null = null;
   let newPlacementStatus: string | null = null;
+  let warning: string | null = null;
 
   if (shipments.length > 0) {
     newStatus = 'shipping';
@@ -124,9 +128,18 @@ export async function POST(_req: NextRequest, { params }: { params: Promise<{ id
     newStatus = 'shipping';
     newPackingStatus = 'SUCCESS';
     newPlacementStatus = 'SUCCESS';
-  } else if (confirmedPacking) {
+  } else if (confirmedPacking && !localPackingFailed) {
     newStatus = 'placement';
     newPackingStatus = 'SUCCESS';
+  } else if (confirmedPacking && localPackingFailed) {
+    // The packing OPTION is accepted on Amazon, but FlipLedger recorded a
+    // box-level setPackingInformation failure and there's no placement or
+    // shipment yet. Confirming the option without box details is the LTL-lock
+    // trap (June 8) — don't paper over it with a SUCCESS.
+    warning =
+      'Amazon shows the packing option accepted, but FlipLedger recorded a box-detail (setPackingInformation) failure ' +
+      'and Amazon has no placement/shipments yet. The plan may be stuck in skip-packing/LTL mode — verify box details in ' +
+      'Seller Central (or Cancel & Edit and re-send) before treating packing as done.';
   }
 
   if (newStatus) {
@@ -154,9 +167,10 @@ export async function POST(_req: NextRequest, { params }: { params: Promise<{ id
     newStatus,
     newPackingStatus,
     newPlacementStatus,
+    warning,
     message: newStatus
       ? `Batch synced — now in '${newStatus}' status with ${shipments.length} shipment(s).`
-      : 'Plan is still pre-packing on Amazon\'s side; nothing to update.',
+      : warning || 'Plan is still pre-packing on Amazon\'s side; nothing to update.',
     rawPlan: plan,
     rawShipments: shipments,
   });

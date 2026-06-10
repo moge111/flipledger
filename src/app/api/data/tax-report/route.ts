@@ -42,6 +42,21 @@ export async function GET(request: NextRequest) {
       WHERE o.purchase_date >= ? AND o.purchase_date < ? ${mktFilter}
     `).get(startDate, endDate, ...mktParams) as any;
 
+    // Walmart refunds only count once Walmart actually deducted the seller
+    // (recon WalmartRefundEvent / Product Price). ~30% of Walmart returns are
+    // ghosts Walmart never charges — deducting them understates income.
+    // Same gate the P&L and Dashboard use.
+    const WMT_SETTLED = `
+      AND (
+        COALESCE(refunds.marketplace, 'amazon') != 'walmart'
+        OR EXISTS (
+          SELECT 1 FROM financial_events fe
+          WHERE fe.event_type = 'WalmartRefundEvent'
+            AND fe.order_id = refunds.order_id
+            AND json_extract(fe.raw_data, '$."Amount Type"') = 'Product Price'
+        )
+      )`;
+
     // Returns and allowances (refunds)
     const refundTotals = db.prepare(`
       SELECT
@@ -49,7 +64,7 @@ export async function GET(request: NextRequest) {
         COALESCE(SUM(fee_clawback), 0) as totalClawbacks,
         COUNT(*) as refundCount
       FROM refunds
-      WHERE refund_date >= ? AND refund_date < ?
+      WHERE refund_date >= ? AND refund_date < ? ${WMT_SETTLED}
     `).get(startDate, endDate) as any;
 
     // Other income (reimbursements + other_income table)
@@ -91,13 +106,6 @@ export async function GET(request: NextRequest) {
       WHERE o.purchase_date >= ? AND o.purchase_date < ? ${mktFilter}
     `).get(startDate, endDate, ...mktParams) as any;
 
-    // Purchases during the year (new inventory bought)
-    const purchases = db.prepare(`
-      SELECT COALESCE(SUM(buy_price * quantity), 0) as total
-      FROM inventory_ledger
-      WHERE date_purchased >= ? AND date_purchased < ?
-    `).get(startDate, endDate) as any;
-
     // Inbound shipping to FBA
     const inboundShipping = db.prepare(`
       SELECT COALESCE(SUM(cost), 0) as total
@@ -105,20 +113,12 @@ export async function GET(request: NextRequest) {
       WHERE date_shipped >= ? AND date_shipped < ?
     `).get(startDate, endDate) as any;
 
-    // Beginning inventory (items purchased before the year that still had quantity)
-    // This is an approximation — sum of all inventory bought before year start
-    const beginningInventory = db.prepare(`
-      SELECT COALESCE(SUM(buy_price * quantity), 0) as total
-      FROM inventory_ledger
-      WHERE date_purchased < ?
-    `).get(startDate) as any;
-
-    // Ending inventory (current remaining for current year, or all purchased up to year end)
-    const endingInventory = db.prepare(`
-      SELECT COALESCE(SUM(buy_price * quantity_remaining), 0) as total
-      FROM inventory_ledger
-      WHERE quantity_remaining > 0
-    `).get() as any;
+    // Beginning/ending inventory and purchases are intentionally NOT derived
+    // from inventory_ledger: lots include FIFO "headroom" quantities that were
+    // never real purchases (the documented +100 bumps), and quantity_remaining
+    // reflects today's state, not the year boundary. Summing them produced
+    // $19M phantom inventory figures that contradicted the FIFO COGS on the
+    // same page. FIFO per-sale COGS (line 8) is the authoritative number.
 
     // ═══ AMAZON FEES ═════════════════════════════════════════════════
 
@@ -127,7 +127,7 @@ export async function GET(request: NextRequest) {
       SELECT
         COALESCE(fd.fee_category, 'Other Fees') as category,
         fd.fee_type as feeType,
-        COALESCE(SUM(ABS(fd.amount)), 0) as total,
+        COALESCE(-SUM(fd.amount), 0) as total,
         COUNT(*) as count
       FROM fee_details fd
       JOIN orders o ON fd.order_id = o.order_id
@@ -141,7 +141,7 @@ export async function GET(request: NextRequest) {
       SELECT
         COALESCE(fee_category, 'Other Fees') as category,
         fee_type as feeType,
-        COALESCE(SUM(ABS(amount)), 0) as total,
+        COALESCE(-SUM(amount), 0) as total,
         COUNT(*) as count
       FROM fee_details
       WHERE (order_id IS NULL OR order_id = '')
@@ -217,7 +217,7 @@ export async function GET(request: NextRequest) {
         COALESCE(SUM(fee_clawback), 0) as feeClawbacks,
         COALESCE(SUM(refund_amount - fee_clawback), 0) as netCost
       FROM refunds
-      WHERE refund_date >= ? AND refund_date < ?
+      WHERE refund_date >= ? AND refund_date < ? ${WMT_SETTLED}
       GROUP BY strftime('%Y-%m', refund_date)
       ORDER BY month
     `).all(startDate, endDate) as any[];
@@ -243,7 +243,7 @@ export async function GET(request: NextRequest) {
     const feesByMarketplace = db.prepare(`
       SELECT
         o.marketplace,
-        COALESCE(SUM(ABS(fd.amount)), 0) as totalFees
+        COALESCE(-SUM(fd.amount), 0) as totalFees
       FROM fee_details fd
       JOIN orders o ON fd.order_id = o.order_id
       WHERE o.purchase_date >= ? AND o.purchase_date < ?
@@ -262,7 +262,7 @@ export async function GET(request: NextRequest) {
         COALESCE(SUM(fee_clawback), 0) as totalClawbacks,
         COUNT(*) as refundCount
       FROM refunds
-      WHERE refund_date >= ? AND refund_date < ?
+      WHERE refund_date >= ? AND refund_date < ? ${WMT_SETTLED}
       GROUP BY marketplace
     `).all(startDate, endDate) as any[];
 
@@ -297,12 +297,6 @@ export async function GET(request: NextRequest) {
       units: m.unitsSold,
     }));
 
-    // ═══ 1099-K RECONCILIATION ═════════════════════════════════════
-    // The 1099-K Box 1a = Product Sales + Shipping + Gift Wrap - Promos + Sales Tax
-    // This uses transaction date to match the 1099-K
-    const k1099_grossReceipts = income.productSales + income.shippingIncome + promos.total + totalTaxCollected;
-    // Note: promos are already negative in the raw data, so adding them subtracts
-
     // ═══ SCHEDULE C CALCULATION ══════════════════════════════════════
     // Schedule C Line 1 = gross receipts WITHOUT sales tax (tax is pass-through)
     const line1_grossReceipts = income.grossReceipts;
@@ -310,7 +304,10 @@ export async function GET(request: NextRequest) {
     const line3_netReceipts = line1_grossReceipts - line2_returnsAllowances;
     const line4_cogs = cogsSold.total;
     const line5_grossProfit = line3_netReceipts - line4_cogs;
-    const line6_otherIncome = reimbursements.total + otherIncomeData.total + refundTotals.totalClawbacks;
+    // Fee clawbacks are NOT added here: they're positive rows in fee_details
+    // and already net against the fee deduction now that fees are signed
+    // (-SUM). Adding them again double-counted the credit as income.
+    const line6_otherIncome = reimbursements.total + otherIncomeData.total;
     const line7_grossIncome = line5_grossProfit + line6_otherIncome;
 
     // Deductions (Lines 8-27 on Schedule C)
@@ -343,11 +340,9 @@ export async function GET(request: NextRequest) {
       },
       incomeByMonth,
       cogs: {
-        beginningInventory: beginningInventory.total,
-        purchases: purchases.total,
         inboundShipping: inboundShipping.total,
         costOfGoodsSold: cogsSold.total,
-        endingInventory: endingInventory.total,
+        note: 'COGS is computed per-sale via FIFO lot consumption. Beginning/ending inventory balances are not tracked at year boundaries (ledger lots include non-purchase FIFO headroom), so Schedule A lines 1/2/7 are not derivable from this data.',
       },
       perMarketplace,
       amazonFees: allFees,

@@ -15,8 +15,8 @@ export async function GET(request: NextRequest) {
 
   const db = getDb();
   const marketplace = searchParams.get('marketplace');
-  const MF = marketplace ? `AND o.marketplace = '${marketplace}'` : '';
-  const MF_R = marketplace ? `AND marketplace = '${marketplace}'` : '';
+  // refunds.marketplace can be NULL for old Amazon rows — treat NULL as amazon.
+  const MF_R = marketplace ? `AND COALESCE(r.marketplace, 'amazon') = '${marketplace}'` : '';
 
   const cutoff = new Date(Date.now() - days * 86400000).toISOString();
 
@@ -25,13 +25,17 @@ export async function GET(request: NextRequest) {
     // can classify the cash impact of each refund. A refund of a still-deferred
     // shipment cancels held funds with no cash impact; a refund of an already-
     // released shipment is a real cash deduction.
+    //
+    // GROUP BY r.id: both the order_items name-resolution join and the ftv2
+    // join can match multiple rows per refund — without the GROUP BY the
+    // totals double-count fanned-out rows.
     const rows = db.prepare(`
       SELECT
         r.refund_date as refundDate,
         r.order_id as orderId,
         r.asin,
         r.sku,
-        COALESCE(p.name, p2.name, oi.asin, r.asin) as productName,
+        COALESCE(p.name, MAX(p2.name), MAX(oi.asin), r.asin) as productName,
         r.quantity,
         r.refund_amount as refundAmount,
         r.reason,
@@ -46,11 +50,17 @@ export async function GET(request: NextRequest) {
       LEFT JOIN order_items oi ON r.order_id = oi.order_id
       LEFT JOIN products p2 ON oi.asin = p2.asin
       LEFT JOIN (
-        SELECT order_id, transaction_status, maturity_date, posted_date
+        SELECT order_id,
+          CASE WHEN SUM(CASE WHEN transaction_status = 'DEFERRED' THEN 1 ELSE 0 END) > 0
+               THEN 'DEFERRED' ELSE MAX(transaction_status) END as transaction_status,
+          MAX(maturity_date) as maturity_date,
+          MIN(posted_date) as posted_date
         FROM finances_transactions_v2
         WHERE transaction_type = 'Shipment' AND order_id IS NOT NULL
+        GROUP BY order_id
       ) ftv2 ON ftv2.order_id = r.order_id
-      WHERE r.refund_date >= ?
+      WHERE r.refund_date >= ? ${MF_R}
+      GROUP BY r.id
       ORDER BY r.refund_date DESC
     `).all(cutoff) as any[];
 

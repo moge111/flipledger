@@ -203,11 +203,14 @@ function parseSettlementReport(content: string): number {
       // Get posted date from settlement report
       const postedDate = postedDateColIdx >= 0 && cols[postedDateColIdx] ? cols[postedDateColIdx] : new Date().toISOString();
 
-      // Shipping label costs
+      // Shipping label costs — one label = one cost. Apply to a single line
+      // item, not every 0-cost item of the order (multi-item orders would
+      // multiply the label cost).
       if (transactionType === 'other-transaction' && amountDescription === 'Shipping label purchase' && amount < 0) {
         const costCents = Math.abs(Math.round(amount * 100));
         const result = db.prepare(`
-          UPDATE order_items SET shipping_cost = ? WHERE order_id = ? AND shipping_cost = 0
+          UPDATE order_items SET shipping_cost = ?
+          WHERE id = (SELECT id FROM order_items WHERE order_id = ? AND shipping_cost = 0 ORDER BY id LIMIT 1)
         `).run(costCents, orderId);
         if (result.changes > 0) updated++;
       }
@@ -295,11 +298,11 @@ function parseSettlementReport(content: string): number {
 
           if (!canonical) {
             const reimbId = `SETTLEMENT-${amountDescription.replace(/\s+/g, '-')}-${feeDate}-${feeCents}`;
-            db.prepare(`
+            const reimbResult = db.prepare(`
               INSERT OR IGNORE INTO reimbursements (reimbursement_id, reimbursement_date, asin, sku, reason, amount, quantity, status, marketplace, created_at)
               VALUES (?, ?, NULL, NULL, ?, ?, 1, 'Approved', 'amazon', datetime('now'))
             `).run(reimbId, feeDate, amountDescription, feeCents);
-            if (db.prepare('SELECT changes()').get() as any > 0) updated++;
+            if (reimbResult.changes > 0) updated++;
           }
           continue;
         }
@@ -330,19 +333,33 @@ function parseSettlementReport(content: string): number {
       }
 
       // Capture fees for orders missing fee_details (Commission, FBA fees, etc.)
+      // Settlement fees are REAL data — stored with sentinel -1 (not 0, the
+      // estimator's sentinel, which overrideEstimatedFees() deletes the moment
+      // any other real fee exists for the order). Only rows from the
+      // Financial Events API count as "already have it": a pre-existing
+      // ESTIMATE must not block the real settlement value.
       if (transactionType === 'Order' && amountType === 'ItemFees' && amount < 0 && orderId) {
         const existing = db.prepare(
-          'SELECT 1 FROM fee_details WHERE order_id = ? AND fee_type = ? LIMIT 1'
+          'SELECT 1 FROM fee_details WHERE order_id = ? AND fee_type = ? AND financial_event_id != 0 LIMIT 1'
         ).get(orderId, amountDescription);
         if (!existing) {
           const feeCents = Math.round(amount * 100);
           const feeCategory = amountDescription === 'Commission' ? 'Selling Fees' :
             amountDescription.includes('FBA') ? 'FBA Transaction Fees' :
             amountDescription.includes('Variable') ? 'Selling Fees' : 'Other Fees';
+          // The settlement value replaces any estimator row of the same type.
+          db.prepare(
+            'DELETE FROM fee_details WHERE order_id = ? AND fee_type = ? AND financial_event_id = 0'
+          ).run(orderId, amountDescription);
+          let feeDate = postedDate || new Date().toISOString();
+          if (/^\d{2}\.\d{2}\.\d{4}/.test(feeDate)) {
+            const [dd, mm, yyyy] = feeDate.substring(0, 10).split('.');
+            feeDate = `${yyyy}-${mm}-${dd}`;
+          }
           db.prepare(`
             INSERT OR IGNORE INTO fee_details (financial_event_id, order_id, asin, fee_type, fee_category, amount, posted_date)
-            VALUES (0, ?, NULL, ?, ?, ?, datetime('now'))
-          `).run(orderId, amountDescription, feeCategory, feeCents);
+            VALUES (-1, ?, NULL, ?, ?, ?, ?)
+          `).run(orderId, amountDescription, feeCategory, feeCents, feeDate);
           updated++;
         }
       }

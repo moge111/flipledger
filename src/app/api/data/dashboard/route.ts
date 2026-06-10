@@ -350,8 +350,9 @@ export async function GET(request: NextRequest) {
       JOIN order_items oi ON oi.order_id = o.order_id
       LEFT JOIN ${FE_POSTED} fe ON fe.order_id = o.order_id
       LEFT JOIN (
-        SELECT order_id, maturity_date FROM finances_transactions_v2
+        SELECT order_id, MAX(maturity_date) as maturity_date FROM finances_transactions_v2
         WHERE transaction_type = 'Shipment' AND order_id IS NOT NULL
+        GROUP BY order_id
       ) ftv2 ON ftv2.order_id = o.order_id
       WHERE o.status IN ('Shipped', 'PartiallyShipped')
         AND fe.order_id IS NULL

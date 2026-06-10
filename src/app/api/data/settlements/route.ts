@@ -100,11 +100,14 @@ export async function GET(request: NextRequest) {
       GROUP BY date(fd.posted_date)
     `).all(minStart, maxEnd) as Array<{ d: string; amt: number }>;
 
+    // fee_details has no marketplace column — gate via the parent financial
+    // event so Walmart WFS service fees don't contaminate Amazon settlements.
     const serviceFeesByDay = db.prepare(`
-      SELECT date(posted_date) AS d, COALESCE(SUM(amount),0) AS amt
-      FROM fee_details
-      WHERE (order_id IS NULL OR order_id='') AND date(posted_date) >= ? AND date(posted_date) <= ?
-      GROUP BY date(posted_date)
+      SELECT date(fd.posted_date) AS d, COALESCE(SUM(fd.amount),0) AS amt
+      FROM fee_details fd
+      JOIN financial_events fe ON fe.id = fd.financial_event_id AND fe.marketplace = 'amazon'
+      WHERE (fd.order_id IS NULL OR fd.order_id='') AND date(fd.posted_date) >= ? AND date(fd.posted_date) <= ?
+      GROUP BY date(fd.posted_date)
     `).all(minStart, maxEnd) as Array<{ d: string; amt: number }>;
 
     const refundsByDay = db.prepare(`

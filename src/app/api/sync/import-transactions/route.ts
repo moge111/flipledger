@@ -186,30 +186,49 @@ export async function POST(request: NextRequest) {
       skipped: 0,
     };
 
+    // The CSV is the definitive source ONLY within its own date coverage.
+    // Deletions must be bounded by the CSV's max date: an unbounded delete
+    // wipes ServiceFeeEvent data NEWER than the CSV (e.g. May/June pending
+    // fees when the CSV ends Apr 10) and the import replaces it with nothing.
+    let csvMaxDate = '';
+    for (const row of rows) {
+      const d = parseDateToISO(row.dateTime);
+      if (d && d > csvMaxDate) csvMaxDate = d;
+    }
+    if (!csvMaxDate) {
+      db.close();
+      return NextResponse.json({ error: 'Could not determine CSV date coverage — no parsable dates found' }, { status: 400 });
+    }
+
     const importAll = db.transaction(() => {
       // === 1. DELETE old service fee data (wrong timestamps from Financial Events API) ===
-      // The transaction report is the definitive source for ALL non-order fees.
-      // Delete fee_details FIRST (before their parent events), then events.
-
-      // Delete ALL non-order fee_details (service fees, storage, subscriptions, etc.)
-      // The transaction report will replace these with properly-dated entries
+      // Scoped to the CSV's coverage window. Delete fee_details FIRST (before
+      // their parent events), then events.
       const deletedFeeDetails = db.prepare(`
         DELETE FROM fee_details
         WHERE (order_id IS NULL OR order_id = '')
+        AND date(posted_date) <= date(?)
         AND fee_type IN ('Subscription', 'FBAStorageFee', 'FBALongTermStorageFee', 'FBARemovalFee',
                          'CostOfAdvertising', 'FBAInboundTransportationFee', 'FBAInboundConvenienceFee',
                          'FBAInboundPlacementServiceFee', 'UnplannedServiceCharge',
                          'CustomerReturnHRRUnitFee', 'FBADisposalFee', 'FBAInboundDefectFee',
                          'FBAInboundShipmentCartonLevelInfoFee', 'InboundTransportationFee',
                          'RemovalComplete', 'DisposalComplete')
-      `).run();
+        AND financial_event_id IN (
+          SELECT id FROM financial_events
+          WHERE event_type IN ('ServiceFeeEvent', 'SettlementServiceFee') AND marketplace = 'amazon'
+        )
+      `).run(csvMaxDate);
 
-      // Delete ServiceFeeEvent financial_events (replaced by TransactionReport events)
+      // Delete ServiceFeeEvent financial_events within coverage (replaced by
+      // TransactionReport events). Events after the CSV's last date survive —
+      // the CSV has nothing to replace them with.
       const deletedEvents = db.prepare(`
         DELETE FROM financial_events
         WHERE event_type IN ('ServiceFeeEvent', 'SettlementServiceFee')
         AND marketplace = 'amazon'
-      `).run();
+        AND date(posted_date) <= date(?)
+      `).run(csvMaxDate);
 
       // Also delete any previous transaction report imports (for idempotency)
       // Delete fee_details tied to previous transaction report imports
@@ -385,8 +404,13 @@ export async function POST(request: NextRequest) {
     importAll();
     db.close();
 
+    const csvAgeDays = Math.floor((Date.now() - new Date(csvMaxDate).getTime()) / 86400000);
     return NextResponse.json({
       success: true,
+      csvCoverageThrough: csvMaxDate,
+      warning: csvAgeDays > 14
+        ? `CSV is ${csvAgeDays} days stale (ends ${csvMaxDate.substring(0, 10)}). Service fees after that date were NOT touched — download a fresh Unified Transaction Report for full replacement.`
+        : null,
       stats: {
         totalRows: stats.totalRows,
         serviceFees: {

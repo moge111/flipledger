@@ -208,7 +208,11 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
       return NextResponse.json({ error: `Confirmation failed: ${opResult.error}` }, { status: 500 });
     }
 
-    // Persist the chosen carrier on the batch
+    // Persist the chosen carrier on the batch. Cost = sum of the selected
+    // options' quotes (Partnered options carry quotes; own-carrier has none).
+    const costCents = selected.reduce((sum, o) =>
+      typeof o.quote?.cost?.amount === 'number' ? sum + Math.round(o.quote.cost.amount * 100) : sum, 0);
+    const anyQuoted = selected.some((o) => typeof o.quote?.cost?.amount === 'number');
     const db = getDb();
     db.prepare(`
       UPDATE listing_batches SET
@@ -217,6 +221,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
         transportation_carrier = ?,
         transportation_shipping_mode = ?,
         transportation_confirmed_at = ?,
+        transportation_cost_cents = ?,
         transportation_error = NULL
       WHERE id = ?
     `).run(
@@ -224,6 +229,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
       selected[0].carrier?.name || selected[0].shippingSolution,
       selected[0].shippingMode,
       new Date().toISOString(),
+      anyQuoted ? costCents : null,
       batchId
     );
     db.close();

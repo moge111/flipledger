@@ -142,3 +142,60 @@ export async function syncFBAInventory(
 
   return { itemsProcessed, errors };
 }
+
+export interface FBAInventorySummary {
+  sellerSku: string;
+  fnSku: string | null;
+  asin: string;
+  fulfillableQty: number;
+  inboundQty: number;
+  productName: string | null;
+}
+
+/**
+ * Look up FBA inventory summaries for a single ASIN using the filterASINs
+ * query param. More reliable than the Listings Items filterASINs for finding
+ * which seller SKUs are associated with an ASIN — includes DISCOVERABLE (OOS)
+ * items. Paginates until all results are collected.
+ */
+export async function getInventorySummariesForASIN(
+  credentials: SPAPICredentials,
+  asin: string,
+): Promise<FBAInventorySummary[]> {
+  const results: FBAInventorySummary[] = [];
+  let nextToken: string | undefined;
+
+  do {
+    const params: Record<string, string> = {
+      details: 'true',
+      granularityType: 'Marketplace',
+      granularityId: credentials.marketplaceId,
+      marketplaceIds: credentials.marketplaceId,
+      filterASINs: asin,
+    };
+    if (nextToken) params.nextToken = nextToken;
+
+    const res = await spApiRequest(credentials, '/fba/inventory/v1/summaries', params);
+    const summaries: any[] = res?.payload?.inventorySummaries || [];
+
+    for (const item of summaries) {
+      if (!item.sellerSku) continue;
+      // filterASINs is often ignored by Amazon — filter client-side.
+      // Items with no ASIN or a different ASIN are excluded.
+      if (item.asin !== asin) continue;
+      const d = item.inventoryDetails || {};
+      results.push({
+        sellerSku: item.sellerSku,
+        fnSku: item.fnSku || null,
+        asin: item.asin,
+        fulfillableQty: d.fulfillableQuantity || 0,
+        inboundQty: (d.inboundWorkingQuantity || 0) + (d.inboundShippedQuantity || 0) + (d.inboundReceivingQuantity || 0),
+        productName: item.productName || null,
+      });
+    }
+
+    nextToken = res?.payload?.nextToken;
+  } while (nextToken);
+
+  return results;
+}

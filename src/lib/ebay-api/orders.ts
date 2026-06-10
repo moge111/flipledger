@@ -39,9 +39,14 @@ export async function syncEbayOrders(
     let offset = 0;
     const limit = 200;
 
-    // eBay filter uses bracket range syntax
+    // eBay filter uses bracket range syntax. lastmodifieddate (not
+    // creationdate) so refunds/cancellations on OLDER orders re-enter the
+    // rolling sync window — a refund 3 weeks after purchase would never be
+    // seen again under a creationdate filter with a 14-day lookback. New
+    // orders still match (creation sets lastmodifieddate), and re-processing
+    // an order touched for other reasons is idempotent.
     const endDateStr = endDate || new Date().toISOString();
-    const filter = `creationdate:[${startDate}..${endDateStr}]`;
+    const filter = `lastmodifieddate:[${startDate}..${endDateStr}]`;
 
     do {
       let response: any;
@@ -88,9 +93,21 @@ function processEbayOrder(db: Database.Database, order: EbayOrder) {
   const orderDate = order.creationDate || new Date().toISOString();
   const now = new Date().toISOString();
 
-  // Skip cancelled orders
+  // Cancelled orders: skip — and if this order was synced as live BEFORE the
+  // cancellation, reverse it. A bare early-return left phantom revenue
+  // (ShipmentEvent + order_items) on the books forever.
   if (order.cancelStatus?.cancelState === 'CANCELED' ||
       order.orderFulfillmentStatus === 'NOT_STARTED' && order.orderPaymentStatus === 'FAILED') {
+    const existing = db.prepare('SELECT status FROM orders WHERE order_id = ?').get(orderId) as { status?: string } | undefined;
+    if (existing && existing.status !== 'Cancelled') {
+      db.prepare('DELETE FROM fee_details WHERE order_id = ?').run(orderId);
+      db.prepare("DELETE FROM financial_events WHERE order_id = ? AND marketplace = 'ebay'").run(orderId);
+      db.prepare('DELETE FROM order_items WHERE order_id = ?').run(orderId);
+      db.prepare("DELETE FROM sales_tax WHERE order_id = ? AND marketplace = 'ebay'").run(orderId);
+      db.prepare("DELETE FROM refunds WHERE order_id = ? AND marketplace = 'ebay'").run(orderId);
+      db.prepare("UPDATE orders SET status = 'Cancelled' WHERE order_id = ?").run(orderId);
+      console.log(`[eBay] Order ${orderId} cancelled after sync — revenue/fee records reversed`);
+    }
     return;
   }
 
@@ -191,5 +208,45 @@ function processEbayOrder(db: Database.Database, order: EbayOrder) {
 
     // Mark order as reconciled (we have real fees)
     db.prepare(`UPDATE orders SET is_estimated = 0 WHERE order_id = ?`).run(orderId);
+  }
+
+  // Refunds — the Fulfillment API exposes order-level refunds in
+  // paymentSummary.refunds (no Finances API approval needed). Amounts are
+  // order-level, so product identifiers are only attached for single-line-item
+  // orders; multi-item refunds get NULL identifiers (counted in refund totals,
+  // but FIFO deliberately won't zero COGS without a product match).
+  const refunds = (order as any).paymentSummary?.refunds || [];
+  if (refunds.length > 0) {
+    const singleItem = lineItems.length === 1 ? lineItems[0] : null;
+    const singleItemTotal = singleItem ? toCents(singleItem.lineItemCost?.value) : 0;
+    for (const refund of refunds) {
+      // Only settled refunds — PENDING can still fail, FAILED never happened.
+      if (refund.refundStatus && refund.refundStatus !== 'REFUNDED') continue;
+      const amountCents = toCents(refund.amount?.value);
+      if (amountCents <= 0) continue;
+      const refundDate = refund.refundDate || now;
+      // Full refund of a single-item order → the unit comes back (or the sale
+      // is fully reversed), so item_returned=1 lets FIFO return its COGS.
+      // Partial/goodwill refunds keep COGS — the buyer kept the item.
+      const isFullRefund = singleItem !== null && amountCents >= singleItemTotal;
+      // Content-based dedup on (order, amount): eBay can re-send the same
+      // refund across syncs; a second DISTINCT refund on one order would have
+      // a different amount (same lesson as the Walmart returns re-dating bug).
+      db.prepare(`
+        INSERT INTO refunds (order_id, refund_date, asin, sku, quantity, refund_amount, reason, item_returned, fee_clawback, marketplace, created_at)
+        SELECT ?, ?, ?, ?, ?, ?, 'EBAY_REFUND', ?, 0, 'ebay', ?
+        WHERE NOT EXISTS (
+          SELECT 1 FROM refunds WHERE order_id = ? AND refund_amount = ? AND marketplace = 'ebay'
+        )
+      `).run(
+        orderId, refundDate,
+        singleItem ? (singleItem.legacyItemId || null) : null,
+        singleItem ? (singleItem.sku || singleItem.legacyItemId || null) : null,
+        isFullRefund ? (singleItem?.quantity || 1) : 1,
+        amountCents,
+        isFullRefund ? 1 : 0,
+        now, orderId, amountCents
+      );
+    }
   }
 }

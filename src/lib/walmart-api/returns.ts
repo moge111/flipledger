@@ -78,10 +78,24 @@ export async function syncWalmartReturns(
               refundAmount = totalRefund;
             }
 
+            // Content-based dedup: Walmart re-dates the same return across
+            // syncs (returnOrderDate shifts hours-to-days), so the unique
+            // index (order_id, asin, refund_date) sees each re-date as a new
+            // refund. Recon settlements confirmed every (order, sku, amount)
+            // group with >1 row was a duplicate — Walmart deducted only once.
+            // Skip the insert when a row for this order+sku already exists
+            // with the same amount, or with amount 0 (the pre-recon
+            // placeholder this sync's amount will eventually update).
             db.prepare(`
-              INSERT OR IGNORE INTO refunds (order_id, refund_date, asin, sku, quantity, refund_amount, reason, item_returned, fee_clawback, marketplace, created_at)
-              VALUES (?, ?, ?, ?, ?, ?, ?, 1, 0, 'walmart', ?)
-            `).run(purchaseOrderId, returnDate, sku, sku, quantity, refundAmount, reason, now);
+              INSERT INTO refunds (order_id, refund_date, asin, sku, quantity, refund_amount, reason, item_returned, fee_clawback, marketplace, created_at)
+              SELECT ?, ?, ?, ?, ?, ?, ?, 1, 0, 'walmart', ?
+              WHERE NOT EXISTS (
+                SELECT 1 FROM refunds
+                WHERE order_id = ? AND COALESCE(sku, '') = ? AND marketplace = 'walmart'
+                  AND (refund_amount = ? OR refund_amount = 0 OR ? = 0)
+              )
+            `).run(purchaseOrderId, returnDate, sku, sku, quantity, refundAmount, reason, now,
+                   purchaseOrderId, sku, refundAmount, refundAmount);
 
             recordsFetched++;
           }

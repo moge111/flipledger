@@ -76,9 +76,21 @@ export async function syncOrders(
               shipped_at = COALESCE(orders.shipped_at, excluded.shipped_at)
           `).run(orderId, purchaseDate, status, 'amazon', channel, isEstimated, shippedAt, now);
 
-          // Update sales tax state from shipping address
+          // Update sales tax state from shipping address. Delete any 'Unknown'
+          // row already shadowed by a real-state row for the same posted_date
+          // first — otherwise the rename collides with the unique index
+          // (order_id, state, posted_date) and errors the whole order.
           const shipState = order.ShippingAddress?.StateOrRegion;
           if (shipState) {
+            db.prepare(`
+              DELETE FROM sales_tax WHERE order_id = ? AND state = 'Unknown'
+                AND EXISTS (
+                  SELECT 1 FROM sales_tax s
+                  WHERE s.order_id = sales_tax.order_id
+                    AND s.posted_date = sales_tax.posted_date
+                    AND s.state != 'Unknown'
+                )
+            `).run(orderId);
             db.prepare(`
               UPDATE sales_tax SET state = ? WHERE order_id = ? AND state = 'Unknown'
             `).run(shipState, orderId);

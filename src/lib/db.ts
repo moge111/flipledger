@@ -1,9 +1,13 @@
 import Database from 'better-sqlite3';
 import { drizzle } from 'drizzle-orm/better-sqlite3';
 import * as schema from './schema';
+import fs from 'fs';
 import path from 'path';
 
 const DB_PATH = path.join(process.cwd(), 'data', 'flipledger.db');
+
+// Ensure the data dir exists before opening the DB. A fresh clone has no data/.
+fs.mkdirSync(path.dirname(DB_PATH), { recursive: true });
 
 const sqlite = new Database(DB_PATH);
 sqlite.pragma('journal_mode = WAL');
@@ -476,6 +480,7 @@ export function initializeDatabase() {
       transportation_carrier TEXT,            -- e.g. "United States Postal Service"
       transportation_shipping_mode TEXT,      -- GROUND_SMALL_PARCEL | FREIGHT_LTL | etc.
       transportation_confirmed_at TEXT,
+      transportation_cost_cents INTEGER,      -- summed Partnered quote at confirmation
       transportation_error TEXT,
       notes TEXT,
       created_at TEXT NOT NULL,
@@ -587,4 +592,11 @@ export function initializeDatabase() {
       PRIMARY KEY (asin, marketplace)
     );
   `);
+
+  // Additive migrations for databases created before a column existed.
+  // CREATE TABLE IF NOT EXISTS doesn't alter existing tables, so add new
+  // columns here; the try/catch makes re-runs a no-op.
+  try {
+    sqlite.exec('ALTER TABLE listing_batches ADD COLUMN transportation_cost_cents INTEGER');
+  } catch { /* column already exists */ }
 }

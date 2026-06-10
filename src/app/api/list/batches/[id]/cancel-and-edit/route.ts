@@ -97,7 +97,9 @@ export async function POST(_request: NextRequest, { params }: { params: Promise<
     }
     // Allowed: ready/boxing/placement (active plan to cancel) OR failed
     // (send hit a snag, no plan to cancel — just unlock for editing).
-    const allowedStates = ['ready', 'boxing', 'placement', 'failed'];
+    // 'shipping' = placement confirmed but no carrier booked / nothing dispatched
+    // yet; the plan is still cancellable on Amazon, so allow it too.
+    const allowedStates = ['ready', 'boxing', 'placement', 'failed', 'shipping'];
     if (!allowedStates.includes(batch.status)) {
       return NextResponse.json({
         error: `Cancel & Edit is only allowed in ready/boxing/placement/failed (current status: ${batch.status}).`,

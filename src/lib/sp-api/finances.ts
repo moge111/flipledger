@@ -283,13 +283,17 @@ function processShipmentEvent(db: Database.Database, event: any) {
       ON CONFLICT(order_id) DO UPDATE SET status = 'Shipped'
     `).run(orderId, postedDate, now);
 
-    // Update shipping_charged from financial events if Orders API missed it
+    // Update shipping_charged from financial events if Orders API missed it.
+    // This runs per shipment item, so apply the charge to ONE line item —
+    // writing it to every 0-charge item of a multi-item order would inflate
+    // MFN shipping income N×.
     const shippingChargeItem = itemCharges.find((c: any) => c.ChargeType === 'ShippingCharge');
     const shippingChargedAmount = toCents(shippingChargeItem?.ChargeAmount);
     if (shippingChargedAmount > 0) {
-      db.prepare(
-        'UPDATE order_items SET shipping_charged = ? WHERE order_id = ? AND shipping_charged = 0'
-      ).run(shippingChargedAmount, orderId);
+      db.prepare(`
+        UPDATE order_items SET shipping_charged = ?
+        WHERE id = (SELECT id FROM order_items WHERE order_id = ? AND shipping_charged = 0 ORDER BY id LIMIT 1)
+      `).run(shippingChargedAmount, orderId);
     }
 
     // Calculate promotional rebate
@@ -328,11 +332,16 @@ function processShipmentEvent(db: Database.Database, event: any) {
       for (const tc of taxChargeList) {
         const taxAmount = toCents(tc.ChargeAmount);
         if (taxAmount === 0) continue;
-        // Try to determine state from shipping address (not available here, use 'Unknown')
+        // State isn't available on financial events — insert as 'Unknown' and
+        // let the Orders sync rename it from the shipping address. Guard on
+        // (order_id, posted_date) regardless of state: once the Orders sync
+        // has renamed the row, a plain OR IGNORE would re-insert a duplicate
+        // 'Unknown' row on the next financial-events re-sync.
         db.prepare(`
-          INSERT OR IGNORE INTO sales_tax (order_id, state, tax_collected, marketplace_facilitator_tax, posted_date)
-          VALUES (?, ?, ?, ?, ?)
-        `).run(orderId, 'Unknown', taxAmount, taxAmount, postedDate);
+          INSERT INTO sales_tax (order_id, state, tax_collected, marketplace_facilitator_tax, posted_date)
+          SELECT ?, 'Unknown', ?, ?, ?
+          WHERE NOT EXISTS (SELECT 1 FROM sales_tax WHERE order_id = ? AND posted_date = ?)
+        `).run(orderId, taxAmount, taxAmount, postedDate, orderId, postedDate);
       }
     }
 
@@ -403,8 +412,12 @@ function processRefundEvent(db: Database.Database, event: any) {
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run('RefundEvent', postedDate, orderId, item.ASIN || null, item.SellerSKU, 'amazon', -refundAmount + feeClawback, JSON.stringify(event), now);
 
-    const eventId = Number(result.lastInsertRowid);
-    if (eventId > 0) {
+    // changes > 0 means the event row was actually inserted. When INSERT OR
+    // IGNORE skips (re-sync of an existing refund), lastInsertRowid holds the
+    // connection's PREVIOUS insert — linking clawback fees to it would attach
+    // them to an unrelated financial event.
+    const eventId = result.changes > 0 ? Number(result.lastInsertRowid) : null;
+    if (eventId) {
       for (const fee of fees) {
         const feeAmount = toCents(fee.FeeAmount);
         if (feeAmount === 0) continue;
@@ -571,13 +584,15 @@ function processGenericFinancialEvent(db: Database.Database, event: any, eventTy
 
   if (totalAmount === 0) return;
 
-  db.prepare(`
+  const genericResult = db.prepare(`
     INSERT OR IGNORE INTO financial_events (event_type, posted_date, order_id, asin, sku, marketplace, total_amount, raw_data, created_at)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(eventType, postedDate, orderId, event.ASIN || null, event.SellerSKU || null, 'amazon', totalAmount, JSON.stringify(event), now);
 
-  // Store as other_income if positive, or as a fee if negative
-  if (totalAmount > 0) {
+  // Store as other_income only when the event row was actually NEW.
+  // other_income has no unique index, so its OR IGNORE is a no-op — without
+  // this gate every hourly re-sync would re-insert the same income row.
+  if (totalAmount > 0 && genericResult.changes > 0) {
     db.prepare(`
       INSERT OR IGNORE INTO other_income (date, income_type, amount, description, marketplace, created_at)
       VALUES (?, ?, ?, ?, ?, ?)
@@ -590,6 +605,7 @@ function processShippingLabelEvent(db: Database.Database, event: any) {
   const postedDate = event.PostedDate;
   if (!orderId) return;
 
+  const now = new Date().toISOString();
   const fees = event.FeeList || [];
   for (const fee of fees) {
     const amount = Math.abs(toCents(fee.FeeAmount));
@@ -597,10 +613,19 @@ function processShippingLabelEvent(db: Database.Database, event: any) {
 
     // PostageBilling = shipping label cost, PostageRefund = refund of label
     if (fee.FeeType === 'PostageBilling' || fee.FeeType === 'PostageRefund') {
-      // Update the order_item's shipping_cost
-      db.prepare(`
-        UPDATE order_items SET shipping_cost = shipping_cost + ? WHERE order_id = ?
-      `).run(fee.FeeType === 'PostageBilling' ? amount : -amount, orderId);
+      const signed = fee.FeeType === 'PostageBilling' ? amount : -amount;
+      // Record the event first (deduped by the financial_events unique index)
+      // and only apply the increment when it's genuinely new — a raw
+      // `shipping_cost + ?` would compound on every hourly re-sync.
+      const labelResult = db.prepare(`
+        INSERT OR IGNORE INTO financial_events (event_type, posted_date, order_id, marketplace, total_amount, raw_data, created_at)
+        VALUES ('ShippingLabelEvent', ?, ?, 'amazon', ?, ?, ?)
+      `).run(postedDate || now, orderId, -signed, JSON.stringify(fee), now);
+      if (labelResult.changes > 0) {
+        db.prepare(`
+          UPDATE order_items SET shipping_cost = shipping_cost + ? WHERE order_id = ?
+        `).run(signed, orderId);
+      }
     }
   }
 }

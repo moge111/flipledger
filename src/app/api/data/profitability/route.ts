@@ -99,7 +99,7 @@ export async function GET(request: NextRequest) {
       JOIN (SELECT order_id, MIN(posted_date) as posted_date FROM financial_events WHERE event_type = 'ShipmentEvent' AND order_id IS NOT NULL GROUP BY order_id) fe ON oi.order_id = fe.order_id
       JOIN orders o ON oi.order_id = o.order_id
       JOIN (
-        SELECT order_id, SUM(ABS(amount)) as total_fee
+        SELECT order_id, -SUM(amount) as total_fee
         FROM fee_details WHERE order_id IS NOT NULL AND order_id != ''
         GROUP BY order_id
       ) order_fees ON oi.order_id = order_fees.order_id
@@ -108,7 +108,7 @@ export async function GET(request: NextRequest) {
         FROM order_items GROUP BY order_id
       ) order_totals ON oi.order_id = order_totals.order_id AND order_totals.order_revenue > 0
       ${groupBy === 'category' ? 'LEFT JOIN products p ON oi.asin = p.asin' : ''}
-      ${groupBy === 'supplier' ? `LEFT JOIN inventory_ledger il ON oi.asin = il.asin LEFT JOIN suppliers s ON il.supplier_id = s.id` : ''}
+      ${groupBy === 'supplier' ? `LEFT JOIN (SELECT asin, MIN(supplier_id) as supplier_id FROM inventory_ledger GROUP BY asin) il ON oi.asin = il.asin LEFT JOIN suppliers s ON il.supplier_id = s.id` : ''}
       WHERE fe.posted_date >= ? AND fe.posted_date < ? ${MF}
       GROUP BY ${feeGroupKey}
     `).all(cutoff, cutoffEnd) as any[];
@@ -158,6 +158,7 @@ export async function GET(request: NextRequest) {
       FROM refunds r
       ${groupBy === 'category' ? 'LEFT JOIN products p ON r.asin = p.asin' : ''}
       WHERE r.refund_date >= ? AND r.refund_date < ?
+        ${marketplace ? `AND COALESCE(r.marketplace, 'amazon') = '${marketplace}'` : ''}
       GROUP BY ${groupBy === 'category' ? 'p.category' : groupBy === 'supplier' ? '1' : 'r.asin'}
     `).all(cutoff, cutoffEnd) as any[];
 

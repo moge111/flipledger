@@ -200,21 +200,33 @@ export async function GET(request: NextRequest) {
     // refundTotal.clawback again would double-count it.
     const netProfit = totalIncome - totalAllExpenses - refundTotal.total + reimbTotal.total;
 
-    // Sales detail — individual products sold in the period, with per-order fees
+    // Sales detail — individual products sold in the period. Order-level fees
+    // are PRO-RATED across line items by revenue share (same rule as the
+    // FBA/WFS sales pages) — attaching the full order fee to every line of a
+    // multi-item order double-counts it for anyone summing the rows. GROUP BY
+    // oi.id guards against the products join matching on both asin and sku.
     const salesDetail = db.prepare(`
       SELECT
         oi.order_id,
         o.marketplace,
         o.fulfillment_channel,
-        COALESCE(p.name, oi.asin) as product_name,
+        COALESCE(MAX(p.name), oi.asin) as product_name,
         oi.asin,
         oi.sku,
         oi.quantity,
         oi.total_price as revenue,
         oi.cogs_per_unit * oi.quantity as cogs,
-        COALESCE(order_fees.total_fees, 0) as fees,
+        CASE WHEN COALESCE(ot.order_total, 0) > 0
+          THEN CAST(COALESCE(order_fees.total_fees, 0) * oi.total_price * 1.0 / ot.order_total AS INTEGER)
+          ELSE COALESCE(order_fees.total_fees, 0)
+        END as fees,
         oi.shipping_cost as shippingCost,
-        oi.total_price - (oi.cogs_per_unit * oi.quantity) + COALESCE(order_fees.total_fees, 0) - COALESCE(oi.shipping_cost, 0) as net_profit,
+        oi.total_price - (oi.cogs_per_unit * oi.quantity)
+          + CASE WHEN COALESCE(ot.order_total, 0) > 0
+              THEN CAST(COALESCE(order_fees.total_fees, 0) * oi.total_price * 1.0 / ot.order_total AS INTEGER)
+              ELSE COALESCE(order_fees.total_fees, 0)
+            END
+          - COALESCE(oi.shipping_cost, 0) as net_profit,
         fe.posted_date,
         o.purchase_date
       FROM order_items oi
@@ -227,7 +239,11 @@ export async function GET(request: NextRequest) {
         WHERE order_id IS NOT NULL AND order_id != ''
         GROUP BY order_id
       ) order_fees ON oi.order_id = order_fees.order_id
+      LEFT JOIN (
+        SELECT order_id, SUM(total_price) as order_total FROM order_items GROUP BY order_id
+      ) ot ON oi.order_id = ot.order_id
       WHERE fe.posted_date >= ? AND fe.posted_date < ? ${MF}
+      GROUP BY oi.id
       ORDER BY fe.posted_date DESC
       LIMIT 500
     `).all(startDate, endDateNext) as any[];

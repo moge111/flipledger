@@ -123,6 +123,18 @@ export async function POST(
       return NextResponse.json({ error: 'Batch has no items' }, { status: 400 });
     }
 
+    // Block Send if any item has no list price — a $0 offer is silently accepted
+    // by Amazon, becomes unsellable, and corrupts the downstream packing/placement
+    // flow. Fail loudly here instead of pushing $0. (The per-item create-listing
+    // path has the same guard.)
+    const unpriced = items.filter((it) => !it.listPriceCents || it.listPriceCents <= 0);
+    if (unpriced.length > 0) {
+      db.close();
+      return NextResponse.json({
+        error: `Set a list price before sending — these items have no price:\n${unpriced.map((it) => `  • ${it.sku} (${it.productName || it.asin})`).join('\n')}`,
+      }, { status: 400 });
+    }
+
     // 4. Get Amazon credentials
     const creds = getAmazonCredentials(db);
     if (!creds) {

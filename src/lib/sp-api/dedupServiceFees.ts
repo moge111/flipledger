@@ -43,18 +43,26 @@ export function dedupServiceFees(): DedupServiceFeesResult {
       // Find dupe fee_details rows. Per group: keep earliest posted_date,
       // tiebreak on lowest id. Scoped to 2026+ to protect filed/reconciled
       // years (the bug started with the daily auto-sync ~Apr 2026).
+      // Scope STRICTLY to fee_details whose parent event is a ServiceFeeEvent.
+      // The rolling-date bug only exists for that source — sweeping all
+      // order-less fees would silently delete genuine same-amount fees from
+      // the authoritative TransactionReport import and Walmart WFS service
+      // fees (e.g. two identical placement fees for two shipments in one
+      // month).
       const dupes = db
         .prepare(
           `SELECT id, financial_event_id, amount FROM (
-             SELECT id, financial_event_id, amount,
+             SELECT fd.id, fd.financial_event_id, fd.amount,
                ROW_NUMBER() OVER (
-                 PARTITION BY fee_type, amount, COALESCE(asin,''),
-                              strftime('%Y-%m', posted_date)
-                 ORDER BY posted_date ASC, id ASC
+                 PARTITION BY fd.fee_type, fd.amount, COALESCE(fd.asin,''),
+                              strftime('%Y-%m', fd.posted_date)
+                 ORDER BY fd.posted_date ASC, fd.id ASC
                ) AS rn
-             FROM fee_details
-             WHERE (order_id IS NULL OR order_id = '')
-               AND posted_date >= '2026-01-01'
+             FROM fee_details fd
+             JOIN financial_events fe ON fe.id = fd.financial_event_id
+               AND fe.event_type = 'ServiceFeeEvent'
+             WHERE (fd.order_id IS NULL OR fd.order_id = '')
+               AND fd.posted_date >= '2026-01-01'
            ) WHERE rn > 1`
         )
         .all() as { id: number; financial_event_id: number | null; amount: number }[];

@@ -15,8 +15,7 @@ export async function GET(request: NextRequest) {
 
   const db = getDb();
   const marketplace = searchParams.get('marketplace');
-  const MF = marketplace ? `AND o.marketplace = '${marketplace}'` : '';
-  const MF_R = marketplace ? `AND marketplace = '${marketplace}'` : '';
+  const MF_R = marketplace ? `AND COALESCE(marketplace, 'amazon') = '${marketplace}'` : '';
 
   const cutoff = new Date(Date.now() - days * 86400000).toISOString();
 
@@ -29,7 +28,7 @@ export async function GET(request: NextRequest) {
         SUM(tax_collected) + SUM(COALESCE(marketplace_facilitator_tax, 0)) as total,
         COUNT(*) as orderCount
       FROM sales_tax
-      WHERE posted_date >= ?
+      WHERE posted_date >= ? ${MF_R}
       GROUP BY state
       ORDER BY total DESC
     `).all(cutoff) as any[];

@@ -62,7 +62,7 @@ export async function GET(request: NextRequest) {
 
     // Get inbound shipping costs from fee_details (FBA transport + convenience fees)
     const costData = db.prepare(`
-      SELECT COALESCE(SUM(ABS(amount)), 0) as total
+      SELECT COALESCE(-SUM(amount), 0) as total
       FROM fee_details
       WHERE fee_type IN ('FBAInboundTransportationFee', 'FBAInboundConvenienceFee', 'FBAInboundTransportationProgramFee')
         AND date(posted_date) >= ? AND date(posted_date) < ?

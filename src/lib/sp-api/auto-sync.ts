@@ -10,6 +10,7 @@ import { getWalmartCredentials } from '../walmart-api/auth';
 import { runEbaySync, getEbaySyncStatus } from '../ebay-api/sync';
 import { getEbayCredentials } from '../ebay-api/auth';
 import { syncFbaCustomerReturns } from './customerReturns';
+import { syncFinancesV2024Transactions } from './financesV2024';
 import { syncSalesRanks } from './salesRank';
 import { syncReimbursementCandidates } from './reimbursementCandidates';
 import { syncReimbursementsReport } from './reimbursementsReport';
@@ -48,6 +49,12 @@ const REIMBURSEMENT_CANDIDATES_LOOKBACK_DAYS = 90;
 // Database backup — once a day. FlipLedger's entire books live in one local
 // SQLite file, so an automated consistent snapshot is the durability floor.
 const BACKUP_INTERVAL_HOURS = 24;
+
+// v2024 Finances transactions — daily. Feeds finances_transactions_v2
+// (deferral reasons + maturity dates for the in-flight DDP cards). Max 31-day
+// window per request; daily 30-day pulls keep statuses fresh as DEFERRED
+// transactions flip to RELEASED.
+const FINANCES_V2024_INTERVAL_HOURS = 24;
 
 function getAmazonCredentials(): SPAPICredentials | null {
   try {
@@ -105,7 +112,25 @@ function setLastSyncTime(key: string, value: string) {
   }
 }
 
+// Reentrancy guard: a tick can run >15 minutes (async report jobs), at which
+// point the next setInterval firing would re-enter the report syncs
+// concurrently — their *_last_sync timestamps are only written on completion.
+let tickRunning = false;
+
 async function autoSyncTick() {
+  if (tickRunning) {
+    console.log('[AutoSync] Previous tick still running, skipping');
+    return;
+  }
+  tickRunning = true;
+  try {
+    await autoSyncTickInner();
+  } finally {
+    tickRunning = false;
+  }
+}
+
+async function autoSyncTickInner() {
   // Amazon sync
   const amazonStatus = getSyncStatus();
   const walmartStatus = getWalmartSyncStatus();
@@ -152,6 +177,27 @@ async function autoSyncTick() {
         );
       } catch (err) {
         console.error('[AutoSync] Customer returns error:', err);
+      }
+    }
+  }
+
+  // v2024 Finances transactions (daily) — refreshes deferral/maturity data
+  // used by the Dashboard in-flight DDP cards. Writes only to
+  // finances_transactions_v2; never touches P&L tables.
+  const financesV2024LastSync = getLastSyncTime('finances_v2024_last_sync');
+  if (hoursSince(financesV2024LastSync) >= FINANCES_V2024_INTERVAL_HOURS) {
+    const amazonCreds = getAmazonCredentials();
+    if (amazonCreds) {
+      console.log('[AutoSync] Starting v2024 Finances transactions sync (last 30 days)');
+      try {
+        const result = await syncFinancesV2024Transactions(amazonCreds);
+        setLastSyncTime('finances_v2024_last_sync', new Date().toISOString());
+        console.log(
+          `[AutoSync] v2024 Finances: ${result.inserted} inserted, ${result.updated} updated, ${result.pagesFetched} pages` +
+            (result.errors.length ? `, errors: ${result.errors.join('; ')}` : '')
+        );
+      } catch (err) {
+        console.error('[AutoSync] v2024 Finances error:', err);
       }
     }
   }

@@ -142,6 +142,33 @@ export async function POST(
       WHERE b.batch_id = ?
     `).all(batchId) as { boxId: number; msku: string; quantity: number }[];
 
+    // PRE-FLIGHT: box allocations must EXACTLY match batch item quantities.
+    // If they don't, setPackingInformation later rejects with "did not contain
+    // expected items and/or quantities" — but only AFTER confirmPackingOption has
+    // committed, which locks the plan into skip-packing/LTL (no Partnered UPS).
+    // Catch it here BEFORE anything is sent to Amazon so nothing gets locked.
+    {
+      const batchItemQtys = db.prepare(
+        `SELECT sku as msku, quantity FROM listing_batch_items WHERE batch_id = ?`
+      ).all(batchId) as { msku: string; quantity: number }[];
+      const boxedByMsku: Record<string, number> = {};
+      for (const bi of boxItems) boxedByMsku[bi.msku] = (boxedByMsku[bi.msku] || 0) + bi.quantity;
+      const mismatches: string[] = [];
+      for (const it of batchItemQtys) {
+        const boxed = boxedByMsku[it.msku] || 0;
+        if (boxed !== it.quantity) mismatches.push(`${it.msku}: batch expects ${it.quantity}, boxes have ${boxed}`);
+      }
+      for (const msku of Object.keys(boxedByMsku)) {
+        if (!batchItemQtys.some((it) => it.msku === msku)) mismatches.push(`${msku}: in boxes but not in the batch`);
+      }
+      if (mismatches.length > 0) {
+        db.close();
+        return NextResponse.json({
+          error: `Box quantities don't match the batch — nothing was sent to Amazon. Fix the box allocation and try again:\n${mismatches.join('\n')}`,
+        }, { status: 400 });
+      }
+    }
+
     // Pack groups (Amazon's split). For multi-group batches, every box must
     // declare its packingGroupId. For single-group, we'll auto-fill it.
     const packGroups = db.prepare(`

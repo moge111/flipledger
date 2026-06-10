@@ -519,6 +519,7 @@ function EbaySettings() {
   const [clientId, setClientId] = useState('');
   const [clientSecret, setClientSecret] = useState('');
   const [refreshToken, setRefreshToken] = useState('');
+  const [ruName, setRuName] = useState('');
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [testing, setTesting] = useState(false);
@@ -534,6 +535,7 @@ function EbaySettings() {
         if (data.settings?.ebay_client_id) setClientId(data.settings.ebay_client_id);
         if (data.settings?.ebay_client_secret) setClientSecret(data.settings.ebay_client_secret);
         if (data.settings?.ebay_refresh_token) setRefreshToken(data.settings.ebay_refresh_token);
+        if (data.settings?.ebay_runame) setRuName(data.settings.ebay_runame);
         if (data.settings?.ebay_last_sync) setLastSync(data.settings.ebay_last_sync);
       })
       .catch(() => {});
@@ -544,7 +546,7 @@ function EbaySettings() {
     await fetch('/api/data/settings', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ ebay_client_id: clientId, ebay_client_secret: clientSecret, ebay_refresh_token: refreshToken }),
+      body: JSON.stringify({ ebay_client_id: clientId, ebay_client_secret: clientSecret, ebay_refresh_token: refreshToken, ebay_runame: ruName }),
     });
     setSaving(false);
     setSaved(true);
@@ -615,6 +617,19 @@ function EbaySettings() {
             className="w-full h-9 px-3 bg-bg-input border border-border-default rounded-md text-sm text-text-primary placeholder-text-tertiary focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent/25"
           />
           <p className="text-[11px] text-text-tertiary mt-1">Generate via User Tokens on developer.ebay.com. Refresh tokens last 18 months.</p>
+        </div>
+        <div>
+          <label className="block text-xs font-medium tracking-wide uppercase text-text-tertiary mb-1.5">
+            RuName (Redirect URL Name)
+          </label>
+          <input
+            type="text"
+            value={ruName}
+            onChange={e => setRuName(e.target.value)}
+            placeholder="e.g. Your_Name-YourApp-abc123"
+            className="w-full h-9 px-3 bg-bg-input border border-border-default rounded-md text-sm text-text-primary placeholder-text-tertiary focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent/25"
+          />
+          <p className="text-[11px] text-text-tertiary mt-1">From your app&apos;s OAuth settings on developer.ebay.com. Only needed for the in-app authorization flow.</p>
         </div>
       </div>
 

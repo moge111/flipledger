@@ -232,9 +232,20 @@ export function recalculateFIFO(options: {
             if (batch.remaining <= 0) batchIdx++;
           }
 
-          // Calculate weighted average COGS per unit for this sale
-          const unitsFilled = sale.quantity - unitsNeeded;
-          const cogsPerUnit = unitsFilled > 0 ? Math.round(totalCost / unitsFilled) : 0;
+          // Fallback for units not covered by a recorded lot: when more units
+          // sold than the recorded quantity, the lot is "depleted" — but the
+          // extra units of the same product cost ~the same, so cost them at the
+          // most-recent lot's buy price instead of $0. This keeps COGS accurate
+          // and prevents the "depleted lot" / $0-COGS state on any SKU that has
+          // a real cost basis recorded.
+          if (unitsNeeded > 0) {
+            const fallbackPrice = batchState[batchState.length - 1].buyPrice;
+            totalCost += unitsNeeded * fallbackPrice;
+            unitsNeeded = 0;
+          }
+
+          // Weighted average COGS per unit across all units in this sale.
+          const cogsPerUnit = sale.quantity > 0 ? Math.round(totalCost / sale.quantity) : 0;
 
           // Only update if changed
           if (cogsPerUnit !== sale.currentCogs) {

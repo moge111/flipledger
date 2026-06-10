@@ -33,6 +33,7 @@ interface Batch {
   transportationStatus?: string | null;
   transportationOptionId?: string | null;
   transportationCarrier?: string | null;
+  transportationCostCents?: number | null;
   transportationShippingMode?: string | null;
   transportationConfirmedAt?: string | null;
   transportationError?: string | null;
@@ -686,9 +687,22 @@ export default function BatchDetailPage({ params }: { params: Promise<{ id: stri
       } else if (data.items && data.items.length > 0) {
         const first = data.items[0] as CatalogResult;
         setScanned(first);
-        setSkuManuallyEdited(false); // Reset the flag — the effect will autofill the MSKU
-        // Pre-fill from historical data
-        if (first.lastBuyPrice) setBuyPrice((first.lastBuyPrice / 100).toFixed(2));
+        // If already in catalog, DEFAULT to restocking the existing MSKU so a stray
+        // "Add to Batch" can't split inventory into a duplicate SKU. New items fall
+        // through to the auto-generator (skuManuallyEdited = false).
+        const existing = first.existingMskus && first.existingMskus.length > 0 ? first.existingMskus[0] : null;
+        if (existing) {
+          setSku(existing.msku);
+          setSkuManuallyEdited(true); // lock — stops the generator from minting a new SKU
+        } else {
+          setSkuManuallyEdited(false); // new item — let the effect autofill the MSKU
+        }
+        // Pre-fill from historical data (existing lot's cost wins when restocking)
+        if (existing && existing.lastBuyPriceCents > 0) {
+          setBuyPrice((existing.lastBuyPriceCents / 100).toFixed(2));
+        } else if (first.lastBuyPrice) {
+          setBuyPrice((first.lastBuyPrice / 100).toFixed(2));
+        }
         if (first.avgSalePrice) setListPrice((first.avgSalePrice / 100).toFixed(2));
         // MFN-only: pre-fill ship cost from historical average
         if (first.shippingEstimate && first.shippingEstimate.costCents > 0) {
@@ -782,7 +796,10 @@ export default function BatchDetailPage({ params }: { params: Promise<{ id: stri
         // Fire-and-forget (don't block the next scan); refetch when it lands so
         // the per-item status chip updates. Best-effort — failure just shows a
         // FAILED chip and the Send flow will retry.
-        if (data.id) {
+        // ONLY auto-create when a list price was entered — never push a $0 offer
+        // to Amazon (it's silently accepted, becomes unsellable, and corrupts the
+        // packing/placement flow). Unpriced items get created at Send instead.
+        if (data.id && parseFloat(listPrice) > 0) {
           fetch(`/api/list/batches/${id}/items/${data.id}/create-listing`, { method: 'POST' })
             .then(() => fetchBatch())
             .catch(() => {});
@@ -876,6 +893,15 @@ export default function BatchDetailPage({ params }: { params: Promise<{ id: stri
       } else {
         setEditingItemId(null);
         await fetchBatch();
+        // If the list price changed on a draft item, re-push it to Amazon so the
+        // live offer stays in sync (otherwise the DB and Amazon diverge — the
+        // root of the "$45 in FlipLedger but $0 on Amazon" bug). force=1 updates
+        // an already-created listing in place; the route skips $0 prices.
+        if (isDraft && (parseFloat(editForm.listPrice) || 0) > 0) {
+          fetch(`/api/list/batches/${id}/items/${itemId}/create-listing?force=1`, { method: 'POST' })
+            .then(() => fetchBatch())
+            .catch(() => {});
+        }
       }
     } catch (err) {
       alert(String(err));
@@ -1027,7 +1053,7 @@ export default function BatchDetailPage({ params }: { params: Promise<{ id: stri
           {/* Cancel & Edit — unlocks ready/boxing/placement/failed batches for re-editing.
               For ready+ states: cancels the inbound plan on Amazon (listings stay).
               For failed state: just resets local DB (no plan was created). */}
-          {['ready', 'boxing', 'placement', 'failed'].includes(batch.status) && batch.channel === 'FBA' && (
+          {['ready', 'boxing', 'placement', 'failed', 'shipping'].includes(batch.status) && batch.channel === 'FBA' && (
             <button
               onClick={handleCancelAndEdit}
               disabled={cancelling}
@@ -1241,9 +1267,11 @@ export default function BatchDetailPage({ params }: { params: Promise<{ id: stri
                   <div className="col-span-2">
                     <label className="text-[10px] uppercase tracking-widest text-text-tertiary flex items-center gap-1">
                       MSKU
-                      {!skuManuallyEdited && supplier && buyPrice && (
-                        <span className="text-[9px] text-accent/70 normal-case tracking-normal">auto</span>
-                      )}
+                      {scanned?.existingMskus?.some((m) => m.msku === sku) ? (
+                        <span className="text-[9px] text-positive normal-case tracking-normal">restock · no new SKU</span>
+                      ) : !skuManuallyEdited && supplier && buyPrice ? (
+                        <span className="text-[9px] text-accent/70 normal-case tracking-normal">auto · new SKU</span>
+                      ) : null}
                     </label>
                     <input
                       autoComplete="off"
@@ -1862,6 +1890,43 @@ function BoxingWorkflow({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [batch.status]);
 
+  // Per-placement-option shipping estimates (Partnered UPS) so the cards can
+  // show "placement fee + shipping = total" BEFORE choosing. Fetched
+  // sequentially — each estimate may trigger a transportation-options
+  // generation op on the same plan, and concurrent ops can conflict.
+  const [shipEstimates, setShipEstimates] = useState<Record<string, { loading: boolean; totalCents: number | null }>>({});
+
+  useEffect(() => {
+    if (batch.status !== 'placement' || placementOptions.length === 0) return;
+    const pending = placementOptions.filter((o) => shipEstimates[o.placementOptionId] === undefined);
+    if (pending.length === 0) return;
+    let cancelled = false;
+    setShipEstimates((prev) => {
+      const next = { ...prev };
+      for (const o of pending) next[o.placementOptionId] = { loading: true, totalCents: null };
+      return next;
+    });
+    (async () => {
+      for (const opt of pending) {
+        if (cancelled) return;
+        let totalCents: number | null = null;
+        try {
+          const res = await fetch(
+            `/api/list/batches/${batch.id}/placement/shipping-estimate?placementOptionId=${encodeURIComponent(opt.placementOptionId)}`
+          );
+          if (res.ok) {
+            const data = await res.json();
+            totalCents = data.partneredTotalCents ?? null;
+          }
+        } catch { /* leave null — card shows an em dash */ }
+        if (cancelled) return;
+        setShipEstimates((prev) => ({ ...prev, [opt.placementOptionId]: { loading: false, totalCents } }));
+      }
+    })();
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [batch.status, placementOptions]);
+
   // Phase 4: Shipments + label printing — fetched once we hit shipping status
   const [shipments, setShipments] = useState<Array<{
     shipmentId: string;
@@ -2263,6 +2328,8 @@ function BoxingWorkflow({
                 // Amazon returns options in order of decreasing destination count
                 // (Optimized has the most, Minimal has 1). Label based on that.
                 const label = idx === 0 ? 'Optimized' : idx === placementOptions.length - 1 ? 'Minimal' : 'Partial';
+                const est = shipEstimates[opt.placementOptionId];
+                const totalKnown = est && !est.loading && est.totalCents !== null;
                 return (
                   <div
                     key={opt.placementOptionId}
@@ -2279,12 +2346,30 @@ function BoxingWorkflow({
                       )}
                     </div>
                     <div className="text-2xl font-semibold text-text-primary mb-1">
-                      {formatCurrency(feeCents)}
+                      {totalKnown ? formatCurrency(feeCents + (est.totalCents as number)) : formatCurrency(feeCents)}
+                      {totalKnown && <span className="text-[11px] font-normal text-text-tertiary ml-1.5">total</span>}
+                    </div>
+                    <div className="space-y-0.5 mb-2 text-[11px]">
+                      <div className="flex justify-between text-text-secondary">
+                        <span>Placement fee</span>
+                        <span className="font-mono">{formatCurrency(feeCents)}</span>
+                      </div>
+                      <div className="flex justify-between text-text-secondary">
+                        <span>Shipping (Partnered UPS)</span>
+                        <span className="font-mono">
+                          {est?.loading ? (
+                            <Loader2 size={10} className="animate-spin inline" />
+                          ) : est?.totalCents !== null && est?.totalCents !== undefined ? (
+                            formatCurrency(est.totalCents)
+                          ) : (
+                            '—'
+                          )}
+                        </span>
+                      </div>
                     </div>
                     <div className="text-[11px] text-text-tertiary mb-3">
                       {shipmentCount} destination{shipmentCount === 1 ? '' : 's'}
-                      {idx === 0 && shipmentCount > 1 && ' · cheapest overall'}
-                      {idx === placementOptions.length - 1 && ' · simpler, but higher fee'}
+                      {est && !est.loading && est.totalCents === null && ' · UPS rate not quoted yet — refresh in a minute'}
                     </div>
                     {!isConfirmed && isPlacementPhase && (
                       <button
@@ -2324,6 +2409,25 @@ function BoxingWorkflow({
                     : <>Print FNSKU labels (one per unit, applied over original UPC) and box ID labels (one per box, taped to outside) for each shipment below. Choose a carrier in the next section to commit the shipment for transit.</>
                   }
                 </p>
+                {(batch.placementFeeCents != null || batch.transportationCostCents != null) && (
+                  <div className="flex gap-4 mt-2 text-[11px]">
+                    {batch.placementFeeCents != null && (
+                      <span className="text-text-secondary">
+                        Placement fee: <span className="font-mono font-medium">{formatCurrency(batch.placementFeeCents)}</span>
+                      </span>
+                    )}
+                    {batch.transportationCostCents != null && (
+                      <span className="text-text-secondary">
+                        Shipping: <span className="font-mono font-medium">{formatCurrency(batch.transportationCostCents)}</span>
+                      </span>
+                    )}
+                    {batch.placementFeeCents != null && batch.transportationCostCents != null && (
+                      <span className="text-text-primary font-medium">
+                        Total inbound cost: <span className="font-mono">{formatCurrency(batch.placementFeeCents + batch.transportationCostCents)}</span>
+                      </span>
+                    )}
+                  </div>
+                )}
               </div>
 
               {/* Carrier (transportation) booking — only show if not yet confirmed */}

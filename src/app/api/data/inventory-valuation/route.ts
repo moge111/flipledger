@@ -38,11 +38,25 @@ export async function GET(request: NextRequest) {
         COALESCE(li.reserved_fc_processing, 0) as reservedFcProcessing,
         COALESCE(li.list_price, 0) as customListPrice,
         li.walmart_item_id as walmartItemId,
-        COALESCE(il.buy_price, 0) as cogsPerUnit,
-        COALESCE(il.buy_price * li.total_qty, 0) as totalCogsValue,
+        COALESCE(il_sku.buy_price, il_asin.buy_price, 0) as cogsPerUnit,
+        COALESCE(COALESCE(il_sku.buy_price, il_asin.buy_price, 0) * li.total_qty, 0) as totalCogsValue,
         li.last_updated
       FROM live_inventory li
-      LEFT JOIN inventory_ledger il ON (li.sku = il.sku OR li.asin = il.asin)
+      -- Latest lot per SKU (preferred), then latest lot per ASIN. The old
+      -- loose (sku OR asin) join returned an ARBITRARY lot's buy_price under
+      -- multi-lot tracking; this matches the Dashboard's latest-lot rule.
+      LEFT JOIN (
+        SELECT sku, buy_price FROM (
+          SELECT sku, buy_price, ROW_NUMBER() OVER (PARTITION BY sku ORDER BY id DESC) rn
+          FROM inventory_ledger WHERE sku IS NOT NULL AND sku != ''
+        ) WHERE rn = 1
+      ) il_sku ON il_sku.sku = li.sku
+      LEFT JOIN (
+        SELECT asin, buy_price FROM (
+          SELECT asin, buy_price, ROW_NUMBER() OVER (PARTITION BY asin ORDER BY id DESC) rn
+          FROM inventory_ledger WHERE asin IS NOT NULL AND asin != ''
+        ) WHERE rn = 1
+      ) il_asin ON il_asin.asin = li.asin
       LEFT JOIN products p ON li.asin = p.asin
       WHERE li.total_qty > 0 ${MF}
       GROUP BY li.asin, li.sku, li.marketplace

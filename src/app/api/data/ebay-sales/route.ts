@@ -55,7 +55,7 @@ export async function GET(request: NextRequest) {
       LEFT JOIN products p ON oi.asin = p.asin
       LEFT JOIN products p2 ON oi.sku = p2.asin AND p.asin IS NULL
       LEFT JOIN (
-        SELECT order_id, -SUM(amount) as totalFees FROM fee_details WHERE order_id IS NOT NULL AND order_id != '' AND amount < 0 GROUP BY order_id
+        SELECT order_id, -SUM(amount) as totalFees FROM fee_details WHERE order_id IS NOT NULL AND order_id != '' GROUP BY order_id
       ) fd ON o.order_id = fd.order_id
       LEFT JOIN (
         SELECT order_id, SUM(total_price) as order_total FROM order_items GROUP BY order_id

@@ -56,9 +56,12 @@ export async function GET(request: NextRequest) {
       LEFT JOIN (
         -- Latest v2024 transaction per order (a refund can come after the
         -- shipment, so pick the Shipment-type one specifically).
-        SELECT order_id, maturity_date, transaction_status, deferral_reason
+        SELECT order_id, MAX(maturity_date) as maturity_date,
+               MAX(transaction_status) as transaction_status,
+               MAX(deferral_reason) as deferral_reason
         FROM finances_transactions_v2
         WHERE transaction_type = 'Shipment' AND order_id IS NOT NULL
+        GROUP BY order_id
       ) ftv2 ON ftv2.order_id = o.order_id
       WHERE o.status IN ('Shipped', 'PartiallyShipped')
         AND fe.order_id IS NULL

@@ -121,19 +121,22 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
       }
 
       // 3. Write to inventory_ledger so FIFO can assign COGS to future sales.
-      //    If an entry for this SKU already exists, update buy_price and add to quantity.
-      //    If not, insert a new entry.
-      const existing = db.prepare('SELECT id, quantity, quantity_remaining FROM inventory_ledger WHERE sku = ?').get(sku) as any;
+      //    Same SKU + same buy price → restock the existing lot (add quantity).
+      //    Same SKU + DIFFERENT buy price → new lot row, so the historical
+      //    cost basis is never overwritten (multi-lot FIFO, same pattern as
+      //    /api/data/inventory-lots).
+      const existing = db.prepare(
+        'SELECT id, quantity, quantity_remaining FROM inventory_ledger WHERE sku = ? AND buy_price = ? ORDER BY date_purchased DESC LIMIT 1'
+      ).get(sku, buyPriceCents) as any;
       if (existing) {
         db.prepare(`
           UPDATE inventory_ledger SET
-            buy_price = ?,
             quantity = quantity + ?,
             quantity_remaining = quantity_remaining + ?,
             supplier_id = COALESCE(?, supplier_id),
             date_purchased = COALESCE(?, date_purchased)
           WHERE id = ?
-        `).run(buyPriceCents, quantity, quantity, supplierId, purchaseDate || now, existing.id);
+        `).run(quantity, quantity, supplierId, purchaseDate || now, existing.id);
       } else {
         db.prepare(`
           INSERT INTO inventory_ledger (asin, sku, buy_price, quantity, quantity_remaining, supplier_id, date_purchased, created_at)

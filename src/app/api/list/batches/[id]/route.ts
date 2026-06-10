@@ -58,6 +58,7 @@ export async function GET(_request: NextRequest, { params }: { params: Promise<{
         transportation_carrier as transportationCarrier,
         transportation_shipping_mode as transportationShippingMode,
         transportation_confirmed_at as transportationConfirmedAt,
+        transportation_cost_cents as transportationCostCents,
         transportation_error as transportationError,
         notes,
         created_at as createdAt,

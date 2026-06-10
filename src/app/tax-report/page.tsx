@@ -29,7 +29,7 @@ interface TaxData {
   };
   perMarketplace: { marketplace: string; grossReceipts: number; productSales: number; shippingIncome: number; cogs: number; fees: number; refunds: number; clawbacks: number; shippingCosts: number; orders: number; units: number }[];
   incomeByMonth: { month: string; productSales: number; shippingIncome: number; orderCount: number; unitsSold: number }[];
-  cogs: { beginningInventory: number; purchases: number; inboundShipping: number; costOfGoodsSold: number; endingInventory: number };
+  cogs: { inboundShipping: number; costOfGoodsSold: number; note: string };
   amazonFees: { category: string; feeType: string; total: number; count: number }[];
   amazonFeeSummary: { category: string; total: number }[];
   otherExpenses: { category: string; total: number; count: number }[];
@@ -123,15 +123,10 @@ export default function TaxReportPage() {
     downloadCsv(`cogs-schedule-a-${year}.csv`,
       ['1120-S Schedule A Line', 'Description', 'Amount'],
       [
-        ['1', 'Inventory at Beginning of Year', centsToDollarStr(c.beginningInventory)],
-        ['2', 'Purchases', centsToDollarStr(c.purchases)],
-        ['3', 'Cost of Labor', '0.00'],
-        ['4', 'Additional Section 263A Costs', '0.00'],
         ['5', 'Other Costs (Inbound Shipping)', centsToDollarStr(c.inboundShipping)],
-        ['6', 'Total (Lines 1-5)', centsToDollarStr(c.beginningInventory + c.purchases + c.inboundShipping)],
-        ['7', 'Inventory at End of Year', centsToDollarStr(c.endingInventory)],
-        ['8', 'Cost of Goods Sold (Line 6 - Line 7)', centsToDollarStr(c.costOfGoodsSold)],
+        ['8', 'Cost of Goods Sold (FIFO, computed per sale)', centsToDollarStr(c.costOfGoodsSold)],
         ['9a', 'Method of Valuation: FIFO', ''],
+        ['note', c.note, ''],
       ]
     );
   }
@@ -350,21 +345,16 @@ export default function TaxReportPage() {
               </tr>
             </thead>
             <tbody>
-              <ScheduleRow line="1" label="Inventory at Beginning of Year" value={data.cogs.beginningInventory} />
-              <ScheduleRow line="2" label="Purchases" value={data.cogs.purchases} />
-              <ScheduleRow line="3" label="Cost of Labor" value={0} />
-              <ScheduleRow line="4" label="Additional Section 263A Costs" value={0} />
               <ScheduleRow line="5" label="Other Costs (Inbound Shipping)" value={data.cogs.inboundShipping} />
-              <ScheduleRow line="6" label="Total (Add Lines 1-5)" value={data.cogs.beginningInventory + data.cogs.purchases + data.cogs.inboundShipping} bold />
-              <ScheduleRow line="7" label="Inventory at End of Year" value={data.cogs.endingInventory} />
               <tr className="border-t-2 border-border-subtle">
                 <td className="py-2 font-mono text-xs text-accent">8</td>
-                <td className="py-2 font-semibold text-text-primary">Cost of Goods Sold (Line 6 - Line 7)</td>
+                <td className="py-2 font-semibold text-text-primary">Cost of Goods Sold (FIFO, computed per sale)</td>
                 <td className="py-2 text-right font-mono font-bold">{formatCurrency(data.cogs.costOfGoodsSold)}</td>
               </tr>
               <ScheduleRow line="9a" label="Method of valuation: FIFO (First In, First Out)" value={0} hideValue />
             </tbody>
           </table>
+          <p className="text-xs text-text-tertiary mt-3">{data.cogs.note}</p>
         </TaxSection>
 
         {/* Amazon Fee Breakdown */}

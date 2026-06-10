@@ -52,7 +52,7 @@ export async function GET(request: NextRequest) {
       JOIN (SELECT order_id, MIN(posted_date) as posted_date FROM financial_events WHERE event_type = 'ShipmentEvent' AND order_id IS NOT NULL GROUP BY order_id) fep ON o.order_id = fep.order_id
       LEFT JOIN products p ON oi.asin = p.asin
       LEFT JOIN (
-        SELECT order_id, SUM(ABS(amount)) as totalFees FROM fee_details WHERE order_id IS NOT NULL AND order_id != '' GROUP BY order_id
+        SELECT order_id, -SUM(amount) as totalFees FROM fee_details WHERE order_id IS NOT NULL AND order_id != '' GROUP BY order_id
       ) fd ON o.order_id = fd.order_id
       LEFT JOIN (
         SELECT order_id, SUM(total_price) as order_total FROM order_items GROUP BY order_id

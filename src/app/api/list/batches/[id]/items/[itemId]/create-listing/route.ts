@@ -62,6 +62,9 @@ export async function POST(_request: NextRequest, { params }: { params: Promise<
   if (!Number.isFinite(batchId) || !Number.isFinite(itId)) {
     return NextResponse.json({ error: 'Invalid id' }, { status: 400 });
   }
+  // force=1 re-pushes a known-good listing (e.g. a corrected price) even after
+  // the batch is sent/ACTIVE. Used to fix listings on a ready batch.
+  const force = new URL(_request.url).searchParams.get('force') === '1';
 
   const db = getDb();
   let batch: any, item: any, creds: SPAPICredentials | null;
@@ -69,8 +72,8 @@ export async function POST(_request: NextRequest, { params }: { params: Promise<
     batch = db.prepare('SELECT id, status, channel FROM listing_batches WHERE id = ?').get(batchId);
     if (!batch) { db.close(); return NextResponse.json({ error: 'Batch not found' }, { status: 404 }); }
     // Only pre-create while the batch is still being built. Once it's sending/
-    // ready/etc the Send flow owns listing creation.
-    if (batch.status !== 'draft') { db.close(); return NextResponse.json({ skipped: true, reason: `batch status is ${batch.status}` }); }
+    // ready/etc the Send flow owns listing creation — unless force re-push.
+    if (!force && batch.status !== 'draft') { db.close(); return NextResponse.json({ skipped: true, reason: `batch status is ${batch.status}` }); }
     if (batch.channel !== 'FBA' && batch.channel !== 'MFN') { db.close(); return NextResponse.json({ skipped: true, reason: `channel ${batch.channel}` }); }
 
     item = db.prepare(`
@@ -79,8 +82,17 @@ export async function POST(_request: NextRequest, { params }: { params: Promise<
     `).get(itId, batchId);
     if (!item) { db.close(); return NextResponse.json({ error: 'Item not found' }, { status: 404 }); }
 
-    // Already live — nothing to do (idempotent; avoids redundant PUTs).
-    if (item.listingStatus === 'ACTIVE') { db.close(); return NextResponse.json({ skipped: true, reason: 'already active', status: 'ACTIVE' }); }
+    // Already live — nothing to do (idempotent; avoids redundant PUTs) — unless force re-push.
+    if (!force && item.listingStatus === 'ACTIVE') { db.close(); return NextResponse.json({ skipped: true, reason: 'already active', status: 'ACTIVE' }); }
+
+    // NEVER push a $0 price to Amazon. Auto-create-on-add can fire before the
+    // user has typed a list price; a $0 offer is silently accepted by Amazon and
+    // then can't be sold (and breaks downstream packing/placement). Wait until a
+    // real price exists — Send re-checks this too. Applies even with force.
+    if (!item.listPriceCents || item.listPriceCents <= 0) {
+      db.close();
+      return NextResponse.json({ skipped: true, reason: 'no list price yet — not creating a $0 listing' });
+    }
 
     creds = getAmazonCredentials(db);
     db.close();
