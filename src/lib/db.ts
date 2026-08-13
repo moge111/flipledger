@@ -42,6 +42,8 @@ export function initializeDatabase() {
       category TEXT,
       image_url TEXT,
       marketplace TEXT DEFAULT 'amazon',
+      -- Walmart item ID, used to build listing deep links for WFS products.
+      walmart_item_id TEXT,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
     );
@@ -74,7 +76,13 @@ export function initializeDatabase() {
       price_per_unit INTEGER NOT NULL,
       total_price INTEGER NOT NULL,
       shipping_charged INTEGER DEFAULT 0,
-      shipping_cost INTEGER DEFAULT 0
+      shipping_cost INTEGER DEFAULT 0,
+      -- Negative cents, extracted from the ShipmentEvent PromotionList.
+      promotional_rebate INTEGER DEFAULT 0,
+      -- Filled by the FIFO engine, not by the sync. Read by P&L, Dashboard,
+      -- Cash Flow and the profitability pages — those queries fail outright
+      -- if the column is absent, so it belongs in the base schema.
+      cogs_per_unit INTEGER DEFAULT 0
     );
     -- Load-bearing: the Walmart order sync upserts via ON CONFLICT(order_id, asin, sku).
     -- The live DB has this from a manual migration; fresh installs need it here.
@@ -101,7 +109,10 @@ export function initializeDatabase() {
       fee_type TEXT NOT NULL,
       fee_category TEXT,
       amount INTEGER NOT NULL,
-      posted_date TEXT NOT NULL
+      posted_date TEXT NOT NULL,
+      -- Settlement reports carry the date a fee actually applies to, which can
+      -- differ by months from when it posted (storage fees especially).
+      effective_date TEXT
     );
 
     CREATE TABLE IF NOT EXISTS inventory_ledger (
@@ -749,8 +760,16 @@ export function initializeDatabase() {
     CREATE INDEX IF NOT EXISTS idx_merchant_listings_status ON merchant_listings(status);
   `);
 
-  // MFN subsystem column migrations (idempotent — ignore duplicate-column errors)
+  // Column migrations (idempotent — ignore duplicate-column errors).
+  // The first group is also in the CREATE TABLE statements above; they are
+  // repeated here so a DB created by an older schema gets upgraded in place
+  // rather than failing every P&L / Dashboard / profitability query with
+  // "no such column".
   for (const stmt of [
+    "ALTER TABLE order_items ADD COLUMN promotional_rebate INTEGER DEFAULT 0",
+    "ALTER TABLE order_items ADD COLUMN cogs_per_unit INTEGER DEFAULT 0",
+    "ALTER TABLE fee_details ADD COLUMN effective_date TEXT",
+    "ALTER TABLE products ADD COLUMN walmart_item_id TEXT",
     "ALTER TABLE inventory_ledger ADD COLUMN bin_location TEXT",
     "ALTER TABLE inventory_ledger ADD COLUMN condition TEXT",
     "ALTER TABLE inventory_ledger ADD COLUMN quantity_received INTEGER",
