@@ -17,6 +17,8 @@ import { syncReimbursementsReport } from './reimbursementsReport';
 import { dedupAmazonReimbursements } from './dedupReimbursements';
 import { syncAmazonDisputeCandidates } from './amazonDisputeCandidates';
 import { syncWalmartDisputeCandidates } from '../walmart-api/disputeCandidates';
+import { syncRecoveryDiscrepancies } from '../recovery/discrepancies';
+import { reconcileStaleSendingBatches } from '../listing-reconcile';
 import { generateRecurringExpenses } from '../recurring-expenses';
 import { recalculateFIFO } from '../fifo';
 import { createBackup } from '../backup';
@@ -24,7 +26,22 @@ import type { SPAPICredentials } from './types';
 import Database from 'better-sqlite3';
 import path from 'path';
 
-let syncInterval: NodeJS.Timeout | null = null;
+// Scheduler state lives on globalThis, NOT module scope. In Next.js dev mode
+// every recompile creates a fresh module instance — a module-scoped guard
+// resets to null, the next /api/sync/auto call registers ANOTHER interval,
+// and the old closures keep ticking. Over a long dev-server uptime this
+// stacked multiple live sync loops (observed July 1, 2026: 5 concurrent
+// walmart/ebay/full syncs fighting over SP-API rate limits). globalThis
+// survives module reloads within the same process.
+const g = globalThis as typeof globalThis & {
+  __flAutoSyncInterval?: NodeJS.Timeout | null;
+  __flAutoSyncTickRunning?: boolean;
+};
+
+// Per-module-instance flag: prevents THIS copy of the module from
+// re-registering on repeated /api/sync/auto calls.
+let registeredByThisInstance = false;
+
 const SYNC_INTERVAL_HOURS = 1;
 const CHECK_INTERVAL_MS = 15 * 60 * 1000; // Check every 15 minutes
 const LOOKBACK_DAYS = 14; // Sync last 2 weeks each run
@@ -115,18 +132,18 @@ function setLastSyncTime(key: string, value: string) {
 // Reentrancy guard: a tick can run >15 minutes (async report jobs), at which
 // point the next setInterval firing would re-enter the report syncs
 // concurrently — their *_last_sync timestamps are only written on completion.
-let tickRunning = false;
-
+// Lives on globalThis so the guard also covers ticks fired by a stale module
+// instance that a hot reload left behind.
 async function autoSyncTick() {
-  if (tickRunning) {
+  if (g.__flAutoSyncTickRunning) {
     console.log('[AutoSync] Previous tick still running, skipping');
     return;
   }
-  tickRunning = true;
+  g.__flAutoSyncTickRunning = true;
   try {
     await autoSyncTickInner();
   } finally {
-    tickRunning = false;
+    g.__flAutoSyncTickRunning = false;
   }
 }
 
@@ -211,6 +228,21 @@ async function autoSyncTickInner() {
     }
   } catch (err) {
     console.error('[AutoSync] Amazon disputes error:', err);
+  }
+
+  // Recovery Hub discrepancy detectors (refund-without-return, FBA fee
+  // overcharge) — re-classify after refunds/reimbursements/fees refreshed.
+  // Pure SQL, runs in milliseconds.
+  try {
+    const result = syncRecoveryDiscrepancies();
+    if (result.refundNoReturn.eligible > 0 || result.feeOvercharge.flagged > 0) {
+      console.log(
+        `[AutoSync] Recovery scan: ${result.refundNoReturn.eligible} refund-no-return eligible, ` +
+          `${result.feeOvercharge.flagged} fee overcharges flagged`
+      );
+    }
+  } catch (err) {
+    console.error('[AutoSync] Recovery scan error:', err);
   }
 
   // Amazon Sales Rank (daily) — snapshots BSR for every active ASIN.
@@ -320,6 +352,20 @@ async function autoSyncTickInner() {
     }
   }
 
+  // Finish listing batches stuck in 'sending'. The browser only polls
+  // /status while the batch page is open — a closed tab used to leave
+  // batches in 'sending' forever (observed: 3 MFN batches stuck 3 weeks).
+  // Only touches batches whose send started >3h ago, so an in-flight send
+  // POST (worst-case ~80 min of internal retries) is never raced.
+  try {
+    const sweep = await reconcileStaleSendingBatches();
+    if (sweep.checked > 0) {
+      console.log(`[AutoSync] Sending-batch sweep: ${sweep.checked} checked, ${sweep.transitioned} transitioned`);
+    }
+  } catch (err) {
+    console.error('[AutoSync] Sending-batch sweep error:', err);
+  }
+
   // Generate any new recurring expenses
   try {
     const result = generateRecurringExpenses();
@@ -361,25 +407,36 @@ async function autoSyncTickInner() {
 }
 
 export function startAutoSync() {
-  if (syncInterval) return; // Already running
+  if (registeredByThisInstance) return; // this module copy already registered
+  registeredByThisInstance = true;
 
-  console.log(`[AutoSync] Starting auto-sync scheduler (every ${SYNC_INTERVAL_HOURS}h, checking every 15min, ${LOOKBACK_DAYS}-day lookback)`);
-
-  // Run first sync after 10 seconds (give the app time to start)
-  setTimeout(() => {
-    autoSyncTick();
-  }, 10000);
+  if (g.__flAutoSyncInterval) {
+    // A previous module instance (pre hot-reload) owns the loop. Take it over
+    // so (a) intervals can never stack, and (b) the NEWEST compiled sync code
+    // is what actually runs — no more full-restart-required after editing
+    // sync modules.
+    clearInterval(g.__flAutoSyncInterval);
+    console.log('[AutoSync] Re-registering scheduler from a fresh module instance (hot reload)');
+  } else {
+    console.log(`[AutoSync] Starting auto-sync scheduler (every ${SYNC_INTERVAL_HOURS}h, checking every 15min, ${LOOKBACK_DAYS}-day lookback)`);
+    // Run first sync after 10 seconds (give the app time to start).
+    // Only on the very first registration — re-registrations after hot
+    // reloads shouldn't fire an immediate tick on every page load.
+    setTimeout(() => {
+      autoSyncTick();
+    }, 10000);
+  }
 
   // Check every 15 minutes if a sync is needed
-  syncInterval = setInterval(() => {
+  g.__flAutoSyncInterval = setInterval(() => {
     autoSyncTick();
   }, CHECK_INTERVAL_MS);
 }
 
 export function stopAutoSync() {
-  if (syncInterval) {
-    clearInterval(syncInterval);
-    syncInterval = null;
+  if (g.__flAutoSyncInterval) {
+    clearInterval(g.__flAutoSyncInterval);
+    g.__flAutoSyncInterval = null;
     console.log('[AutoSync] Stopped');
   }
 }

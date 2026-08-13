@@ -1,10 +1,11 @@
 import Database from 'better-sqlite3';
 import { drizzle } from 'drizzle-orm/better-sqlite3';
 import * as schema from './schema';
-import fs from 'fs';
 import path from 'path';
+import fs from 'fs';
 
-const DB_PATH = path.join(process.cwd(), 'data', 'flipledger.db');
+// FLIPLEDGER_DB_PATH is set by the test suite to point at a fixture DB.
+const DB_PATH = process.env.FLIPLEDGER_DB_PATH || path.join(process.cwd(), 'data', 'flipledger.db');
 
 // Ensure the data dir exists before opening the DB. A fresh clone has no data/.
 fs.mkdirSync(path.dirname(DB_PATH), { recursive: true });
@@ -75,6 +76,9 @@ export function initializeDatabase() {
       shipping_charged INTEGER DEFAULT 0,
       shipping_cost INTEGER DEFAULT 0
     );
+    -- Load-bearing: the Walmart order sync upserts via ON CONFLICT(order_id, asin, sku).
+    -- The live DB has this from a manual migration; fresh installs need it here.
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_order_items_unique ON order_items(order_id, asin, sku);
 
     CREATE TABLE IF NOT EXISTS financial_events (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -131,6 +135,27 @@ export function initializeDatabase() {
       marketplace TEXT DEFAULT 'amazon',
       created_at TEXT NOT NULL
     );
+
+    -- Cross-period COGS reversals, managed entirely by the FIFO engine.
+    -- When an item sells in one year and is returned (item_returned=1, full
+    -- qty, Walmart settlement-gated) in a LATER year, the sale keeps its
+    -- original COGS (protects the filed year) and the relief is booked here,
+    -- dated at the refund. P&L/Dashboard/Cashflow/Tax subtract these in the
+    -- refund's period. Same-year returns keep the zero-at-sale behavior and
+    -- never appear here.
+    CREATE TABLE IF NOT EXISTS cogs_reversals (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      order_item_id INTEGER NOT NULL UNIQUE,
+      order_id TEXT NOT NULL,
+      sku TEXT,
+      asin TEXT,
+      quantity INTEGER NOT NULL,
+      amount INTEGER NOT NULL,
+      refund_date TEXT NOT NULL,
+      marketplace TEXT DEFAULT 'amazon',
+      created_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_cogs_reversals_date ON cogs_reversals(refund_date);
 
     CREATE TABLE IF NOT EXISTS reimbursements (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -346,6 +371,45 @@ export function initializeDatabase() {
       ON reimbursement_candidates(status);
     CREATE INDEX IF NOT EXISTS idx_reimbursement_candidates_eligible
       ON reimbursement_candidates(eligible_until);
+
+    -- Recovery Hub discrepancy candidates. New detector types that don't
+    -- fit the four existing recovery tables:
+    --   'refund_no_return'  — FBA refund issued, customer never sent the
+    --     item back (no FBA customer-returns report row after 45+ days),
+    --     and Amazon never reimbursed. Claimable days 45-105 after refund
+    --     per Amazon's FBA reimbursement policy.
+    --   'fee_overcharge'    — per-unit FBA fulfillment fee for an ASIN
+    --     jumped vs its own baseline (likely cubiscan remeasurement).
+    --     Recoverable via a remeasurement request + fee reimbursement case.
+    -- One table for all new detector types; ref_key is unique per type.
+    CREATE TABLE IF NOT EXISTS recovery_discrepancies (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      discrepancy_type TEXT NOT NULL,
+      ref_key TEXT NOT NULL,
+      order_id TEXT,
+      asin TEXT,
+      sku TEXT,
+      product_name TEXT,
+      event_date TEXT NOT NULL,
+      quantity INTEGER DEFAULT 1,
+      estimated_value_cents INTEGER NOT NULL,
+      eligibility TEXT NOT NULL,                 -- eligible | waiting | not_eligible
+      eligibility_reasons TEXT,                  -- JSON array of tag strings
+      eligible_from TEXT,                        -- claims accepted starting this date
+      window_until TEXT,                         -- claim window closes this date
+      detail TEXT,                               -- JSON evidence blob per type
+      status TEXT NOT NULL DEFAULT 'pending',    -- pending | filed | received | dismissed | expired
+      filed_at TEXT,
+      claim_notes TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_recovery_discrepancies_unique
+      ON recovery_discrepancies(discrepancy_type, ref_key);
+    CREATE INDEX IF NOT EXISTS idx_recovery_discrepancies_status
+      ON recovery_discrepancies(status);
+    CREATE INDEX IF NOT EXISTS idx_recovery_discrepancies_window
+      ON recovery_discrepancies(window_until);
 
     -- Best-Sellers-Rank snapshots from Catalog API. One row per
     -- (asin, captured_date) — daily granularity is enough.
@@ -591,12 +655,136 @@ export function initializeDatabase() {
       estimated_at TEXT NOT NULL,
       PRIMARY KEY (asin, marketplace)
     );
+
+    -- Populated on demand by /api/sync/storage-fees and /api/sync/inbound-items,
+    -- but created here too: the profitability route reads storage_fees_per_asin
+    -- unconditionally, so a fresh install would otherwise fail with
+    -- "no such table" before those syncs have ever run.
+    CREATE TABLE IF NOT EXISTS storage_fees_per_asin (
+      asin TEXT PRIMARY KEY,
+      monthly_fee INTEGER NOT NULL,
+      size_tier TEXT,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS inbound_cost_per_sku (
+      sku TEXT NOT NULL,
+      asin TEXT,
+      shipment_id TEXT NOT NULL,
+      inbound_cost_per_unit INTEGER NOT NULL,
+      units INTEGER NOT NULL,
+      updated_at TEXT NOT NULL,
+      PRIMARY KEY (sku, shipment_id)
+    );
+
+    -- Live marketplace stock levels (Amazon FBA + Walmart WFS).
+    -- Distinct from inventory_ledger, which tracks COGS lots: this is the
+    -- current on-hand/inbound/reserved snapshot pulled from the marketplace
+    -- APIs, and is what the Inventory pages and valuation read.
+    -- total_qty is generated so callers never have to sum the buckets.
+    CREATE TABLE IF NOT EXISTS live_inventory (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      asin TEXT NOT NULL,
+      sku TEXT,
+      marketplace TEXT NOT NULL DEFAULT 'amazon',
+      fulfillable_qty INTEGER NOT NULL DEFAULT 0,
+      inbound_qty INTEGER NOT NULL DEFAULT 0,
+      reserved_qty INTEGER NOT NULL DEFAULT 0,
+      unfulfillable_qty INTEGER NOT NULL DEFAULT 0,
+      total_qty INTEGER GENERATED ALWAYS AS (
+        fulfillable_qty + inbound_qty + reserved_qty + unfulfillable_qty
+      ) STORED,
+      product_name TEXT,
+      last_updated TEXT NOT NULL,
+      -- Amazon breaks inbound/reserved into sub-stages; Walmart reports lumps
+      -- only, so these stay 0 for WFS rows.
+      inbound_working INTEGER DEFAULT 0,
+      inbound_shipped INTEGER DEFAULT 0,
+      inbound_receiving INTEGER DEFAULT 0,
+      reserved_customer_order INTEGER DEFAULT 0,
+      reserved_fc_transfer INTEGER DEFAULT 0,
+      reserved_fc_processing INTEGER DEFAULT 0,
+      list_price INTEGER DEFAULT 0,
+      walmart_item_id TEXT,
+      UNIQUE(asin, sku, marketplace)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_live_inventory_marketplace ON live_inventory(marketplace);
+    CREATE INDEX IF NOT EXISTS idx_live_inventory_sku ON live_inventory(sku);
+
+    -- MFN / merchant-fulfilled subsystem (ported from Huffdowg27 fork) --
+    CREATE TABLE IF NOT EXISTS mfn_push_log (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      pushed_at TEXT NOT NULL,
+      sku TEXT NOT NULL,
+      asin TEXT,
+      il_id INTEGER,
+      proposed_qty INTEGER,
+      proposed_price_cents INTEGER,
+      proposed_shipping_template TEXT,
+      sp_api_status TEXT,
+      sp_api_submission_id TEXT,
+      sp_api_issues TEXT,
+      error_message TEXT,
+      dry_run INTEGER NOT NULL DEFAULT 0
+    );
+    CREATE INDEX IF NOT EXISTS idx_mfn_push_log_sku ON mfn_push_log(sku);
+    CREATE INDEX IF NOT EXISTS idx_mfn_push_log_pushed_at ON mfn_push_log(pushed_at);
+
+    CREATE TABLE IF NOT EXISTS merchant_listings (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      asin TEXT NOT NULL,
+      sku TEXT NOT NULL,
+      marketplace TEXT NOT NULL DEFAULT 'amazon',
+      status TEXT,
+      quantity INTEGER,
+      product_name TEXT,
+      condition TEXT,
+      list_price_cents INTEGER,
+      last_synced TEXT NOT NULL,
+      sync_report_id TEXT,
+      UNIQUE(asin, sku, marketplace)
+    );
+    CREATE INDEX IF NOT EXISTS idx_merchant_listings_sku ON merchant_listings(sku);
+    CREATE INDEX IF NOT EXISTS idx_merchant_listings_status ON merchant_listings(status);
   `);
 
-  // Additive migrations for databases created before a column existed.
-  // CREATE TABLE IF NOT EXISTS doesn't alter existing tables, so add new
-  // columns here; the try/catch makes re-runs a no-op.
-  try {
-    sqlite.exec('ALTER TABLE listing_batches ADD COLUMN transportation_cost_cents INTEGER');
-  } catch { /* column already exists */ }
+  // MFN subsystem column migrations (idempotent — ignore duplicate-column errors)
+  for (const stmt of [
+    "ALTER TABLE inventory_ledger ADD COLUMN bin_location TEXT",
+    "ALTER TABLE inventory_ledger ADD COLUMN condition TEXT",
+    "ALTER TABLE inventory_ledger ADD COLUMN quantity_received INTEGER",
+    "ALTER TABLE inventory_ledger ADD COLUMN received_at TEXT",
+    "ALTER TABLE inventory_ledger ADD COLUMN inspected_at TEXT",
+    "ALTER TABLE inventory_ledger ADD COLUMN receive_notes TEXT",
+    "ALTER TABLE inventory_ledger ADD COLUMN list_price_cents INTEGER",
+    "ALTER TABLE inventory_ledger ADD COLUMN merchant_shipping_group_name TEXT",
+    "ALTER TABLE inventory_ledger ADD COLUMN batch_id INTEGER",
+    "ALTER TABLE listing_batch_items ADD COLUMN listing_mode TEXT DEFAULT 'CREATE_NEW'",
+    "ALTER TABLE listing_batch_items ADD COLUMN fnsku TEXT",
+    "ALTER TABLE listing_batch_items ADD COLUMN fulfillment_channel TEXT",
+    "ALTER TABLE listing_batch_items ADD COLUMN listing_source TEXT",
+    "ALTER TABLE listing_batch_items ADD COLUMN amazon_inventory_status TEXT",
+    "ALTER TABLE listing_batch_items ADD COLUMN inventory_ledger_id INTEGER",
+    // Pre-flight validation (July 2026 hardening): checked at add time so
+    // gating / catalog defects / FNSKU registration surface BEFORE send.
+    "ALTER TABLE listing_batch_items ADD COLUMN inbound_ready INTEGER DEFAULT 0",
+    "ALTER TABLE listing_batch_items ADD COLUMN prep_category TEXT",
+    "ALTER TABLE listing_batch_items ADD COLUMN preflight_status TEXT",
+    "ALTER TABLE listing_batch_items ADD COLUMN preflight_detail TEXT",
+    "ALTER TABLE listing_batch_items ADD COLUMN preflight_checked_at TEXT",
+    "ALTER TABLE listing_batches ADD COLUMN closed_at TEXT",
+    "ALTER TABLE orders ADD COLUMN order_total INTEGER DEFAULT 0",
+    "ALTER TABLE orders ADD COLUMN order_total_currency TEXT",
+    "ALTER TABLE products ADD COLUMN catalog_last_enriched TEXT",
+    "ALTER TABLE merchant_listings ADD COLUMN listing_id TEXT",
+    "ALTER TABLE merchant_listings ADD COLUMN fulfillment_channel TEXT",
+    "ALTER TABLE merchant_listings ADD COLUMN item_condition TEXT",
+    "ALTER TABLE merchant_listings ADD COLUMN item_name TEXT",
+    "ALTER TABLE merchant_listings ADD COLUMN open_date TEXT",
+    "ALTER TABLE merchant_listings ADD COLUMN source_report_type TEXT",
+    "CREATE INDEX IF NOT EXISTS idx_inventory_ledger_batch ON inventory_ledger(batch_id)",
+  ]) {
+    try { sqlite.exec(stmt); } catch { /* already applied */ }
+  }
 }

@@ -11,7 +11,7 @@
  * Reimbursements (Net Payable NEGATIVE = credit to seller) → reimbursements table:
  *   Refund, LostInventory
  *
- * Skips seller recon dumps *_reconciliationreport (already synced via recon API) and
+ * Skips *_reconciliationreport exports (already synced via recon API) and
  * ItemSalesReport (unrelated). Idempotent: deletes prior import then re-inserts.
  */
 import { NextResponse } from 'next/server';
@@ -64,6 +64,18 @@ function unexcel(v: string): string {
   return s.trim();
 }
 
+// Two Walmart WFS export shapes carry the same data under different headers:
+//   - per-fee-type "Services Fees" CSVs: Transaction Date/Time, Partner GTIN, …
+//   - the full YTD "Settlement Report": Transaction Date and Time, GTIN, …
+// pick() reads whichever alias is present.
+function pick(row: Record<string, string>, ...keys: string[]): string {
+  for (const k of keys) {
+    const v = row[k];
+    if (v != null && v.trim() !== '') return v.trim();
+  }
+  return '';
+}
+
 export async function POST() {
   if (!fs.existsSync(DIR)) {
     return NextResponse.json({ error: `Directory not found: ${DIR}` }, { status: 400 });
@@ -85,7 +97,15 @@ export async function POST() {
     if (!/"?Transaction Type"?/.test(text.split('\n')[0]) || !/Net Payable/.test(text.split('\n')[0])) {
       skipped.push(file); continue;
     }
-    const fileDate = (file.match(/_(\d{4}-\d{2}-\d{2})_/) || [])[1] || '';
+    // The full Settlement Report carries reimbursements AND costs, but its
+    // cost rows duplicate what we already track more precisely: FulfillmentFee
+    // is the recon WalmartFee (pick/pack), and its StorageFee is a single
+    // undated lump vs the granular per-fee-type StorageFee CSVs. So from a
+    // settlement report we take ONLY reimbursements; costs come from the
+    // per-fee-type exports (and FulfillmentFee from recon).
+    const isSettlementReport = /^SettlementReport/i.test(file) || /WFS Reference ID/.test(text.split('\n')[0]);
+    // filename date: per-fee-type "_YYYY-MM-DD_" or settlement "_YYYY-MM-DDThh…"
+    const fileDate = (file.match(/_(\d{4}-\d{2}-\d{2})[_T]/) || [])[1] || '';
     const rows = parseCsv(text);
     filesParsed++;
     for (const row of rows) {
@@ -95,16 +115,21 @@ export async function POST() {
       if (npRaw === '') continue;
       const np = parseFloat(npRaw);
       if (!isFinite(np)) continue;
-      const day = ((row['Transaction Date/Time'] || '').trim().slice(0, 10)) || fileDate;
+      const day = (pick(row, 'Transaction Date/Time', 'Transaction Date and Time').slice(0, 10)) || fileDate;
       if (!day) continue;
-      const gtin = (row['Partner GTIN'] || '').trim();
-      const name = (row['Partner Item Name'] || '').trim();
-      const po = (row['Walmart.com PO #'] || '').trim();
-      const ref = (row['WFSReferenceID'] || '').trim();
+      const gtin = pick(row, 'Partner GTIN', 'GTIN');
+      const name = pick(row, 'Partner Item Name', 'Item Name');
+      const po = pick(row, 'Walmart.com PO #', 'PO Number');
+      const ref = pick(row, 'WFSReferenceID', 'WFS Reference ID');
 
       stats[type] = stats[type] || { rows: 0, cents: 0 };
       stats[type].rows++;
       stats[type].cents += Math.round(np * 100);
+
+      if (isSettlementReport && !REIMB_TYPES.has(type)) {
+        // settlement-report cost row — already tracked elsewhere, skip
+        continue;
+      }
 
       if (COST_MAP[type]) {
         // cost: store as NEGATIVE fee amount (P&L does -SUM(amount))

@@ -80,11 +80,22 @@ export async function GET(_request: NextRequest, { params }: { params: Promise<{
         listing_error as listingError,
         listing_updated_at as listingUpdatedAt,
         labels_printed_at as labelsPrintedAt,
+        fnsku,
+        inbound_ready as inboundReady,
+        prep_category as prepCategory,
+        preflight_status as preflightStatus,
+        preflight_detail as preflightDetail,
         created_at as createdAt
       FROM listing_batch_items
       WHERE batch_id = ?
       ORDER BY created_at ASC
-    `).all(batchId);
+    `).all(batchId) as any[];
+
+    // preflight_detail is stored as JSON — hand the frontend an object.
+    for (const it of items) {
+      try { it.preflightDetail = it.preflightDetail ? JSON.parse(it.preflightDetail) : null; }
+      catch { it.preflightDetail = null; }
+    }
 
     // Phase 3: include boxes + box-item assignments if any exist
     const boxes = db.prepare(`

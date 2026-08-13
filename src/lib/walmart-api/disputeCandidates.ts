@@ -19,26 +19,30 @@
 import Database from 'better-sqlite3';
 import path from 'path';
 
-const DISPUTE_WINDOW_DAYS = 30;
+// Walmart's published dispute rule (Marketplace Learn, "WFS customer returns,
+// reimbursement and dispute processes", verified July 2026): disputes must be
+// submitted within 45 DAYS of the dispute window opening. Openings vary by
+// scenario (RTS tracking delivery for damaged/wrong item, settlement date for
+// non-returnable charges); we approximate from the refund date.
+const DISPUTE_WINDOW_DAYS = 45;
 
-// Reasons that strongly suggest a customer-fault or carrier-fault return.
-// These are the bread-and-butter dispute targets.
+// WALMART-FAULT returns — WFS policy says Walmart covers these: "damaged in
+// transit, lost in transit, late arrival, incorrect item, unable to deliver,
+// damaged shipping box, or lost after delivery." These are the real dispute
+// targets.
 const HIGH_ELIGIBILITY_REASONS = new Set([
   'LOST_AFTER_DELIVERY',     // Customer claims package never arrived (porch piracy or fraud)
   'LOST_IN_TRANSIT',         // Carrier lost it
   'INCORRECT_ITEM',          // Customer claims wrong item received
-  'DAMAGED',                 // Could be customer-caused; depends on photos
+  'DAMAGED',                 // Damaged in transit / damaged shipping box — WFS handled it
+  'ARRIVED_LATE',            // "Late arrival" is on Walmart's own fault list
 ]);
 
-// Reasons that MAY be disputable depending on circumstances. Lower confidence.
-const MEDIUM_ELIGIBILITY_REASONS = new Set([
-  'ARRIVED_LATE',            // Sometimes carrier-side
-  'DEFECTIVE',               // Rarely disputable but worth flagging
-  'NOT_AS_DESCRIBED_PICTURED',// Sometimes disputable with listing screenshots
-  'MISSING_PARTS',
-]);
-
-// Reasons that essentially never win disputes
+// SELLER/CUSTOMER-FAULT returns — WFS policy is explicit that SELLERS cover
+// "wrong size, poor quality, missing parts, not as described, defective
+// items, customer refusals, changed mind, lower price elsewhere." Reason-based
+// disputes on these lose; they're only recoverable via the lost-in-pipeline
+// rule (unit vanished) which takes precedence above.
 const NOT_ELIGIBLE_REASONS = new Set([
   'NO_LONGER_WANTED',
   'LOWER_PRICE',
@@ -46,6 +50,9 @@ const NOT_ELIGIBLE_REASONS = new Set([
   'CHANGED_MIND',
   'FOUND_ELSEWHERE',
   'DIFFICULT_TO_SETUP_NOT_COMPATIBLE',
+  'DEFECTIVE',
+  'NOT_AS_DESCRIBED_PICTURED',
+  'MISSING_PARTS',
 ]);
 
 function getDb() {
@@ -61,16 +68,42 @@ function getDb() {
 // row may simply not exist yet.
 const RECON_SETTLEMENT_LAG_DAYS = 14;
 
+// A settled WFS return whose unit never reappears (no RTV fee, no current
+// stock, no post-refund sale) for this many days is presumed lost in
+// Walmart's returns pipeline. Two sources agree on the timing:
+// - Walmart's own case reply (15145714, June 2026): lost returns are
+//   auto-reimbursed if not delivered/processed within 60 days, posting can
+//   take up to 90 further days.
+// - Marketplace Learn (verified July 2026): the "item not processed / no
+//   reimbursement seen" dispute window OPENS 90 days after the return was
+//   initiated. Filing before day 90 earns a canned "wait" reply.
+const LOST_IN_PIPELINE_DAYS = 90;
+// Disputes must be submitted within 45 days of the window opening → the
+// claim is actionable days 90–135 after the return.
+const LOST_CLAIM_WINDOW_DAYS = 135;
+
 function classifyEligibility(
   reason: string,
   fulfillmentChannel: string | null,
   refundDate: string,
-  hasRefundEvent: boolean
-): { eligibility: 'eligible' | 'maybe' | 'not_eligible'; reasons: string[] } {
+  hasRefundEvent: boolean,
+  unitLostInPipeline: boolean
+): { eligibility: 'eligible' | 'maybe' | 'not_eligible'; reasons: string[]; windowDays?: number } {
   const tags: string[] = [];
 
   const refundTime = new Date(refundDate).getTime();
   const ageDays = (Date.now() - refundTime) / 86400000;
+
+  // Lost-in-pipeline rule: takes precedence over reason-based rules — the
+  // claim isn't about WHY the customer returned it, it's that Walmart
+  // deducted the refund AND the unit never came back to the seller's
+  // inventory. Applies even to "customer's right" reasons like LOWER_PRICE.
+  if (hasRefundEvent && fulfillmentChannel === 'WFS' && unitLostInPipeline && ageDays >= LOST_IN_PIPELINE_DAYS) {
+    tags.push(`Walmart deducted this refund ${Math.floor(ageDays)} days ago, but the unit never returned: no RTV fee, no restock, no resale, no reimbursement`);
+    tags.push('The "return not processed / no reimbursement" dispute window opens 90 days after the return — it is open now, and closes 45 days later. Open a Seller Support case ("Initiate claim")');
+    tags.push('Tip: refresh the Services Fees export first — a recent RTV fee, LostReturnAdjustment, or LostInventory reimbursement beyond your last import would clear this');
+    return { eligibility: 'eligible', reasons: tags, windowDays: LOST_CLAIM_WINDOW_DAYS };
+  }
 
   // No financial deduction detected
   if (!hasRefundEvent) {
@@ -109,15 +142,9 @@ function classifyEligibility(
   }
 
   if (HIGH_ELIGIBILITY_REASONS.has(reason)) {
-    tags.push(`Reason ${reason} typically wins disputes`);
+    tags.push(`Reason ${reason} is on Walmart's own "Walmart fault" list — WFS covers these`);
     tags.push('WFS-fulfilled — Walmart liability');
     return { eligibility: 'eligible', reasons: tags };
-  }
-
-  if (MEDIUM_ELIGIBILITY_REASONS.has(reason)) {
-    tags.push(`Reason ${reason} may win with evidence`);
-    tags.push('WFS-fulfilled — Walmart liability');
-    return { eligibility: 'maybe', reasons: tags };
   }
 
   // Unknown reason code — surface as maybe so the user can decide
@@ -183,6 +210,47 @@ export function syncWalmartDisputeCandidates(): WalmartDisputeSyncResult {
     `).all() as Array<{ order_id: string }>).map((r) => r.order_id)
   );
 
+  // Evidence the returned unit made it back: an RTV fee for the order's GTIN
+  // (shipped back to the seller), current sellable stock for the SKU, or a
+  // sale of the SKU after the refund. Absence of all three = lost in pipeline.
+  const hasRtvForOrder = db.prepare(`
+    SELECT 1 FROM fee_details fd
+    JOIN financial_events fe ON fe.id = fd.financial_event_id
+    WHERE fd.fee_type = 'WFSInventoryRTVFee'
+      AND fe.asin = (
+        SELECT MAX(json_extract(raw_data, '$."Partner GTIN"')) FROM financial_events
+        WHERE order_id = ? AND marketplace = 'walmart'
+          AND event_type IN ('WalmartReconEvent', 'WalmartRefundEvent')
+      )
+      AND date(fe.posted_date) >= date(?, '-14 days')
+    LIMIT 1
+  `);
+  const hasStock = db.prepare(`SELECT 1 FROM live_inventory WHERE sku = ? AND fulfillable_qty > 0 LIMIT 1`);
+  // Walmart's auto-reimbursement for a lost return arrives as a Walmart
+  // reimbursement — match by the order's GTIN (LostInventory rows from the
+  // Services Fees import store GTIN in asin) or by the order id appearing in
+  // the reimbursement id/reason (recon-sourced credits). Shape is best-effort
+  // until the first real auto-reimbursement is observed.
+  const hasReimbursement = db.prepare(`
+    SELECT 1 FROM reimbursements
+    WHERE marketplace = 'walmart' AND reimbursement_date >= ?
+      AND (
+        (? IS NOT NULL AND asin = ?)
+        OR reimbursement_id LIKE '%' || ? || '%'
+        OR reason LIKE '%' || ? || '%'
+      )
+    LIMIT 1
+  `);
+  const orderGtinStmt = db.prepare(`
+    SELECT MAX(json_extract(raw_data, '$."Partner GTIN"')) as gtin FROM financial_events
+    WHERE order_id = ? AND marketplace = 'walmart'
+      AND event_type IN ('WalmartReconEvent', 'WalmartRefundEvent')
+  `);
+  const hasLaterSale = db.prepare(`
+    SELECT 1 FROM order_items oi JOIN orders o ON o.order_id = oi.order_id
+    WHERE oi.sku = ? AND o.purchase_date > ? AND o.status != 'Cancelled' LIMIT 1
+  `);
+
   const upsert = db.prepare(`
     INSERT INTO walmart_dispute_candidates (
       refund_id, order_id, refund_date, return_reason, asin, sku, product_name,
@@ -210,8 +278,20 @@ export function syncWalmartDisputeCandidates(): WalmartDisputeSyncResult {
   const tx = db.transaction(() => {
     for (const r of refunds) {
       const hasRefundEvent = settledOrderIds.has(r.orderId);
-      const { eligibility, reasons } = classifyEligibility(r.reason, r.fulfillmentChannel, r.refundDate, hasRefundEvent);
-      const windowEnd = new Date(new Date(r.refundDate).getTime() + DISPUTE_WINDOW_DAYS * 86400000)
+      const gtin = hasRefundEvent && r.fulfillmentChannel === 'WFS'
+        ? (orderGtinStmt.get(r.orderId) as { gtin: string | null } | undefined)?.gtin ?? null
+        : null;
+      const unitLostInPipeline =
+        hasRefundEvent &&
+        r.fulfillmentChannel === 'WFS' &&
+        !hasRtvForOrder.get(r.orderId, r.refundDate) &&
+        !(r.sku && hasStock.get(r.sku)) &&
+        !(r.sku && hasLaterSale.get(r.sku, r.refundDate)) &&
+        !hasReimbursement.get(r.refundDate, gtin, gtin, r.orderId, r.orderId);
+      const { eligibility, reasons, windowDays } = classifyEligibility(
+        r.reason, r.fulfillmentChannel, r.refundDate, hasRefundEvent, unitLostInPipeline
+      );
+      const windowEnd = new Date(new Date(r.refundDate).getTime() + (windowDays || DISPUTE_WINDOW_DAYS) * 86400000)
         .toISOString().slice(0, 10);
 
       const status = eligibility === 'not_eligible' ? 'expired' : 'pending';

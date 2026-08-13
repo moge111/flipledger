@@ -36,24 +36,39 @@ export function formatNumber(value: number): string {
   return new Intl.NumberFormat('en-US').format(value);
 }
 
+/**
+ * Parse a date string for display.
+ *
+ * A bare `YYYY-MM-DD` (how expenses, refunds, and settlement rows store dates)
+ * is parsed as UTC midnight by `new Date()`, which renders as the PREVIOUS day
+ * in any negative-offset timezone. Those dates carry no time component, so they
+ * are built as local midnight instead. Full timestamps parse normally.
+ */
+function parseDisplayDate(dateStr: string): Date {
+  const bareDate = /^(\d{4})-(\d{2})-(\d{2})$/.exec(dateStr);
+  if (bareDate) {
+    const [, year, month, day] = bareDate;
+    return new Date(Number(year), Number(month) - 1, Number(day));
+  }
+  return new Date(dateStr);
+}
+
 /** Format date: "Apr 8, 2026" */
 export function formatDate(dateStr: string): string {
-  const date = new Date(dateStr);
   return new Intl.DateTimeFormat('en-US', {
     month: 'short',
     day: 'numeric',
     year: 'numeric',
-  }).format(date);
+  }).format(parseDisplayDate(dateStr));
 }
 
 /** Format date long: "April 08, 2026" */
 export function formatDateLong(dateStr: string): string {
-  const date = new Date(dateStr);
   return new Intl.DateTimeFormat('en-US', {
     month: 'long',
     day: '2-digit',
     year: 'numeric',
-  }).format(date);
+  }).format(parseDisplayDate(dateStr));
 }
 
 /** Format relative time: "2h ago", "3d ago" */

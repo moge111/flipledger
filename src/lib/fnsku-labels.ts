@@ -55,10 +55,32 @@ async function generateBarcodePng(fnsku: string): Promise<Buffer> {
 }
 
 /**
+ * Strip characters the WinAnsi (CP1252) fonts pdf-lib uses can't encode.
+ * Amazon/marketplace product titles routinely contain invisible or fancy
+ * unicode — zero-width spaces (U+200B), BOMs, bidi marks, curly quotes,
+ * em/en dashes, emoji — and pdf-lib THROWS on the first unencodable char,
+ * crashing the whole label PDF. (July 8, 2026: a leading U+200B on the Toy
+ * Story Woody title 500'd every label attempt for that item.) Normalize the
+ * common ones to ASCII and drop anything else outside Latin-1.
+ */
+export function winAnsiSafe(text: string): string {
+  if (!text) return '';
+  return text
+    .replace(/[​-‏‪-‮⁠﻿­]/g, '') // zero-width / bidi / BOM / soft hyphen
+    .replace(/[‘’‚‛]/g, "'")                     // curly single quotes
+    .replace(/[“”„‟]/g, '"')                     // curly double quotes
+    .replace(/[–—―]/g, '-')                           // en/em dashes
+    .replace(/…/g, '...')                                        // ellipsis
+    .replace(/[^\x00-\xFF]/g, '')                                    // anything else outside Latin-1
+    .trim();
+}
+
+/**
  * Truncate text to fit a target width in points at a given font size. Falls
  * back to character-count truncation if measurement fails.
  */
 function truncateForWidth(text: string, font: PDFFont, fontSize: number, maxWidth: number): string {
+  text = winAnsiSafe(text);
   if (!text) return '';
   if (font.widthOfTextAtSize(text, fontSize) <= maxWidth) return text;
   let truncated = text;
@@ -119,7 +141,7 @@ function drawLabel(
   // Condition — bottom, gray
   if (label.condition) {
     const condSize = 5;
-    const condText = label.condition;
+    const condText = winAnsiSafe(label.condition);
     const condWidth = font.widthOfTextAtSize(condText, condSize);
     page.drawText(condText, {
       x: (LABEL_WIDTH_PT - condWidth) / 2,

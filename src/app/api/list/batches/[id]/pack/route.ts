@@ -148,8 +148,12 @@ export async function POST(
     // committed, which locks the plan into skip-packing/LTL (no Partnered UPS).
     // Catch it here BEFORE anything is sent to Amazon so nothing gets locked.
     {
+      // Only items actually in the shipment — items excluded at Send
+      // (NOT_INBOUND_READY / FAILED) aren't in the inbound plan and can't be
+      // boxed, so they must not count toward the box-match pre-flight.
       const batchItemQtys = db.prepare(
-        `SELECT sku as msku, quantity FROM listing_batch_items WHERE batch_id = ?`
+        `SELECT sku as msku, quantity FROM listing_batch_items
+         WHERE batch_id = ? AND COALESCE(listing_status,'') NOT IN ('NOT_INBOUND_READY', 'FAILED')`
       ).all(batchId) as { msku: string; quantity: number }[];
       const boxedByMsku: Record<string, number> = {};
       for (const bi of boxItems) boxedByMsku[bi.msku] = (boxedByMsku[bi.msku] || 0) + bi.quantity;

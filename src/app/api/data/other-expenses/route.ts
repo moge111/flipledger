@@ -11,14 +11,18 @@ function getDb() {
 
 export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url);
+  const startDate = searchParams.get('startDate');
+  const endDate = searchParams.get('endDate');
   const days = parseInt(searchParams.get('days') || '30');
 
   const db = getDb();
-  const marketplace = searchParams.get('marketplace');
-  const MF = marketplace ? `AND o.marketplace = '${marketplace}'` : '';
-  const MF_R = marketplace ? `AND marketplace = '${marketplace}'` : '';
 
-  const cutoff = new Date(Date.now() - days * 86400000).toISOString();
+  // Prefer an explicit range from the page's date picker; fall back to ?days= for
+  // callers that still use it.
+  const rangeStart = startDate || new Date(Date.now() - days * 86400000).toISOString().slice(0, 10);
+  // expenses.date is a bare YYYY-MM-DD, so compare on the date portion only —
+  // an ISO end bound with a time component would exclude the final day.
+  const rangeEnd = endDate ? endDate.slice(0, 10) : '9999-12-31';
 
   try {
     const rows = db.prepare(`
@@ -30,9 +34,9 @@ export async function GET(request: NextRequest) {
         description,
         recurring
       FROM expenses
-      WHERE date >= ?
+      WHERE date(date) >= date(?) AND date(date) <= date(?)
       ORDER BY date DESC
-    `).all(cutoff) as any[];
+    `).all(rangeStart, rangeEnd) as any[];
 
     const items = rows.map((row) => ({
       id: row.id,

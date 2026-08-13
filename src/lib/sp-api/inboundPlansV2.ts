@@ -7,6 +7,7 @@
  * Docs: https://developer-docs.amazon.com/sp-api/docs/fulfillment-inbound-api-v2024-03-20-reference
  */
 import { getAccessToken, getEndpoint, spApiRequest, fetchWithRetry } from './auth';
+import { sanitizePlanName } from '@/lib/listing-send-policy';
 import type { SPAPICredentials } from './types';
 
 export interface SourceAddress {
@@ -68,7 +69,8 @@ export async function createInboundPlan(
   // Sending prepOwner='SELLER' for items that don't need prep returns:
   //   "{MSKU} does not require prepOwner but SELLER was assigned. Accepted values: [NONE]"
   const body: any = {
-    name: params.name,
+    // Amazon rejects plan names > 40 chars (found July 8, 2026 test shipment)
+    name: sanitizePlanName(params.name),
     sourceAddress: params.sourceAddress,
     destinationMarketplaces: params.destinationMarketplaces,
     items: params.items.map((i) => ({
@@ -153,40 +155,89 @@ export interface MskuPrepDetail {
 export async function setPrepDetails(
   credentials: SPAPICredentials,
   details: MskuPrepDetail[]
-): Promise<{ operationId: string }> {
+): Promise<{ operationId: string; skipped: string[] }> {
   const endpoint = getEndpoint(credentials.marketplaceId);
-  const accessToken = await getAccessToken(credentials);
 
-  const body = {
-    marketplaceId: credentials.marketplaceId,
-    mskuPrepDetails: details.map((d) => ({
-      msku: d.msku,
-      prepCategory: d.prepCategory || 'NONE',
-      prepTypes: d.prepTypes && d.prepTypes.length > 0
-        ? d.prepTypes
-        : ['ITEM_NO_PREP'],
-    })),
-  };
+  // This is a BATCHED call — one bad msku 400s the whole request, blocking
+  // prep for every other item in the batch. Amazon rejects any msku that
+  // already has an unchangeable prep category (e.g. FC_PROVIDED, where Amazon
+  // itself provides the prep):
+  //   "Prep category and types cannot be updated for msku X with existing
+  //    prep category of FC_PROVIDED."
+  // Those items don't NEED our prep call — Amazon already classified them.
+  // So on that specific error we drop the named msku(s) and retry with the
+  // rest, until the call succeeds or everything's been dropped. Returns the
+  // list of dropped mskus so the caller can set their plan prepOwner right.
+  // (July 8, 2026: a single FC_PROVIDED Funko Pop failed prep for a whole
+  // 19-item shipment and cascaded into FBA_INB_0182.)
+  let working = [...details];
+  const skipped: string[] = [];
 
-  const response = await fetchWithRetry(`${endpoint}/inbound/fba/2024-03-20/items/prepDetails`, {
-    method: 'POST',
-    headers: {
-      'x-amz-access-token': accessToken,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify(body),
-  });
+  for (let attempt = 0; attempt < details.length + 1; attempt++) {
+    if (working.length === 0) return { operationId: '', skipped };
 
-  if (!response.ok) {
+    const accessToken = await getAccessToken(credentials);
+    const body = {
+      marketplaceId: credentials.marketplaceId,
+      mskuPrepDetails: working.map((d) => ({
+        msku: d.msku,
+        prepCategory: d.prepCategory || 'NONE',
+        prepTypes: d.prepTypes && d.prepTypes.length > 0 ? d.prepTypes : ['ITEM_NO_PREP'],
+      })),
+    };
+
+    const response = await fetchWithRetry(`${endpoint}/inbound/fba/2024-03-20/items/prepDetails`, {
+      method: 'POST',
+      headers: { 'x-amz-access-token': accessToken, 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+
+    if (response.ok) {
+      const data = await response.json();
+      if (!data?.operationId) {
+        throw new Error(`setPrepDetails: missing operationId in response: ${JSON.stringify(data)}`);
+      }
+      return { operationId: data.operationId, skipped };
+    }
+
     const errorBody = await response.text();
-    throw new Error(`SP-API setPrepDetails ${response.status}: ${errorBody}`);
+    // Extract every msku Amazon says can't be updated, drop them, and retry.
+    const bad = [...errorBody.matchAll(/cannot be updated for msku (\S+?)\s+with existing prep category/g)].map((m) => m[1]);
+    if (bad.length === 0) {
+      throw new Error(`SP-API setPrepDetails ${response.status}: ${errorBody}`);
+    }
+    const before = working.length;
+    working = working.filter((d) => !bad.includes(d.msku));
+    skipped.push(...bad.filter((b) => !skipped.includes(b)));
+    if (working.length === before) {
+      // Couldn't match the named msku to our list — avoid an infinite loop.
+      throw new Error(`SP-API setPrepDetails ${response.status} (unresolved): ${errorBody}`);
+    }
+    console.warn(`[setPrepDetails] dropped already-classified msku(s): ${bad.join(', ')} — retrying with ${working.length} item(s)`);
   }
+  return { operationId: '', skipped };
+}
 
-  const data = await response.json();
-  if (!data?.operationId) {
-    throw new Error(`setPrepDetails: missing operationId in response: ${JSON.stringify(data)}`);
-  }
-  return { operationId: data.operationId };
+/**
+ * Read back the prep classification Amazon currently has on file for each MSKU.
+ * prepCategory='UNKNOWN' means our setPrepDetails never stuck (usually because
+ * it was set before the FNSKU fully propagated) — createInboundPlan will then
+ * fail the operation with FBA_INB_0182 "Prep classification missing." We use
+ * this to VERIFY prep stuck before creating the plan.
+ *
+ * GET /inbound/fba/2024-03-20/items/prepDetails?marketplaceId=&mskus=
+ */
+export async function getPrepDetails(
+  credentials: SPAPICredentials,
+  mskus: string[]
+): Promise<Array<{ msku: string; prepCategory: string; prepTypes?: string[] }>> {
+  if (mskus.length === 0) return [];
+  const data = await spApiRequest(
+    credentials,
+    `/inbound/fba/2024-03-20/items/prepDetails`,
+    { marketplaceId: credentials.marketplaceId, mskus: mskus.join(',') }
+  );
+  return (data?.mskuPrepDetails || []) as Array<{ msku: string; prepCategory: string; prepTypes?: string[] }>;
 }
 
 /**
@@ -910,25 +961,39 @@ export async function listTransportationOptions(
   placementOptionId: string
 ): Promise<TransportationOption[]> {
   const endpoint = getEndpoint(credentials.marketplaceId);
-  const accessToken = await getAccessToken(credentials);
 
-  const url = new URL(
-    `${endpoint}/inbound/fba/2024-03-20/inboundPlans/${encodeURIComponent(inboundPlanId)}/transportationOptions`
-  );
-  url.searchParams.set('placementOptionId', placementOptionId);
+  // PAGINATE. A multi-shipment placement returns a transportation option per
+  // (shipment × carrier × mode) — easily more than one page. Without following
+  // paginationToken we only saw the FIRST shipment's options, which made
+  // confirmTransportationOptions fail with "provided shipment ids do not match
+  // the shipments in the confirmed placement" (the 2nd shipment's option was
+  // never fetched, so it couldn't be confirmed). July 8, 2026.
+  const all: TransportationOption[] = [];
+  let paginationToken: string | undefined;
+  do {
+    const token = await getAccessToken(credentials);
+    const url = new URL(
+      `${endpoint}/inbound/fba/2024-03-20/inboundPlans/${encodeURIComponent(inboundPlanId)}/transportationOptions`
+    );
+    url.searchParams.set('placementOptionId', placementOptionId);
+    if (paginationToken) url.searchParams.set('paginationToken', paginationToken);
 
-  const response = await fetchWithRetry(url.toString(), {
-    headers: {
-      'x-amz-access-token': accessToken,
-      'Content-Type': 'application/json',
-    },
-  });
-  if (!response.ok) {
-    const errorBody = await response.text();
-    throw new Error(`SP-API listTransportationOptions ${response.status}: ${errorBody}`);
-  }
-  const data = await response.json();
-  return data?.transportationOptions || [];
+    const response = await fetchWithRetry(url.toString(), {
+      headers: {
+        'x-amz-access-token': token,
+        'Content-Type': 'application/json',
+      },
+    });
+    if (!response.ok) {
+      const errorBody = await response.text();
+      throw new Error(`SP-API listTransportationOptions ${response.status}: ${errorBody}`);
+    }
+    const data = await response.json();
+    all.push(...(data?.transportationOptions || []));
+    paginationToken = data?.pagination?.nextToken;
+  } while (paginationToken);
+
+  return all;
 }
 
 /**

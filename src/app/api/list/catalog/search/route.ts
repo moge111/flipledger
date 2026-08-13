@@ -56,9 +56,18 @@ export interface ExistingMsku {
   lastBuyPriceCents: number;
   source: 'live_inventory' | 'inventory_ledger' | 'listing_batch';
   unitsInStock?: number;     // fulfillable + inbound, from live_inventory if known
+  /**
+   * Which fulfillment channel this MSKU is currently registered on, when known.
+   * An MSKU can only be on ONE channel at a time — restocking an FBA MSKU from
+   * an MFN batch would PUT fulfillment_channel_code=DEFAULT and flip the live
+   * FBA listing to merchant-fulfilled, stranding its warehouse units.
+   */
+  channel?: 'FBA' | 'MFN';
+  /** Safe to offer as a restock target for the batch's channel. */
+  compatible: boolean;
 }
 
-function enrichWithHistory(item: CatalogItem): CatalogItem & {
+function enrichWithHistory(item: CatalogItem, wantChannel: 'FBA' | 'MFN' = 'FBA'): CatalogItem & {
   avgFeeRate?: number;
   avgSalePrice?: number;
   unitsSoldLast30d?: number;
@@ -153,6 +162,41 @@ function enrichWithHistory(item: CatalogItem): CatalogItem & {
       WHERE asin = ? AND sku IS NOT NULL AND sku != ''
     `).all(item.asin, item.asin, item.asin) as any[];
 
+    // Resolve the CURRENT fulfillment channel of each MSKU. Layered, most
+    // authoritative first:
+    //   1. merchant_listings.fulfillment_channel — straight from Amazon's open
+    //      listings report (AMAZON_NA = FBA, DEFAULT = MFN).
+    //   2. a listing_batch_item we published — its batch's channel, and an
+    //      FNSKU is proof of FBA registration.
+    //   3. live_inventory with real FBA units on hand/inbound ⇒ FBA.
+    // Anything we can't classify stays undefined and is treated as compatible
+    // (don't block the user on missing data — the add route re-checks).
+    const channelRows = db.prepare(`
+      SELECT sku AS msku,
+             CASE WHEN UPPER(COALESCE(fulfillment_channel,'')) = 'DEFAULT' THEN 'MFN'
+                  WHEN UPPER(COALESCE(fulfillment_channel,'')) LIKE 'AMAZON%' THEN 'FBA' END AS channel,
+             3 AS rank
+      FROM merchant_listings WHERE asin = ? AND sku IS NOT NULL AND sku != ''
+      UNION ALL
+      SELECT bi.sku AS msku,
+             CASE WHEN COALESCE(bi.fnsku,'') != '' THEN 'FBA' ELSE UPPER(b.channel) END AS channel,
+             2 AS rank
+      FROM listing_batch_items bi JOIN listing_batches b ON b.id = bi.batch_id
+      WHERE bi.asin = ? AND bi.sku IS NOT NULL AND bi.sku != ''
+      UNION ALL
+      SELECT sku AS msku, 'FBA' AS channel, 1 AS rank
+      FROM live_inventory
+      WHERE asin = ? AND sku IS NOT NULL AND sku != '' AND marketplace = 'amazon'
+        AND (COALESCE(fulfillable_qty,0) + COALESCE(inbound_qty,0) + COALESCE(reserved_qty,0)) > 0
+    `).all(item.asin, item.asin, item.asin) as any[];
+
+    const channelByMsku = new Map<string, { channel: 'FBA' | 'MFN'; rank: number }>();
+    for (const row of channelRows) {
+      if (row.channel !== 'FBA' && row.channel !== 'MFN') continue;
+      const prev = channelByMsku.get(row.msku);
+      if (!prev || row.rank > prev.rank) channelByMsku.set(row.msku, { channel: row.channel, rank: row.rank });
+    }
+
     const byMsku = new Map<string, ExistingMsku>();
     const priority: Record<string, number> = { live_inventory: 3, inventory_ledger: 2, listing_batch: 1 };
     for (const row of existingRows) {
@@ -163,14 +207,23 @@ function enrichWithHistory(item: CatalogItem): CatalogItem & {
           lastBuyPriceCents: row.lastBuyPriceCents || existing?.lastBuyPriceCents || 0,
           source: row.source,
           unitsInStock: row.unitsInStock ?? existing?.unitsInStock,
+          compatible: true,
         });
       } else if (row.lastBuyPriceCents && !existing.lastBuyPriceCents) {
         // Fill in buy price from a lower-priority source if the higher one didn't have it
         existing.lastBuyPriceCents = row.lastBuyPriceCents;
       }
     }
+    for (const m of byMsku.values()) {
+      const known = channelByMsku.get(m.msku)?.channel;
+      m.channel = known;
+      // Only an explicit channel MISMATCH is incompatible. Unknown ⇒ allow.
+      m.compatible = !known || known === wantChannel;
+    }
     const existingMskus = Array.from(byMsku.values()).sort((a, b) => {
-      // FBA-stocked first, then by most-recent-feeling source
+      // Compatible restock targets first — never lead with one that would flip
+      // the listing's channel.
+      if (a.compatible !== b.compatible) return a.compatible ? -1 : 1;
       const aStock = a.unitsInStock || 0;
       const bStock = b.unitsInStock || 0;
       if (aStock !== bStock) return bStock - aStock;
@@ -232,7 +285,7 @@ export async function GET(request: NextRequest) {
     }
 
     // Enrich each with historical data (sales velocity, stock, avg price, etc.)
-    const enrichedHistory = items.map(enrichWithHistory);
+    const enrichedHistory = items.map((it) => enrichWithHistory(it, isFBA ? 'FBA' : 'MFN'));
 
     // Pick a target price for fee estimation: explicit > avgSalePrice > lastBuyPrice*2 > 0
     const enrichedWithFees = await Promise.all(

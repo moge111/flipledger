@@ -55,10 +55,54 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
   const db = getDb();
   try {
     // Make sure the batch exists and is editable
-    const batch = db.prepare('SELECT status FROM listing_batches WHERE id = ?').get(batchId) as any;
+    const batch = db.prepare('SELECT status, channel FROM listing_batches WHERE id = ?').get(batchId) as any;
     if (!batch) return NextResponse.json({ error: 'Batch not found' }, { status: 404 });
     if (batch.status !== 'draft') {
       return NextResponse.json({ error: `Cannot add items to batch in status: ${batch.status}` }, { status: 400 });
+    }
+
+    // ── Cross-channel MSKU safeguard ─────────────────────────────────────
+    // Amazon keeps an MSKU on exactly ONE fulfillment channel. PUTting an MFN
+    // offer onto an MSKU that is live on FBA rewrites fulfillment_channel_code
+    // to DEFAULT — the FBA listing becomes merchant-fulfilled and its warehouse
+    // (and in-transit) units are stranded. The reverse is equally destructive.
+    // The UI hides incompatible restock chips, but enforce it here too so a
+    // hand-typed or imported SKU can't slip through.
+    const wantChannel: 'FBA' | 'MFN' = String(batch.channel || 'FBA').toUpperCase() === 'MFN' ? 'MFN' : 'FBA';
+    const skuChannel = (candidate: string): 'FBA' | 'MFN' | null => {
+      const row = db.prepare(`
+        SELECT channel FROM (
+          SELECT CASE WHEN UPPER(COALESCE(fulfillment_channel,'')) = 'DEFAULT' THEN 'MFN'
+                      WHEN UPPER(COALESCE(fulfillment_channel,'')) LIKE 'AMAZON%' THEN 'FBA' END AS channel,
+                 3 AS rank
+          FROM merchant_listings WHERE sku = ?
+          UNION ALL
+          SELECT CASE WHEN COALESCE(bi.fnsku,'') != '' THEN 'FBA' ELSE UPPER(b.channel) END AS channel, 2 AS rank
+          FROM listing_batch_items bi JOIN listing_batches b ON b.id = bi.batch_id
+          WHERE bi.sku = ? AND bi.batch_id != ?
+          UNION ALL
+          SELECT 'FBA' AS channel, 1 AS rank FROM live_inventory
+          WHERE sku = ? AND marketplace = 'amazon'
+            AND (COALESCE(fulfillable_qty,0) + COALESCE(inbound_qty,0) + COALESCE(reserved_qty,0)) > 0
+        ) WHERE channel IS NOT NULL ORDER BY rank DESC LIMIT 1
+      `).get(candidate, candidate, batchId, candidate) as any;
+      return row?.channel === 'FBA' || row?.channel === 'MFN' ? row.channel : null;
+    };
+    const conflict = skuChannel(sku);
+    if (conflict && conflict !== wantChannel) {
+      const suffixed = wantChannel === 'MFN' && !sku.toLowerCase().endsWith('-mfn')
+        ? `${sku}-mfn`
+        : `${sku}-${wantChannel.toLowerCase()}`;
+      // Only auto-rename into a slot that is itself free of a channel conflict.
+      const stillConflicts = skuChannel(suffixed);
+      if (stillConflicts && stillConflicts !== wantChannel) {
+        return NextResponse.json({
+          error: `MSKU "${sku}" is registered on the ${conflict} channel and this is a ${wantChannel} batch. ` +
+                 `Reusing it would move the existing Amazon listing to ${wantChannel}. Choose a different MSKU.`,
+          skuChannelConflict: { sku, existingChannel: conflict, batchChannel: wantChannel },
+        }, { status: 409 });
+      }
+      sku = suffixed;
     }
 
     // ── Duplicate-SKU safeguard ──────────────────────────────────────────

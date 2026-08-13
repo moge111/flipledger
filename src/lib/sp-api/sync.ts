@@ -24,10 +24,14 @@ function getDb() {
   return db;
 }
 
-let currentSync: SyncStatus | null = null;
+// Sync state lives on globalThis so hot-reloaded module instances share one
+// mutex — a module-level variable let a manual sync and the hourly auto-sync
+// run CONCURRENTLY across instances, corrupting shared dedup state (same
+// stacked-instance failure mode as the July 1 auto-sync scheduler fix).
+const g = globalThis as typeof globalThis & { __flCurrentSync?: SyncStatus | null };
 
 export function getSyncStatus(): SyncStatus | null {
-  return currentSync;
+  return g.__flCurrentSync || null;
 }
 
 /**
@@ -41,7 +45,7 @@ export async function runFullSync(
   explicitStartDate?: string,
   explicitEndDate?: string
 ): Promise<SyncStatus> {
-  if (currentSync?.running) {
+  if (g.__flCurrentSync?.running) {
     throw new Error('Sync already in progress');
   }
 
@@ -49,7 +53,7 @@ export async function runFullSync(
   const endDate = explicitEndDate || undefined;
   const now = new Date().toISOString();
 
-  currentSync = {
+  g.__flCurrentSync = {
     running: true,
     results: [],
     totalErrors: [],
@@ -79,7 +83,7 @@ export async function runFullSync(
       errors: ordResult.errors,
       duration: Date.now() - ordStart,
     };
-    currentSync.results.push(ordSyncResult);
+    g.__flCurrentSync!.results.push(ordSyncResult);
     totalRecords += ordResult.ordersProcessed;
     console.log(`[Sync] Orders: ${ordResult.ordersProcessed} orders, ${ordResult.errors.length} errors`);
 
@@ -94,7 +98,7 @@ export async function runFullSync(
       errors: finResult.errors,
       duration: Date.now() - finStart,
     };
-    currentSync.results.push(finSyncResult);
+    g.__flCurrentSync!.results.push(finSyncResult);
     totalRecords += finResult.eventsProcessed;
     console.log(`[Sync] Financial events: ${finResult.eventsProcessed} events, ${finResult.errors.length} errors`);
 
@@ -111,7 +115,7 @@ export async function runFullSync(
       errors: fin2Result.errors,
       duration: Date.now() - fin2Start,
     };
-    currentSync.results.push(fin2SyncResult);
+    g.__flCurrentSync!.results.push(fin2SyncResult);
     totalRecords += fin2Result.inserted + fin2Result.updated;
     console.log(`[Sync] Finances v2024: ${fin2Result.inserted} new, ${fin2Result.updated} updated, ${fin2Result.pagesFetched} page(s), ${fin2Result.errors.length} errors`);
 
@@ -125,7 +129,7 @@ export async function runFullSync(
       errors: invResult.errors,
       duration: Date.now() - invStart,
     };
-    currentSync.results.push(invSyncResult);
+    g.__flCurrentSync!.results.push(invSyncResult);
     totalRecords += invResult.itemsProcessed;
     console.log(`[Sync] FBA Inventory: ${invResult.itemsProcessed} items, ${invResult.errors.length} errors`);
 
@@ -139,7 +143,7 @@ export async function runFullSync(
       errors: catResult.errors,
       duration: Date.now() - catStart,
     };
-    currentSync.results.push(catSyncResult);
+    g.__flCurrentSync!.results.push(catSyncResult);
     console.log(`[Sync] Catalog: ${catResult.enriched} enriched, ${catResult.errors.length} errors`);
 
     // 5. Settlement Reports — shipping label costs + reconciliation data
@@ -152,7 +156,7 @@ export async function runFullSync(
       errors: setResult.errors,
       duration: Date.now() - setStart,
     };
-    currentSync.results.push(setSyncResult);
+    g.__flCurrentSync!.results.push(setSyncResult);
     console.log(`[Sync] Settlement Reports: ${setResult.reportsProcessed} reports, ${setResult.shippingCostsUpdated} shipping costs updated, ${setResult.errors.length} errors`);
 
     // 6. Override estimated fees with real data, then estimate fees for remaining orders
@@ -188,7 +192,7 @@ export async function runFullSync(
     }
 
     // Collect all errors
-    currentSync.totalErrors = [
+    g.__flCurrentSync!.totalErrors = [
       ...finResult.errors,
       ...ordResult.errors,
       ...invResult.errors,
@@ -203,9 +207,9 @@ export async function runFullSync(
       WHERE id = ?
     `).run(
       new Date().toISOString(),
-      currentSync.totalErrors.length > 0 ? 'partial' : 'success',
+      g.__flCurrentSync!.totalErrors.length > 0 ? 'partial' : 'success',
       totalRecords,
-      currentSync.totalErrors.length > 0 ? currentSync.totalErrors.join('\n').substring(0, 5000) : null,
+      g.__flCurrentSync!.totalErrors.length > 0 ? g.__flCurrentSync!.totalErrors.join('\n').substring(0, 5000) : null,
       syncLogId
     );
 
@@ -213,7 +217,7 @@ export async function runFullSync(
     db2.prepare(`INSERT OR REPLACE INTO settings (key, value) VALUES ('lastSync', ?)`).run(new Date().toISOString());
     db2.close();
 
-    console.log(`[Sync] Complete. ${totalRecords} total records, ${currentSync.totalErrors.length} errors.`);
+    console.log(`[Sync] Complete. ${totalRecords} total records, ${g.__flCurrentSync!.totalErrors.length} errors.`);
   } catch (error) {
     const db2 = getDb();
     db2.prepare(`
@@ -222,11 +226,11 @@ export async function runFullSync(
     `).run(new Date().toISOString(), String(error), syncLogId);
     db2.close();
 
-    currentSync.totalErrors.push(String(error));
+    g.__flCurrentSync!.totalErrors.push(String(error));
     console.error('[Sync] Fatal error:', error);
   }
 
-  currentSync.running = false;
-  currentSync.completedAt = new Date().toISOString();
-  return currentSync;
+  g.__flCurrentSync!.running = false;
+  g.__flCurrentSync!.completedAt = new Date().toISOString();
+  return g.__flCurrentSync!;
 }

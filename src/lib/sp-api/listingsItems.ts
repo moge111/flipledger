@@ -13,7 +13,7 @@ import { getAccessToken, getEndpoint, spApiRequest, fetchWithRetry } from './aut
 import type { SPAPICredentials } from './types';
 
 function getDb() {
-  const dbPath = path.join(process.cwd(), 'data', 'flipledger.db');
+  const dbPath = process.env.FLIPLEDGER_DB_PATH || path.join(process.cwd(), 'data', 'flipledger.db');
   const db = new Database(dbPath);
   db.pragma('journal_mode = WAL');
   return db;
@@ -140,7 +140,7 @@ export async function getProductType(
 }
 
 /** Map internal condition values to SP-API's expected condition_type values. */
-const CONDITION_MAP: Record<string, string> = {
+export const CONDITION_MAP: Record<string, string> = {
   NewItem: 'new_new',
   UsedLikeNew: 'used_like_new',
   UsedVeryGood: 'used_very_good',

@@ -70,7 +70,11 @@ export async function syncWalmartInventory(
     // Reset inbound counts before re-syncing
     db.prepare("UPDATE live_inventory SET inbound_qty = 0 WHERE marketplace = 'walmart'").run();
 
-    for (const status of ['AWAITING_DELIVERY', 'RECEIVING', 'IN_TRANSIT']) {
+    // Walmart's API only returns AWAITING_DELIVERY and CLOSED — every other
+    // status (RECEIVING, IN_TRANSIT, etc.) returns an empty body. CLOSED is
+    // included so the Inbound Shipping page reflects received shipments; only
+    // non-CLOSED shipments contribute to live_inventory.inbound_qty.
+    for (const status of ['AWAITING_DELIVERY', 'RECEIVING', 'IN_TRANSIT', 'CLOSED']) {
       let shipOffset = 0;
       do {
         let shipResponse: any;
@@ -83,11 +87,41 @@ export async function syncWalmartInventory(
 
         for (const shipment of shipments) {
           try {
-            const itemsRes = await walmartApiRequest(credentials, '/fulfillment/inbound-shipment-items', { shipmentId: shipment.shipmentId, limit: '500' });
-            for (const item of (itemsRes?.payload || [])) {
+            const sid = shipment.shipmentId;
+            if (!sid) continue;
+            const isClosed = shipment.status === 'CLOSED';
+            const carrier = shipment.carrierName || null;
+            const tracking = Array.isArray(shipment.trackingNo) ? shipment.trackingNo.join(',') : (shipment.trackingNo || null);
+            const totalUnits = shipment.shipmentUnits || 0;
+            const dateShipped = shipment.createdDate || now;
+
+            const existingShip = db.prepare("SELECT id, status FROM inbound_shipments WHERE shipment_id = ? AND marketplace = 'walmart'").get(sid) as any;
+            if (existingShip) {
+              db.prepare('UPDATE inbound_shipments SET status = ?, total_units = ?, carrier = COALESCE(?, carrier), tracking = COALESCE(?, tracking) WHERE id = ?')
+                .run(shipment.status || existingShip.status, totalUnits, carrier, tracking, existingShip.id);
+            } else {
+              db.prepare("INSERT INTO inbound_shipments (shipment_id, date_shipped, carrier, tracking, boxes, cost, total_units, status, marketplace, created_at) VALUES (?, ?, ?, ?, 1, 0, ?, ?, 'walmart', ?)")
+                .run(sid, dateShipped, carrier, tracking, totalUnits, shipment.status || 'UNKNOWN', now);
+            }
+
+            // Item fetch is skipped for CLOSED shipments we already have items
+            // for — otherwise every hourly sync would re-fetch ~100 shipments.
+            const storedItemCount = (db.prepare('SELECT COUNT(*) AS c FROM inbound_shipment_items WHERE shipment_id = ?').get(sid) as any).c;
+            const needItems = !isClosed || !existingShip || existingShip.status !== shipment.status || storedItemCount === 0;
+            if (!needItems) continue;
+
+            const itemsRes = await walmartApiRequest(credentials, '/fulfillment/inbound-shipment-items', { shipmentId: sid, limit: '500' });
+            const shipItems = itemsRes?.payload || [];
+            db.prepare('DELETE FROM inbound_shipment_items WHERE shipment_id = ?').run(sid);
+            for (const item of shipItems) {
               const sku = item.sku;
+              if (!sku) continue;
+              db.prepare('INSERT INTO inbound_shipment_items (shipment_id, asin, sku, quantity) VALUES (?, ?, ?, ?)')
+                .run(sid, item.gtin || sku, sku, item.itemQty || 0);
+
+              if (isClosed) continue;
               const inboundQty = (item.itemQty || 0) - (item.receivedQty || 0);
-              if (inboundQty <= 0 || !sku) continue;
+              if (inboundQty <= 0) continue;
 
               const existing = db.prepare("SELECT id FROM live_inventory WHERE sku = ? AND marketplace = 'walmart'").get(sku) as any;
               if (existing) {

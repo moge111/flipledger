@@ -57,7 +57,7 @@ for accuracy notes.
 ### Install + run
 
 ```bash
-git clone https://github.com/parkermorgan/flipledger.git
+git clone https://github.com/moge111/flipledger.git
 cd flipledger
 npm install
 
@@ -76,6 +76,14 @@ npm run dev
 3. Click "Sync Now" — first sync may take 5-15 minutes depending on order
    volume.
 4. Once data is in, fill in COGS for your SKUs on the Products page.
+5. If you sell on Walmart, do the **manual CSV imports** below — some Walmart
+   fees exist in no API and your P&L is wrong without them.
+
+### If you're shipping to Amazon FBA
+
+Fill in **Settings → Ship-From Address**. Amazon passes the business name,
+phone, and email to the carrier as the pickup contact, so there is no default —
+carrier booking refuses to run until they're set.
 
 ### Getting marketplace credentials
 
@@ -96,12 +104,121 @@ else's credentials.
 The SQLite DB lives at `data/flipledger.db`. The entire `data/` directory is
 in `.gitignore`. Don't commit it — it has your sales, fees, and credentials.
 
+```
+data/
+├── flipledger.db              # your books
+├── walmart-service-fees/      # unzipped Seller Center CSV exports (see below)
+└── backups/                   # automatic nightly snapshots
+```
+
+Automatic backups run nightly and are pruned on a tiered schedule (every
+snapshot for 7 days, then weekly to 16 weeks). Point **Settings → Backups →
+Backup folder** at a synced folder (iCloud Drive, Dropbox, etc.) to get
+off-machine durability — your entire books are one file.
+
 Backups are recommended before any major change. The author's preferred
 pattern:
 
 ```bash
 cp data/flipledger.db data/flipledger.db.bak-$(date +%Y%m%d-%H%M%S)
 ```
+
+---
+
+## Manual data imports (required for accurate Walmart numbers)
+
+Not everything is available over an API. Two categories of data have to be
+exported by hand from the seller portals and dropped into `data/`. **The
+Walmart one is not optional if you use WFS** — without it your Walmart P&L is
+missing real costs and real reimbursement income.
+
+### 1. Walmart WFS service fees — REQUIRED for WFS sellers
+
+Walmart's WFS service fees are **not in the recon/settlement API feed and not in
+any public Marketplace API.** This was verified exhaustively: recon report v1
+(all categories, all-time), `/fulfillment/inbound-shipments` and its detail
+endpoints, the entire `/reports/reportRequests` catalog, and a dozen candidate
+`payments` / `servicefees` / `wfs/billing` endpoints — all either 404 or return
+nothing for these fee types. They're deducted from your payout but itemized only
+in the Seller Center UI, which offers a CSV export.
+
+**What's missing without this import**
+
+| Export | What it is | Effect on P&L |
+|---|---|---|
+| `StorageFee` | Monthly WFS storage | cost |
+| `InboundTransportationFee` | Inbound freight to WFS | cost |
+| `InventoryRemovalOrder` | Removal orders | cost |
+| `RC_InventoryRTVFee` | Return-to-vendor fees | cost |
+| `Refund` | Refund reimbursements | income |
+| `LostInventory` | Lost-inventory reimbursements | income |
+
+**How to do it**
+
+1. Seller Center → **Payments → Services Fees**.
+2. Export each fee type above (each downloads as a zip).
+3. Unzip the CSVs into `data/walmart-service-fees/` (create the folder if needed).
+4. In the app: **Settings → Walmart WFS Service Fees → Import Service Fees**.
+
+The import is **idempotent** — it deletes the previous import and re-inserts, so
+re-running with a fresh export is always safe and never double-counts.
+
+**Cadence:** monthly, or before you close out a quarter / file taxes. There is
+no API to automate this — Walmart simply does not publish the data.
+
+### 2. Walmart Settlement Report — recommended
+
+The full Settlement Report export (same `data/walmart-service-fees/` folder,
+same import button) carries **reimbursements** the per-fee-type exports miss —
+most importantly `InboundQuantityDispute`, which is how Walmart pays you back
+for a shipment lost during receiving. That can be a four-figure line item.
+
+Only its **reimbursement rows** are read. Its `FulfillmentFee` rows are
+deliberately ignored because the recon API already syncs the same per-unit
+pick/pack fees — importing them would double-count. Reconciliation report and
+Item Sales Report exports are detected and skipped automatically.
+
+> **Reminder on lost/damaged inventory:** a reimbursement for stock lost
+> *before it sold* is income, but that stock's cost never flowed through COGS
+> (FIFO only releases cost on a sale). Book an offsetting expense for the lost
+> units' cost, or you'll overstate profit. See `RECOVERY_PLAYBOOK.md`.
+
+### 3. Amazon Unified Transaction Report — recommended
+
+Amazon's Financial Events API returns pending service fees with a `PostedDate`
+that **rolls forward to today on every sync**, so storage / subscription /
+inbound fees land in the wrong month until they settle. The Date Range
+Transaction Report has authoritative dates and corrects them.
+
+1. Seller Central → **Payments → Reports Repository → Date Range Report**
+   (type: Transaction), pick your range, download the CSV.
+2. **Settings → Import Transaction Report** and upload it.
+
+Deletions are bounded to the CSV's own date window, so importing a report that
+covers January–June will not wipe fees from July.
+
+**Cadence:** monthly is plenty.
+
+---
+
+## Testing
+
+```bash
+npm test
+```
+
+83 tests, ~15s, no external services. Covers a golden-dataset P&L regression
+(hand-computed integer-cent figures run through the real route handlers),
+Dashboard↔P&L parity, and pure-function locks on the profit math.
+
+If `data/flipledger.db` exists, an extra layer of live-data invariant tests runs
+against it (orphan rows, dedup index shape, duplicate detection). On a fresh
+clone with no DB those skip automatically.
+
+**Run `npm test` after any change to sync code, accounting queries, dedup logic,
+or the P&L / Dashboard / tax routes.** Every historical accounting bug in this
+project drifted silently for weeks before someone noticed a number looked odd —
+that suite exists to catch exactly that.
 
 ---
 
@@ -174,6 +291,17 @@ debited you). Same pattern as cash-basis revenue.
   back ~18 months. So months older than 6mo will have all the fees but no
   order revenue, making them look severely negative. File those via your
   prior tool / Sellerboard.
+- **Walmart WFS service fees require a manual CSV import** — see
+  [Manual data imports](#manual-data-imports-required-for-accurate-walmart-numbers).
+  This is a Walmart limitation, not a FlipLedger one: the data is in no API.
+- **Walmart WFS shipments mid-receiving are invisible.**
+  `/fulfillment/inbound-shipments` only returns `AWAITING_DELIVERY` and
+  `CLOSED`. A shipment that has arrived but is still being checked in returns
+  nothing, so those units show in neither inbound nor on-hand until receiving
+  completes.
+- **Walmart has no dispute API.** Reason-based dispute candidates and
+  lost-in-pipeline claims are surfaced with pre-written templates, but you file
+  them in Seller Center.
 - **Amazon settlement timing** — orders shipped in the last 1-3 days may not
   have ShipmentEvents posted yet. They appear on cash-basis P&L once Amazon
   posts them.
@@ -181,10 +309,17 @@ debited you). Same pattern as cash-basis revenue.
   FlipLedger surfaces candidates and provides templates, but does not file
   them. Marketplace dispute APIs are gated. You file in Seller Central and
   click "mark filed" in FlipLedger.
-- **Listing tool Phase 3+** — boxing UI works, but `setPackingInformation` is
-  blocked by an account-level SP-API entitlement. Use Seller Central to
-  finish boxing and click "Sync from Amazon" to re-import. Phase 4 (label
-  printing) is wired but only partially tested against real Amazon.
+- **Listing tool** — the full FBA inbound flow (send → boxing → packing →
+  placement → carrier booking → FNSKU / box / shipping labels) runs through
+  SP-API and has been exercised end-to-end against real Amazon shipments. A
+  "Sync from Amazon" button still exists to re-import state if you finish a
+  step in Seller Central instead.
+- **Amazon catalog defects block some ASINs.** Occasionally Amazon's shared
+  catalog demands an attribute and then rejects the value you send for it
+  (issue code 90244 / 90000900). The listing never gets an FNSKU and can't go
+  inbound. This is not fixable from the API — it needs a Seller Support catalog
+  case. FlipLedger detects it, flags the item, and ships the rest of the batch
+  rather than failing the whole shipment.
 
 ---
 

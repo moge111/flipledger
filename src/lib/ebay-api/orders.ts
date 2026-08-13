@@ -114,6 +114,10 @@ function processEbayOrder(db: Database.Database, order: EbayOrder) {
   // Always MFN (self-fulfilled)
   const fulfillmentChannel = 'MFN';
 
+  // Real fulfillment status so the MFN Orders ship queue can surface open eBay
+  // orders. FULFILLED → Shipped; NOT_STARTED / IN_PROGRESS → Unshipped.
+  const orderStatus = order.orderFulfillmentStatus === 'FULFILLED' ? 'Shipped' : 'Unshipped';
+
   // Get buyer's state for sales tax
   const shippingAddr = order.fulfillmentStartInstructions?.[0]?.shippingStep?.shipTo?.contactAddress;
   const state = shippingAddr?.stateOrProvince || 'Unknown';
@@ -121,10 +125,10 @@ function processEbayOrder(db: Database.Database, order: EbayOrder) {
   // Insert/update order
   db.prepare(`
     INSERT INTO orders (order_id, purchase_date, status, marketplace, fulfillment_channel, is_estimated, created_at)
-    VALUES (?, ?, 'Shipped', 'ebay', ?, 1, ?)
+    VALUES (?, ?, ?, 'ebay', ?, 1, ?)
     ON CONFLICT(order_id) DO UPDATE SET
       status = CASE WHEN excluded.status != status THEN excluded.status ELSE status END
-  `).run(orderId, orderDate, fulfillmentChannel, now);
+  `).run(orderId, orderDate, orderStatus, fulfillmentChannel, now);
 
   // Extract order-level fee data from Fulfillment API (no Finances API needed)
   const totalMarketplaceFee = toCents((order as any).totalMarketplaceFee?.value);

@@ -163,17 +163,18 @@ export async function POST(request: NextRequest) {
     if (sku) {
       const existing = db.prepare('SELECT id, quantity, quantity_remaining FROM inventory_ledger WHERE sku = ?').get(sku) as any;
       if (existing) {
-        // Make sure quantity covers all sold units. If the user entered COGS once
-        // when only N units had sold, FIFO depleted the lot. As more units sell,
-        // they get $0 COGS. Bump quantity (and quantity_remaining proportionally)
-        // so subsequent sales can FIFO against the same buy price.
+        // Make sure quantity covers all sold units so FIFO can allocate COGS to
+        // them. No extra headroom beyond units_sold: the FIFO overflow fallback
+        // costs any future overflow sale at the latest lot price, and a +1 pad
+        // here leaves a phantom unit in local inventory (Aug 6 sweep removed
+        // 129 of them).
         const soldRow = db.prepare(`
           SELECT COALESCE(SUM(oi.quantity), 0) as units_sold
           FROM order_items oi
           WHERE oi.sku = ?
         `).get(sku) as { units_sold: number };
         const unitsSold = soldRow?.units_sold || 0;
-        const desiredQty = Math.max(existing.quantity, unitsSold + 1);
+        const desiredQty = Math.max(existing.quantity, unitsSold);
         const qtyDelta = desiredQty - existing.quantity;
         db.prepare(`
           UPDATE inventory_ledger SET
@@ -198,8 +199,10 @@ export async function POST(request: NextRequest) {
 
         const unitsSold = soldRow?.units_sold || 0;
         const qtyRequested = quantity || 1;
-        // Seed quantity = max(requested qty, units_sold + 1) so FIFO has room
-        const seedQty = Math.max(qtyRequested, unitsSold + 1);
+        // Seed quantity = max(requested qty, units_sold) — enough for FIFO to
+        // cost every historical sale, without the old +1 pad that left a
+        // phantom unit in local inventory (see Aug 6 phantom sweep).
+        const seedQty = Math.max(qtyRequested, unitsSold);
 
         // quantity_remaining starts at the seed qty; the FIFO recalc below
         // will immediately decrement it to reflect past sales.

@@ -28,6 +28,9 @@ interface SaleItem {
   purchaseDate: string;
   currentCogs: number;
   isReturned: number; // 1 if the full quantity was returned to inventory
+  refundDate: string | null; // earliest qualifying return refund date
+  recognitionDate: string; // cash-basis sale date (MIN ShipmentEvent, fallback purchase_date)
+  marketplace: string;
 }
 
 interface FIFOResult {
@@ -38,7 +41,7 @@ interface FIFOResult {
 }
 
 function getDb(readonly = false) {
-  const dbPath = path.join(process.cwd(), 'data', 'flipledger.db');
+  const dbPath = process.env.FLIPLEDGER_DB_PATH || path.join(process.cwd(), 'data', 'flipledger.db');
   const db = new Database(dbPath, { readonly });
   db.pragma('journal_mode = WAL');
   return db;
@@ -127,29 +130,41 @@ export function recalculateFIFO(options: {
     // returned order show phantom profit. So for Walmart, only treat as
     // returned once the refund has settled — keeping COGS and refund
     // recognition in lockstep.
-    const RETURNED_FLAG = `
-      EXISTS (
-        SELECT 1 FROM refunds r
-        WHERE r.order_id = oi.order_id
-          AND r.item_returned = 1
-          AND r.quantity >= oi.quantity
-          AND (r.sku = oi.sku OR r.asin = oi.asin OR r.sku = oi.asin)
-          AND (
-            r.marketplace != 'walmart'
-            OR EXISTS (
-              SELECT 1 FROM financial_events fe
-              WHERE fe.event_type = 'WalmartRefundEvent'
-                AND fe.order_id = r.order_id
-                AND json_extract(fe.raw_data, '$."Amount Type"') = 'Product Price'
-            )
+    const RETURNED_MATCH = `
+      FROM refunds r
+      WHERE r.order_id = oi.order_id
+        AND r.item_returned = 1
+        AND r.quantity >= oi.quantity
+        AND (r.sku = oi.sku OR r.asin = oi.asin OR r.sku = oi.asin)
+        AND (
+          r.marketplace != 'walmart'
+          OR EXISTS (
+            SELECT 1 FROM financial_events fe
+            WHERE fe.event_type = 'WalmartRefundEvent'
+              AND fe.order_id = r.order_id
+              AND json_extract(fe.raw_data, '$."Amount Type"') = 'Product Price'
           )
-      ) as isReturned
+        )
+    `;
+    const RETURNED_FLAG = `EXISTS (SELECT 1 ${RETURNED_MATCH}) as isReturned`;
+    // Extra columns for period-aware return handling: when the refund lands in
+    // a DIFFERENT calendar year than the sale's cash-basis recognition date,
+    // zeroing the sale's COGS would rewrite an already-filed year. Those sales
+    // keep their COGS and get a cogs_reversals credit dated at the refund.
+    const RETURN_PERIOD_COLS = `
+      (SELECT MIN(r.refund_date) ${RETURNED_MATCH}) as refundDate,
+      COALESCE(
+        (SELECT MIN(fe2.posted_date) FROM financial_events fe2
+         WHERE fe2.event_type = 'ShipmentEvent' AND fe2.order_id = oi.order_id),
+        o.purchase_date
+      ) as recognitionDate,
+      o.marketplace
     `;
 
     // Get sales for a SKU — match by sku first (primary), then by asin (fallback)
     const getSalesBySku = db.prepare(`
       SELECT oi.id, oi.order_id as orderId, oi.sku, oi.asin, oi.quantity, o.purchase_date as purchaseDate, oi.cogs_per_unit as currentCogs,
-        ${RETURNED_FLAG}
+        ${RETURNED_FLAG}, ${RETURN_PERIOD_COLS}
       FROM order_items oi
       JOIN orders o ON oi.order_id = o.order_id
       WHERE oi.sku = ?
@@ -158,7 +173,7 @@ export function recalculateFIFO(options: {
 
     const getSalesByAsin = db.prepare(`
       SELECT oi.id, oi.order_id as orderId, oi.sku, oi.asin, oi.quantity, o.purchase_date as purchaseDate, oi.cogs_per_unit as currentCogs,
-        ${RETURNED_FLAG}
+        ${RETURNED_FLAG}, ${RETURN_PERIOD_COLS}
       FROM order_items oi
       JOIN orders o ON oi.order_id = o.order_id
       WHERE oi.asin = ? AND (oi.sku IS NULL OR oi.sku = '' OR oi.sku NOT IN (SELECT DISTINCT sku FROM inventory_ledger WHERE buy_price > 0))
@@ -167,9 +182,25 @@ export function recalculateFIFO(options: {
 
     const updateCogs = db.prepare('UPDATE order_items SET cogs_per_unit = ? WHERE id = ?');
     const updateBatchRemaining = db.prepare('UPDATE inventory_ledger SET quantity_remaining = ? WHERE id = ?');
+    const upsertReversal = db.prepare(`
+      INSERT INTO cogs_reversals (order_item_id, order_id, sku, asin, quantity, amount, refund_date, marketplace, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(order_item_id) DO UPDATE SET
+        quantity = excluded.quantity,
+        amount = excluded.amount,
+        refund_date = excluded.refund_date,
+        marketplace = excluded.marketplace
+    `);
+    const deleteReversal = db.prepare('DELETE FROM cogs_reversals WHERE order_item_id = ?');
+    const nowIso = new Date().toISOString();
 
     // Process all SKUs in a single transaction
     const processAll = db.transaction(() => {
+      // Reversals whose order_item no longer exists (e.g. cancelled-order
+      // reversal deleted the item) are orphans — purge on full recalcs.
+      if (recalcAll) {
+        db.prepare('DELETE FROM cogs_reversals WHERE order_item_id NOT IN (SELECT id FROM order_items)').run();
+      }
       for (const item of skusToProcess) {
         const batches = getBatches.all(item.sku) as InventoryBatch[];
         if (batches.length === 0) continue;
@@ -202,10 +233,23 @@ export function recalculateFIFO(options: {
 
         // Walk through sales, consuming from earliest batches
         for (const sale of sales) {
-          // Returned sale: the physical unit came back to sellable inventory,
-          // so it doesn't permanently consume a batch and carries no COGS —
-          // the cost flows to whatever sale consumes that unit next.
-          if (sale.isReturned) {
+          // Period scope of a return: same calendar year as the sale's cash-
+          // basis recognition date → zero COGS at the sale (annual totals are
+          // identical either way). DIFFERENT year → the sale keeps its COGS
+          // (the sale year may be filed) and the relief is booked as a
+          // cogs_reversals row dated at the refund.
+          const crossYearReturn = Boolean(
+            sale.isReturned &&
+            sale.refundDate &&
+            sale.recognitionDate &&
+            sale.refundDate.slice(0, 4) !== sale.recognitionDate.slice(0, 4)
+          );
+
+          // Same-year returned sale: the physical unit came back to sellable
+          // inventory, so it doesn't permanently consume a batch and carries
+          // no COGS — the cost flows to whatever sale consumes that unit next.
+          if (sale.isReturned && !crossYearReturn) {
+            deleteReversal.run(sale.id);
             if (sale.currentCogs !== 0) {
               updateCogs.run(0, sale.id);
               result.itemsUpdated++;
@@ -216,6 +260,7 @@ export function recalculateFIFO(options: {
           let unitsNeeded = sale.quantity;
           let totalCost = 0;
           let batchIdx = 0;
+          const consumed: { idx: number; units: number }[] = [];
 
           while (unitsNeeded > 0 && batchIdx < batchState.length) {
             const batch = batchState[batchIdx];
@@ -226,6 +271,7 @@ export function recalculateFIFO(options: {
 
             const unitsFromBatch = Math.min(unitsNeeded, batch.remaining);
             totalCost += unitsFromBatch * batch.buyPrice;
+            consumed.push({ idx: batchIdx, units: unitsFromBatch });
             batch.remaining -= unitsFromBatch;
             unitsNeeded -= unitsFromBatch;
 
@@ -251,6 +297,22 @@ export function recalculateFIFO(options: {
           if (cogsPerUnit !== sale.currentCogs) {
             updateCogs.run(cogsPerUnit, sale.id);
             result.itemsUpdated++;
+          }
+
+          if (crossYearReturn) {
+            // Book the relief in the refund's year. Amount mirrors exactly
+            // what the sale carries (cogs_per_unit × qty) so the two periods
+            // net to zero across years, to the cent.
+            upsertReversal.run(
+              sale.id, sale.orderId, sale.sku, sale.asin, sale.quantity,
+              cogsPerUnit * sale.quantity, sale.refundDate, sale.marketplace || 'amazon', nowIso
+            );
+            // The returned unit re-entered sellable inventory — un-consume it
+            // so later sales draw from the same stock (matches the same-year
+            // path's skip-consumption behavior).
+            for (const c of consumed) batchState[c.idx].remaining += c.units;
+          } else {
+            deleteReversal.run(sale.id);
           }
         }
 

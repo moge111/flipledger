@@ -22,6 +22,63 @@ interface SPAPICredentials {
 let cachedToken: { accessToken: string; expiresAt: number } | null = null;
 
 /**
+ * Transient network-level failures (thrown by fetch, never reaching an HTTP
+ * status) — connect timeouts, resets, DNS blips. These bypass every
+ * status-code retry loop because they're exceptions, not responses.
+ * Observed in production July 8, 2026: UND_ERR_CONNECT_TIMEOUT to
+ * sellingpartnerapi-na.amazon.com killed a catalog search with no retry.
+ */
+const TRANSIENT_NET_CODES = new Set([
+  'UND_ERR_CONNECT_TIMEOUT',
+  'UND_ERR_HEADERS_TIMEOUT',
+  'UND_ERR_BODY_TIMEOUT',
+  'UND_ERR_SOCKET',
+  'ECONNRESET',
+  'ECONNREFUSED',
+  'ETIMEDOUT',
+  'EAI_AGAIN',
+  'EPIPE',
+]);
+
+export function isTransientNetworkError(err: unknown): boolean {
+  let e = err as { code?: string; message?: string; cause?: unknown } | undefined;
+  for (let depth = 0; e && depth < 5; depth++) {
+    if (e.code && TRANSIENT_NET_CODES.has(e.code)) return true;
+    // undici wraps all network failures as TypeError: fetch failed
+    if (e.message === 'fetch failed') {
+      if (!e.cause) return true;
+    }
+    e = e.cause as typeof e;
+  }
+  return false;
+}
+
+/**
+ * fetch that retries transient NETWORK errors (thrown exceptions) with
+ * backoff. HTTP status handling is untouched — callers keep their own
+ * 429/5xx logic. Non-transient errors rethrow immediately.
+ */
+export async function netFetch(
+  url: string | URL,
+  init?: RequestInit,
+  retries: number = 3
+): Promise<Response> {
+  let lastError: unknown;
+  for (let attempt = 0; attempt < retries; attempt++) {
+    try {
+      return await fetch(url, init);
+    } catch (err) {
+      lastError = err;
+      if (!isTransientNetworkError(err) || attempt === retries - 1) throw err;
+      const waitSec = 2 * Math.pow(2, attempt); // 2s, 4s
+      console.warn(`SP-API network error on ${url} (${(err as Error).message}), retrying in ${waitSec}s (attempt ${attempt + 1}/${retries})`);
+      await new Promise((r) => setTimeout(r, waitSec * 1000));
+    }
+  }
+  throw lastError;
+}
+
+/**
  * Get a valid access token, refreshing if needed.
  * Caches the token in memory and refreshes 60s before expiry.
  */
@@ -32,7 +89,7 @@ export async function getAccessToken(credentials: SPAPICredentials): Promise<str
     return cachedToken.accessToken;
   }
 
-  const response = await fetch(LWA_TOKEN_URL, {
+  const response = await netFetch(LWA_TOKEN_URL, {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     body: new URLSearchParams({
@@ -109,7 +166,7 @@ export async function fetchWithRetry(
 ): Promise<Response> {
   let response!: Response;
   for (let attempt = 0; attempt < retries; attempt++) {
-    response = await fetch(url, init);
+    response = await netFetch(url, init);
     const retryable = response.status === 429 || response.status >= 500;
     if (!retryable || attempt === retries - 1) return response;
     const base = response.status === 429
@@ -144,7 +201,7 @@ export async function spApiRequest(
   }
 
   for (let attempt = 0; attempt < retries; attempt++) {
-    const response = await fetch(url.toString(), {
+    const response = await netFetch(url.toString(), {
       headers: {
         'x-amz-access-token': accessToken,
         'Content-Type': 'application/json',

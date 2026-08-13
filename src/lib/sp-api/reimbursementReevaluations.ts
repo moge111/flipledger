@@ -15,7 +15,11 @@ import path from 'path';
 
 const UNDERPAID_THRESHOLD_PCT = 0.15; // gap must be at least 15% of expected
 const MIN_GAP_CENTS = 1000;            // at least $10 gap to surface
-const REIMBURSEMENT_DISPUTE_WINDOW_DAYS = 365; // ~12 months Amazon dispute window
+// Amazon's re-evaluation window: 60 days from the original reimbursement.
+// Confirmed via a real denial June 12, 2026 ("Re-evaluation requests must
+// be submitted within 60 days of the original reimbursement") — the old
+// 365-day assumption produced claims Amazon auto-denied as out-of-window.
+const REIMBURSEMENT_DISPUTE_WINDOW_DAYS = 60;
 
 function getDb() {
   const dbPath = path.join(process.cwd(), 'data', 'flipledger.db');
@@ -104,15 +108,51 @@ export function syncReimbursementReevaluations(): ReevaluationSyncResult {
       updated_at = datetime('now')
   `);
 
+  // Latest documented buy cost per item — checked by SKU/MSKU first, then
+  // real ASIN (inventory_ledger.asin often holds the MSKU).
+  const costLookup = db.prepare(`
+    SELECT buy_price FROM inventory_ledger
+    WHERE asin = ? OR sku = ? OR asin = ? OR sku = ?
+    ORDER BY date_purchased DESC LIMIT 1
+  `);
+
+  // Reasons where the unit was lost/damaged BEFORE a customer order.
+  // Amazon's reimbursement policy values these at the seller's SOURCING
+  // COST (provable with an invoice), not the sale price — so the
+  // realistic expected value is buy cost × qty. Post-order reasons
+  // (CustomerReturn etc.) remain sale-price based.
+  const PRE_ORDER_REASONS = new Set([
+    'Lost_Warehouse', 'Damaged_Warehouse', 'Lost_Inbound', 'Damaged_Inbound',
+    'Reimbursement_Reversal',
+  ]);
+
   let newCandidates = 0;
   let updated = 0;
   let totalGap = 0;
+  const qualifyingIds: string[] = [];
 
   const tx = db.transaction(() => {
     for (const r of rows) {
-      if (!r.avgSalePriceCents || r.quantity <= 0) continue;
+      if (r.quantity <= 0) continue;
 
-      const expected = Math.round(r.avgSalePriceCents * r.quantity);
+      // Pre-order losses are valued at documented SOURCING COST, which exists
+      // even when the item has never sold (e.g. a unit lost inbound before its
+      // first sale — those were previously skipped by the avg-sale-price guard
+      // and could never surface). Post-order reasons still need sale history.
+      let expected = 0;
+      if (PRE_ORDER_REASONS.has(r.reason || '')) {
+        const lot = costLookup.get(r.sku || '', r.sku || '', r.asin || '', r.asin || '') as { buy_price: number } | undefined;
+        if (lot && lot.buy_price > 0) {
+          expected = lot.buy_price * r.quantity;
+        } else if (r.avgSalePriceCents) {
+          // No documented cost — fall back to the sale-price estimate
+          // (better than dropping the candidate).
+          expected = Math.round(r.avgSalePriceCents * r.quantity);
+        }
+      } else if (r.avgSalePriceCents) {
+        expected = Math.round(r.avgSalePriceCents * r.quantity);
+      }
+      if (expected <= 0) continue;
       const gap = expected - r.paidCents;
 
       // Only surface meaningful gaps
@@ -135,12 +175,26 @@ export function syncReimbursementReevaluations(): ReevaluationSyncResult {
         gap,
         r.reason
       );
+      qualifyingIds.push(r.reimbursementId);
       if (result.changes === 1) {
         newCandidates++;
         totalGap += gap;
       } else {
         updated++;
       }
+    }
+
+    // Drop pending candidates that no longer qualify (e.g. the expected
+    // value moved to cost basis and the gap fell below threshold). Rows
+    // the user already acted on (filed/received/dismissed) are preserved.
+    const open = db.prepare(`
+      SELECT id, reimbursement_id as rid FROM amazon_reimbursement_reevaluations
+      WHERE status = 'pending'
+    `).all() as Array<{ id: number; rid: string }>;
+    const keep = new Set(qualifyingIds);
+    const drop = db.prepare(`DELETE FROM amazon_reimbursement_reevaluations WHERE id = ?`);
+    for (const o of open) {
+      if (!keep.has(o.rid)) drop.run(o.id);
     }
   });
   tx();

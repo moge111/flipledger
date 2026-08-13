@@ -307,18 +307,29 @@ function parseSettlementReport(content: string): number {
           continue;
         }
 
-        // Check if we already have this service fee (by type + amount + date)
+        // Skip if this fee already exists from ANY Amazon source (settlement,
+        // transaction report import, or live Financial Events API). Sources use
+        // different fee_type names ('SubscriptionFee' vs 'Subscription',
+        // 'InboundTransportationFee' vs 'FBAInboundTransportationFee') and post
+        // dates that skew by 0-4 days, so match on amount + order-less +
+        // amazon-marketplace within a 5-day window. Without this, the settlement
+        // re-sync re-inserts every fee the transaction-report import just
+        // replaced (July 6-7 2026: $496 of double-counted fees).
         const existing = db.prepare(`
           SELECT 1 FROM fee_details fd
           JOIN financial_events fe ON fd.financial_event_id = fe.id
-          WHERE fe.event_type = 'SettlementServiceFee'
-            AND fd.fee_type = ? AND fd.amount = ? AND date(fd.posted_date) = date(?)
+          WHERE fe.marketplace = 'amazon'
+            AND (fd.order_id IS NULL OR fd.order_id = '')
+            AND fd.amount = ?
+            AND abs(julianday(date(fd.posted_date)) - julianday(date(?))) <= 5
           LIMIT 1
-        `).get(feeType, feeCents, feeDate);
+        `).get(feeCents, feeDate);
 
         if (!existing) {
+          // OR IGNORE: a leftover orphan SettlementServiceFee event with the
+          // same (type, day, amount) must not abort the whole report.
           const eventResult = db.prepare(`
-            INSERT INTO financial_events (event_type, posted_date, order_id, asin, sku, marketplace, total_amount, raw_data, created_at)
+            INSERT OR IGNORE INTO financial_events (event_type, posted_date, order_id, asin, sku, marketplace, total_amount, raw_data, created_at)
             VALUES ('SettlementServiceFee', ?, NULL, NULL, NULL, 'amazon', ?, ?, datetime('now'))
           `).run(feeDate, feeCents, JSON.stringify({ description: amountDescription, settlement: true }));
 

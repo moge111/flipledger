@@ -187,7 +187,10 @@ Settings keys for last-sync timestamps: `lastSync` (Amazon), `walmart_last_sync`
 ## Where the bodies are buried
 
 - **Walmart Orders API only returns ~6 months.** Anything older than that has fees from recon but no orders. Filing those via a prior tool is the recommended workaround.
-- **Amazon Inbound Plans v2024** — `setPackingInformation` requires an account-level entitlement that's case-by-case granted by SP-API. The current code path is correct, just blocked at the API. Workaround: use Seller Central and call `/sync-from-amazon` to import the resulting plan.
+- **Walmart WFS service fees are in NO API.** Storage, inbound transportation, removal, and RTV fees — plus lost-inventory and refund reimbursements — exist only as Seller Center CSV exports. They must be imported manually (`data/walmart-service-fees/` → Settings → Import Service Fees). Without it the Walmart P&L is missing real costs *and* real income. Verified exhaustively against recon v1, the inbound-shipment endpoints, the full report-request catalog, and a dozen candidate billing endpoints.
+- **Amazon Inbound Plans v2024** — `setPackingInformation` is documented as `PUT`, but `PUT` returns 403 `AccessDeniedException`. **`POST` on the same path works.** This reads like an entitlement problem and is actually a method bug; don't go filing a support case for it. Items also need `labelOwner` / `prepOwner` set or the body validator rejects them.
+- **Amazon labels use the v0 endpoint, not v2024.** `GET /fba/inbound/v0/shipments/{confirmationId}/labels` — with the human-readable `shipmentConfirmationId` (derived by stripping the trailing `U######` off any box ID), integer `PageSize` (it's pagination, not a format enum), the response field `payload.DownloadURL` (capital URL), and a **required** `PackageLabelsToPrint` list of every box ID. The v2024 labels endpoint 403s for non-private apps.
+- **One bad item must never fail a whole shipment.** The FBA send path has four independent chokepoints — listing creation, FNSKU wait, prep classification, inbound-plan creation — and each one is exclude-and-proceed or drop-and-retry. `setPrepDetails` in particular is a *batched* call: a single already-classified MSKU 400s the entire call, so it drops the named MSKU and retries with the rest.
 - **eBay Finances API** requires Application Growth Check approval (2-3 days). Without it, fees come from `Fulfillment.totalMarketplaceFee` per order — less granular but workable.
 - **Recon report dates** — Walmart uses `MM/DD/YYYY`, settlement reports use both `YYYY-MM-DD` and `DD.MM.YYYY` depending on cadence. The parser handles both.
 
@@ -195,6 +198,8 @@ Settings keys for last-sync timestamps: `lastSync` (Amazon), `walmart_last_sync`
 
 ## Self-check before merging changes that touch sync / P&L
 
+0. **Does `npm test` pass?** This is non-negotiable for any change to sync code,
+   accounting queries, dedup logic, or the P&L / Dashboard / tax routes.
 1. Are monetary values stored as integer cents?
 2. Is profit math going through `calculations.ts`?
 3. Does the unique index on any new table include a per-record value?
@@ -202,3 +207,22 @@ Settings keys for last-sync timestamps: `lastSync` (Amazon), `walmart_last_sync`
 5. Did you back up `data/flipledger.db` before running any destructive migration?
 
 If any answer is wrong, fix it before merging.
+
+### The test suite
+
+`npm test` — 83 tests, ~15s, no external services.
+
+- `tests/golden-*.test.ts` — a fixture DB seeded from the real
+  `initializeDatabase()` and run through the **real route handlers**, asserting
+  exact integer-cent figures. These deliberately exercise the historical bug
+  shapes: sign conventions on clawback rows, cross-month cash-vs-accrual,
+  settled vs ghost Walmart refunds, marketplace-scoped service fees.
+  **Do not "update" a failing golden number without re-deriving it by hand** —
+  a golden failure means a formula changed.
+- `tests/live-invariants.test.ts` / `live-parity.test.ts` — run against your own
+  `data/flipledger.db` if present, skipped on a fresh clone. Orphan rows, dedup
+  index shape, Dashboard↔P&L parity.
+
+When you fix an accounting bug, add the invariant or golden for it **in the same
+change**. The regression artifact is the deliverable, not the fix — every bug
+listed in this file drifted silently for weeks before anyone noticed.

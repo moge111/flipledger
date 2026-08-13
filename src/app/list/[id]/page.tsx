@@ -4,7 +4,7 @@ import { useEffect, useState, useRef, useCallback, use } from 'react';
 import Link from 'next/link';
 import { formatCurrency } from '@/lib/formatters';
 import { generateMSKU } from '@/lib/listing-msku';
-import { ArrowLeft, Search, Plus, Trash2, Package, TrendingUp, DollarSign, Percent, Send, ExternalLink, CheckCircle, AlertCircle, Loader2, Archive, Box as BoxIcon, MapPin, Sparkles, Pencil, X as XIcon, Check, ChevronDown, RefreshCw } from 'lucide-react';
+import { ArrowLeft, Search, Plus, Trash2, Package, TrendingUp, DollarSign, Percent, Send, ExternalLink, CheckCircle, AlertCircle, AlertTriangle, Loader2, Archive, Box as BoxIcon, MapPin, Sparkles, Pencil, X as XIcon, Check, ChevronDown, RefreshCw } from 'lucide-react';
 
 interface Batch {
   id: number;
@@ -107,6 +107,16 @@ interface BatchItem {
   listingStatus?: string | null;
   listingError?: string | null;
   labelsPrintedAt?: string | null;  // user marks "I'm done labeling this SKU"
+  // Pre-flight validation (checked at add time — see /preflight route)
+  fnsku?: string | null;
+  inboundReady?: number | null;
+  prepCategory?: string | null;
+  preflightStatus?: string | null;  // READY | PENDING | GATED | CATALOG_ISSUE | STUCK | FAILED | UNPRICED
+  preflightDetail?: {
+    restriction?: { status: string; reasons: string[]; approvalUrl: string | null };
+    errorIssues?: string[];
+    catalogDefect?: boolean;
+  } | null;
 }
 
 interface FeeEstimate {
@@ -127,6 +137,10 @@ interface ExistingMsku {
   lastBuyPriceCents: number;
   source: 'live_inventory' | 'inventory_ledger' | 'listing_batch';
   unitsInStock?: number | null;
+  /** Fulfillment channel this MSKU is currently registered on, when known. */
+  channel?: 'FBA' | 'MFN';
+  /** False when reusing it would flip the live listing's channel. */
+  compatible?: boolean;
 }
 
 interface CatalogResult {
@@ -166,6 +180,68 @@ function StatusBadge({ status }: { status: string }) {
       {status}
     </span>
   );
+}
+
+/**
+ * Draft-time pre-flight badge for a batch item. Answers "will this item make
+ * it onto the truck?" BEFORE send: gated ASINs get an approval deep link,
+ * catalog-defective ASINs get flagged as needing a Seller Support case, and
+ * items Amazon hasn't FBA-registered yet show as registering/stuck.
+ */
+function PreflightChip({ item, channel }: { item: BatchItem; channel: string }) {
+  const s = item.preflightStatus;
+  if (!s) return null;
+  switch (s) {
+    case 'READY':
+      return (
+        <span className="text-[9px] text-positive bg-positive/10 px-1 rounded" title={item.fnsku ? `FNSKU ${item.fnsku}` : undefined}>
+          {channel === 'FBA' ? 'FBA READY' : 'LIVE'}
+        </span>
+      );
+    case 'GATED': {
+      const url = item.preflightDetail?.restriction?.approvalUrl;
+      const chip = (
+        <span className="text-[9px] text-negative bg-negative/10 px-1 rounded border border-negative/30">
+          ⛔ NEEDS APPROVAL{url ? ' ↗' : ''}
+        </span>
+      );
+      return url ? (
+        <a href={url} target="_blank" rel="noopener noreferrer" title="Open the Seller Central approval request (often instant)">
+          {chip}
+        </a>
+      ) : chip;
+    }
+    case 'CATALOG_ISSUE':
+      return (
+        <span
+          className="text-[9px] text-amber-400 bg-amber-500/10 px-1 rounded border border-amber-500/30"
+          title="Amazon's catalog data for this ASIN is rejecting the listing — usually needs a Seller Support catalog case. May block FNSKU assignment."
+        >
+          ⚠ CATALOG ISSUE
+        </span>
+      );
+    case 'STUCK':
+      return (
+        <span
+          className="text-[9px] text-amber-400 bg-amber-500/10 px-1 rounded"
+          title="No FNSKU yet after 10+ minutes — Amazon hasn't registered this listing for FBA. It may still clear on its own."
+        >
+          ⏳ NOT FBA-REGISTERED
+        </span>
+      );
+    case 'PENDING':
+      return <span className="text-[9px] text-accent bg-accent/10 px-1 rounded">REGISTERING…</span>;
+    case 'FAILED':
+      return <span className="text-[9px] text-negative bg-negative/10 px-1 rounded">FAILED</span>;
+    case 'UNPRICED':
+      return (
+        <span className="text-[9px] text-text-tertiary bg-bg-elevated px-1 rounded border border-border-default" title="Set a list price — the Amazon listing is created once a price exists.">
+          NO PRICE
+        </span>
+      );
+    default:
+      return null;
+  }
 }
 
 export default function BatchDetailPage({ params }: { params: Promise<{ id: string }> }) {
@@ -218,9 +294,9 @@ export default function BatchDetailPage({ params }: { params: Promise<{ id: stri
   // unless the user has manually typed into the MSKU field.
   useEffect(() => {
     if (!scanned || skuManuallyEdited) return;
-    const autoMsku = generateMSKU(supplier, scanned.name, buyPrice, scanned.asin);
+    const autoMsku = generateMSKU(supplier, scanned.name, buyPrice, scanned.asin, batch?.channel === 'MFN' ? 'MFN' : 'FBA');
     setSku(autoMsku);
-  }, [scanned, supplier, buyPrice, skuManuallyEdited]);
+  }, [scanned, supplier, buyPrice, skuManuallyEdited, batch?.channel]);
 
   const fetchBatch = useCallback(async () => {
     setLoading(true);
@@ -303,14 +379,78 @@ export default function BatchDetailPage({ params }: { params: Promise<{ id: stri
     };
   }, [id, batch?.status, batch]);
 
-  async function handleSendToAmazon() {
+  // Pre-flight polling: while the batch is a draft with items that aren't
+  // READY yet, run the server-side preflight (gating / FNSKU / catalog /
+  // prep) every 45s so problems surface as badges NOW instead of at send.
+  // Stops on its own once every priced item is READY (or hard-blocked).
+  const preflightRunning = useRef(false);
+  const needsPreflight =
+    batch?.status === 'draft' &&
+    items.some((it) =>
+      it.listPriceCents > 0 &&
+      it.preflightStatus !== 'READY' &&
+      it.preflightStatus !== 'GATED' &&
+      it.preflightStatus !== 'FAILED' &&
+      it.preflightStatus !== 'CATALOG_ISSUE'
+    );
+  useEffect(() => {
+    if (!needsPreflight) return;
+    let cancelled = false;
+
+    const run = async () => {
+      if (preflightRunning.current || document.visibilityState !== 'visible') return;
+      preflightRunning.current = true;
+      try {
+        const res = await fetch(`/api/list/batches/${id}/preflight`, { method: 'POST' });
+        const data = await res.json();
+        if (!cancelled && data.ran) {
+          // Pull the persisted statuses/badges into the table.
+          const bres = await fetch(`/api/list/batches/${id}`);
+          const bdata = await bres.json();
+          if (!cancelled && !bdata.error) {
+            setBatch(bdata.batch);
+            setItems(bdata.items || []);
+          }
+        }
+      } catch { /* best-effort — next tick retries */ }
+      preflightRunning.current = false;
+    };
+
+    run();
+    const interval = setInterval(run, 45_000);
+    return () => { cancelled = true; clearInterval(interval); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [id, needsPreflight]);
+
+  async function handleSendToAmazon(allowPartial: boolean = false) {
     if (!batch) return;
     setSending(true);
     try {
-      const res = await fetch(`/api/list/batches/${id}/send`, { method: 'POST' });
+      const res = await fetch(`/api/list/batches/${id}/send`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ allowPartial }),
+      });
       const data = await res.json();
-      if (data.error) {
+      if (res.status === 409 && data.blockedItems?.length) {
+        // Some items can't ship — batch reverted to draft, nothing committed.
+        // Ask the user: ship without them, or stop and fix them first.
+        const list = data.blockedItems
+          .map((b: { sku: string; reason: string }) => `  • ${b.sku}\n    ${b.reason}`)
+          .join('\n\n');
+        const proceed = window.confirm(
+          `${data.blockedItems.length} item(s) can't ship yet:\n\n${list}\n\n` +
+          `OK = send the shipment WITHOUT these items (they stay in the batch, marked with the error, and can be re-sent later once fixed).\n\n` +
+          `Cancel = batch stays in draft so you can fix or remove them first.`
+        );
+        await fetchBatch();
+        if (proceed) {
+          setSending(false);
+          return handleSendToAmazon(true);
+        }
+      } else if (data.error) {
         alert(`Send failed: ${data.error}`);
+        await fetchBatch();
       } else {
         setShowSendModal(false);
         await fetchBatch();
@@ -566,6 +706,7 @@ export default function BatchDetailPage({ params }: { params: Promise<{ id: stri
       if (data.error) {
         alert(`Save failed: ${data.error}`);
       } else {
+        lastSavedBoxesJson.current = null; // re-baseline against the refetched state
         await fetchBatch();
       }
     } catch (err) {
@@ -573,6 +714,42 @@ export default function BatchDetailPage({ params }: { params: Promise<{ id: stri
     }
     setSavingBoxes(false);
   }
+
+  // ── Boxing auto-save ──────────────────────────────────────────────────
+  // All box state used to live only in React state until an explicit "Save
+  // draft" — a Chrome crash on July 8, 2026 wiped ~10 boxes of packing work.
+  // Debounce-save every edit to the server so a crash/tab-close never loses
+  // box work again. Silent + no refetch (a refetch mid-edit would clobber
+  // keystrokes); the explicit Save/Confirm buttons still behave as before.
+  const lastSavedBoxesJson = useRef<string | null>(null);
+  const boxesJson = JSON.stringify(boxes);
+  useEffect(() => {
+    if (!batch) return;
+    if (batch.status !== 'ready' && batch.status !== 'boxing') return;
+    if (batch.packingStatus === 'SUCCESS') return;
+    if (boxes.length === 0) return;
+    if (lastSavedBoxesJson.current === null) {
+      // First observation (initial load / post-save refetch) — baseline only.
+      lastSavedBoxesJson.current = boxesJson;
+      return;
+    }
+    if (lastSavedBoxesJson.current === boxesJson) return;
+    const timer = setTimeout(async () => {
+      try {
+        const res = await fetch(`/api/list/batches/${id}/boxes`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ boxes }),
+        });
+        const data = await res.json();
+        if (!data.error) lastSavedBoxesJson.current = boxesJson;
+        // On validation errors stay quiet — the user is likely mid-edit; the
+        // explicit Save/Confirm surface errors.
+      } catch { /* transient — next edit retries */ }
+    }, 1500);
+    return () => clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [boxesJson, batch?.status, batch?.packingStatus, id]);
 
   async function handleConfirmPacking() {
     if (!batch) return;
@@ -690,7 +867,9 @@ export default function BatchDetailPage({ params }: { params: Promise<{ id: stri
         // If already in catalog, DEFAULT to restocking the existing MSKU so a stray
         // "Add to Batch" can't split inventory into a duplicate SKU. New items fall
         // through to the auto-generator (skuManuallyEdited = false).
-        const existing = first.existingMskus && first.existingMskus.length > 0 ? first.existingMskus[0] : null;
+        // Only restock into an MSKU on THIS batch's fulfillment channel — reusing an
+        // FBA MSKU on an MFN batch flips the live listing's channel (see catalog search).
+        const existing = (first.existingMskus || []).find((m) => m.compatible !== false) || null;
         if (existing) {
           setSku(existing.msku);
           setSkuManuallyEdited(true); // lock — stops the generator from minting a new SKU
@@ -977,6 +1156,15 @@ export default function BatchDetailPage({ params }: { params: Promise<{ id: stri
 
         {/* Right-side actions */}
         <div className="flex items-center gap-2">
+          {batch.status === 'draft' && (
+            <Link
+              href={`/list/${batch.id}/import`}
+              className="flex items-center gap-2 h-9 px-4 bg-bg-elevated text-text-primary rounded-md text-sm font-medium hover:bg-bg-hover transition-colors"
+            >
+              <Plus size={14} />
+              Import items
+            </Link>
+          )}
           {batch.status === 'draft' && items.length > 0 && (
             <button
               onClick={() => setShowSendModal(true)}
@@ -1236,29 +1424,54 @@ export default function BatchDetailPage({ params }: { params: Promise<{ id: stri
                         <span className="text-text-primary font-mono">{scanned.currentFbaStock ?? 0}</span>
                       </div>
                     </div>
-                    {scanned.existingMskus && scanned.existingMskus.length > 0 && (
-                      <div className="mt-2 flex flex-wrap items-center gap-1.5 text-[11px]">
-                        <span className="text-text-tertiary mr-1">Restock as:</span>
-                        {scanned.existingMskus.slice(0, 4).map((m) => (
-                          <button
-                            key={m.msku}
-                            type="button"
-                            onClick={() => {
-                              setSku(m.msku);
-                              setSkuManuallyEdited(true);
-                              if (m.lastBuyPriceCents > 0) {
-                                setBuyPrice((m.lastBuyPriceCents / 100).toFixed(2));
-                              }
-                            }}
-                            className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-accent/10 text-accent hover:bg-accent/20 transition-colors font-mono"
-                            title={`Use this MSKU (no new Amazon listing will be created). Buy price ${m.lastBuyPriceCents > 0 ? '$' + (m.lastBuyPriceCents / 100).toFixed(2) : 'unknown'} from ${m.source}${m.unitsInStock ? ` · ${m.unitsInStock} in FBA` : ''}`}
-                          >
-                            {m.msku}
-                            {m.unitsInStock ? <span className="text-text-tertiary">·{m.unitsInStock}</span> : null}
-                          </button>
-                        ))}
-                      </div>
-                    )}
+                    {(() => {
+                      const all = scanned.existingMskus || [];
+                      const usable = all.filter((m) => m.compatible !== false);
+                      const blocked = all.filter((m) => m.compatible === false);
+                      if (all.length === 0) return null;
+                      return (
+                        <div className="mt-2 space-y-1">
+                          {usable.length > 0 && (
+                            <div className="flex flex-wrap items-center gap-1.5 text-[11px]">
+                              <span className="text-text-tertiary mr-1">Restock as:</span>
+                              {usable.slice(0, 4).map((m) => (
+                                <button
+                                  key={m.msku}
+                                  type="button"
+                                  onClick={() => {
+                                    setSku(m.msku);
+                                    setSkuManuallyEdited(true);
+                                    if (m.lastBuyPriceCents > 0) {
+                                      setBuyPrice((m.lastBuyPriceCents / 100).toFixed(2));
+                                    }
+                                  }}
+                                  className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-accent/10 text-accent hover:bg-accent/20 transition-colors font-mono"
+                                  title={`Use this MSKU (no new Amazon listing will be created). Buy price ${m.lastBuyPriceCents > 0 ? '$' + (m.lastBuyPriceCents / 100).toFixed(2) : 'unknown'} from ${m.source}${m.unitsInStock ? ` · ${m.unitsInStock} in FBA` : ''}`}
+                                >
+                                  {m.msku}
+                                  {m.unitsInStock ? <span className="text-text-tertiary">·{m.unitsInStock}</span> : null}
+                                </button>
+                              ))}
+                            </div>
+                          )}
+                          {blocked.length > 0 && (
+                            <div className="flex flex-wrap items-start gap-1.5 text-[11px]">
+                              <AlertTriangle size={11} className="text-warning mt-0.5 shrink-0" />
+                              <span className="text-text-tertiary">
+                                {blocked.slice(0, 3).map((m) => (
+                                  <span key={m.msku} className="font-mono text-text-secondary mr-1">{m.msku}</span>
+                                ))}
+                                {blocked.length === 1 ? 'is' : 'are'} on the{' '}
+                                <span className="text-text-secondary">{blocked[0].channel}</span> channel — this is
+                                {' '}{batch.channel}, so it needs its own SKU. Reusing it would move the existing
+                                listing to {batch.channel}
+                                {blocked.some((m) => (m.unitsInStock || 0) > 0) ? ' and strand its FBA units' : ''}.
+                              </span>
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })()}
                   </div>
                 </div>
 
@@ -1267,7 +1480,7 @@ export default function BatchDetailPage({ params }: { params: Promise<{ id: stri
                   <div className="col-span-2">
                     <label className="text-[10px] uppercase tracking-widest text-text-tertiary flex items-center gap-1">
                       MSKU
-                      {scanned?.existingMskus?.some((m) => m.msku === sku) ? (
+                      {scanned?.existingMskus?.some((m) => m.msku === sku && m.compatible !== false) ? (
                         <span className="text-[9px] text-positive normal-case tracking-normal">restock · no new SKU</span>
                       ) : !skuManuallyEdited && supplier && buyPrice ? (
                         <span className="text-[9px] text-accent/70 normal-case tracking-normal">auto · new SKU</span>
@@ -1389,9 +1602,39 @@ export default function BatchDetailPage({ params }: { params: Promise<{ id: stri
       {/* Items table */}
       <div className="bg-bg-surface border border-border-subtle rounded-lg overflow-hidden">
         <div className="px-4 py-3 border-b border-border-subtle">
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 flex-wrap">
             <span className="text-sm font-medium">Batch Items</span>
             <span className="text-xs text-text-tertiary">({items.length})</span>
+            {/* Pre-flight shape of the batch — know BEFORE hitting Send */}
+            {batch.status === 'draft' && items.length > 0 && (() => {
+              const count = (s: string) => items.filter((i) => i.preflightStatus === s).length;
+              const ready = count('READY');
+              const pending = count('PENDING') + items.filter((i) => !i.preflightStatus && i.listPriceCents > 0).length;
+              const gated = count('GATED');
+              const catalog = count('CATALOG_ISSUE');
+              const stuck = count('STUCK');
+              const failed = count('FAILED');
+              const unpriced = count('UNPRICED') + items.filter((i) => !i.preflightStatus && (!i.listPriceCents || i.listPriceCents <= 0)).length;
+              const parts: { label: string; cls: string }[] = [];
+              if (ready > 0) parts.push({ label: `${ready} ready`, cls: 'text-positive' });
+              if (pending > 0) parts.push({ label: `${pending} registering`, cls: 'text-accent' });
+              if (gated > 0) parts.push({ label: `${gated} needs approval`, cls: 'text-negative' });
+              if (catalog > 0) parts.push({ label: `${catalog} catalog issue`, cls: 'text-amber-400' });
+              if (stuck > 0) parts.push({ label: `${stuck} not registered`, cls: 'text-amber-400' });
+              if (failed > 0) parts.push({ label: `${failed} failed`, cls: 'text-negative' });
+              if (unpriced > 0) parts.push({ label: `${unpriced} no price`, cls: 'text-text-tertiary' });
+              if (parts.length === 0) return null;
+              return (
+                <span className="text-[11px] font-mono flex items-center gap-1.5 ml-2">
+                  {parts.map((p, i) => (
+                    <span key={p.label} className={p.cls}>
+                      {i > 0 && <span className="text-text-tertiary/50 mr-1.5">·</span>}
+                      {p.label}
+                    </span>
+                  ))}
+                </span>
+              );
+            })()}
           </div>
         </div>
         {items.length === 0 ? (
@@ -1458,14 +1701,28 @@ export default function BatchDetailPage({ params }: { params: Promise<{ id: stri
                             </a>
                             <div className="flex items-center gap-1.5 text-[11px] text-text-tertiary font-mono">
                               <span>{item.sku}</span>
-                              {item.listingStatus === 'ACTIVE' && (
-                                <span className="text-[9px] text-positive bg-positive/10 px-1 rounded">LIVE</span>
+                              {item.fnsku && (
+                                <span className="text-[10px] text-text-tertiary/70">· {item.fnsku}</span>
                               )}
-                              {item.listingStatus === 'PROCESSING' && (
-                                <span className="text-[9px] text-accent bg-accent/10 px-1 rounded">PROCESSING</span>
-                              )}
-                              {item.listingStatus === 'FAILED' && (
-                                <span className="text-[9px] text-negative bg-negative/10 px-1 rounded">FAILED</span>
+                              {batch.status === 'draft' && item.preflightStatus ? (
+                                // Draft: pre-flight badge (gating / catalog / FNSKU state)
+                                <PreflightChip item={item} channel={batch.channel} />
+                              ) : (
+                                // Post-send: listing lifecycle chips
+                                <>
+                                  {item.listingStatus === 'ACTIVE' && (
+                                    <span className="text-[9px] text-positive bg-positive/10 px-1 rounded">LIVE</span>
+                                  )}
+                                  {item.listingStatus === 'PROCESSING' && (
+                                    <span className="text-[9px] text-accent bg-accent/10 px-1 rounded">PROCESSING</span>
+                                  )}
+                                  {item.listingStatus === 'FAILED' && (
+                                    <span className="text-[9px] text-negative bg-negative/10 px-1 rounded">FAILED</span>
+                                  )}
+                                  {item.listingStatus === 'NOT_INBOUND_READY' && (
+                                    <span className="text-[9px] text-amber-400 bg-amber-500/10 px-1 rounded">EXCLUDED</span>
+                                  )}
+                                </>
                               )}
                             </div>
                             {/* Inline warning / error message — always visible, not a tooltip */}
@@ -1739,7 +1996,7 @@ export default function BatchDetailPage({ params }: { params: Promise<{ id: stri
                 Cancel
               </button>
               <button
-                onClick={handleSendToAmazon}
+                onClick={() => handleSendToAmazon()}
                 disabled={sending}
                 className="h-9 px-4 bg-accent text-white rounded-md text-sm font-medium hover:bg-accent/90 disabled:opacity-50 transition-colors flex items-center gap-2"
               >
@@ -1994,7 +2251,15 @@ function BoxingWorkflow({
       allocated.set(bi.itemId, (allocated.get(bi.itemId) || 0) + bi.quantity);
     }
   }
-  const fullyAllocated = items.every((it) => (allocated.get(it.id) || 0) === it.quantity);
+  // Only items actually in the shipment need to be boxed. Items excluded at
+  // Send (NOT_INBOUND_READY — no FNSKU — or FAILED) were dropped from the
+  // inbound plan and aren't in any Amazon pack group, so they can never be
+  // allocated to a box. Counting them would leave `fullyAllocated` false
+  // forever and permanently disable "Confirm packing" even when every
+  // shippable item is boxed. (July 8, 2026: the excluded Giganotosaurus did
+  // exactly this on batch 28.)
+  const shippableItems = items.filter((it) => it.listingStatus === 'ACTIVE');
+  const fullyAllocated = shippableItems.every((it) => (allocated.get(it.id) || 0) === it.quantity);
 
   // Multi-group: pre-compute which boxes belong to each pack group, plus
   // per-group unallocated items. For single-group batches we render the same
@@ -2008,7 +2273,7 @@ function BoxingWorkflow({
 
   if (packGroups.length === 0) {
     // No group metadata yet — treat all boxes as one section, all batch items as that section's expected items
-    const unallocatedInGroup = items
+    const unallocatedInGroup = shippableItems
       .map((it) => ({ item: it, remaining: it.quantity - (allocated.get(it.id) || 0) }))
       .filter((x) => x.remaining > 0);
     groupSections.push({
@@ -2265,9 +2530,9 @@ function BoxingWorkflow({
             <div className="flex items-center justify-end gap-2 pt-2 border-t border-border-subtle">
               <button
                 onClick={onSaveBoxes}
-                disabled={savingBoxes || !fullyAllocated || packing}
+                disabled={savingBoxes || packing || boxes.length === 0}
                 className="h-9 px-3 bg-bg-elevated border border-border-default rounded text-xs text-text-secondary hover:text-text-primary hover:bg-bg-hover transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                title="Save boxes to FlipLedger without pushing to Amazon"
+                title="Save boxes to FlipLedger without pushing to Amazon (partial progress OK)"
               >
                 {savingBoxes ? 'Saving…' : 'Save draft'}
               </button>
@@ -2306,12 +2571,17 @@ function BoxingWorkflow({
             </div>
           )}
 
-          {!loadingPlacement && placementOptions.length === 0 && isPlacementPhase && !batch.placementStatus && (
+          {/* Show the generate button when options haven't been generated yet
+              OR when a previous generate FAILED (transient Amazon errors) —
+              otherwise a failed generate is a dead-end with no retry path. */}
+          {!loadingPlacement && placementOptions.length === 0 && isPlacementPhase &&
+            (!batch.placementStatus || batch.placementStatus === 'FAILED') && (
             <button
               onClick={onGeneratePlacement}
               className="h-9 px-4 bg-accent text-white rounded text-sm font-medium hover:bg-accent/90 transition-colors flex items-center gap-1.5"
             >
-              <MapPin size={12} /> Generate placement options
+              <MapPin size={12} />
+              {batch.placementStatus === 'FAILED' ? 'Retry placement options' : 'Generate placement options'}
             </button>
           )}
 
@@ -2405,7 +2675,9 @@ function BoxingWorkflow({
                 </div>
                 <p className="text-[11px] text-text-tertiary">
                   {batch.transportationStatus === 'CONFIRMED'
-                    ? <>Carrier booked: <span className="font-medium text-text-secondary">{batch.transportationCarrier}</span> ({batch.transportationShippingMode}). Print FBA box ID labels below + generate your own carrier shipping labels via your carrier&apos;s tools.</>
+                    ? (batch.transportationCarrier || '').toLowerCase().includes('ups')
+                      ? <>Carrier booked: <span className="font-medium text-text-secondary">{batch.transportationCarrier}</span> ({batch.transportationShippingMode}). Print FNSKU labels (one per unit, over the original UPC), then shipping labels — Amazon returns the FBA box ID and the UPS label together, one per page.</>
+                      : <>Carrier booked: <span className="font-medium text-text-secondary">{batch.transportationCarrier}</span> ({batch.transportationShippingMode}). Print FNSKU labels (one per unit) and FBA box ID labels below, then generate the carrier label with your own carrier&apos;s tools.</>
                     : <>Print FNSKU labels (one per unit, applied over original UPC) and box ID labels (one per box, taped to outside) for each shipment below. Choose a carrier in the next section to commit the shipment for transit.</>
                   }
                 </p>
@@ -2445,6 +2717,16 @@ function BoxingWorkflow({
                     const destLabel = dest?.city
                       ? `${dest.city}, ${dest.stateOrProvinceCode || ''} ${dest.postalCode || ''}`.trim()
                       : (s.destinationFC || 'Destination TBD');
+                    // ONE carton-label button. With Amazon Partnered UPS booked, the
+                    // 'shipping' PageType already returns the FBA box ID label AND the
+                    // UPS label together, so a separate box-label button is redundant.
+                    // Own-carrier shipments have no UPS label, so fall back to box-only.
+                    const partnered =
+                      batch.transportationStatus === 'CONFIRMED' &&
+                      (batch.transportationCarrier || '').toLowerCase().includes('ups');
+                    const cartonType: 'box' | 'shipping' = partnered ? 'shipping' : 'box';
+                    const cartonLabel = partnered ? 'Print shipping labels' : 'Print box labels';
+                    const cartonKey = `${cartonType}-${s.shipmentId}`;
                     return (
                       <div key={s.shipmentId} className="border border-border-subtle rounded-lg bg-bg-elevated p-3">
                         <div className="flex items-start justify-between mb-2">
@@ -2481,45 +2763,31 @@ function BoxingWorkflow({
                             PDF
                           </button>
                           <span className="text-text-tertiary text-[11px]">·</span>
-                          {/* Box labels */}
+                          {/* Carton labels — combined FBA box ID + UPS when Partnered, box ID alone otherwise */}
                           <button
-                            onClick={() => handlePrintLabels(s.shipmentId, 'box')}
-                            disabled={printingLabel === `box-${s.shipmentId}`}
-                            className="h-7 px-2.5 bg-bg-surface border border-border-default rounded text-[11px] font-medium text-text-primary hover:bg-bg-hover disabled:opacity-50 transition-colors flex items-center gap-1"
-                            title="Print box ID labels to Rollo"
+                            onClick={() => handlePrintLabels(s.shipmentId, cartonType)}
+                            disabled={printingLabel === cartonKey}
+                            className={
+                              partnered
+                                ? 'h-7 px-2.5 bg-positive/15 border border-positive/30 rounded text-[11px] font-medium text-positive hover:bg-positive/25 disabled:opacity-50 transition-colors flex items-center gap-1'
+                                : 'h-7 px-2.5 bg-bg-surface border border-border-default rounded text-[11px] font-medium text-text-primary hover:bg-bg-hover disabled:opacity-50 transition-colors flex items-center gap-1'
+                            }
+                            title={
+                              partnered
+                                ? 'Print carton labels to Rollo — Amazon returns the FBA box ID and the UPS shipping label together, one per page'
+                                : 'Print FBA box ID labels to Rollo (own carrier — generate the carrier label with your own tools)'
+                            }
                           >
-                            {printingLabel === `box-${s.shipmentId}` ? <Loader2 size={10} className="animate-spin" /> : null}
-                            Print box labels
+                            {printingLabel === cartonKey ? <Loader2 size={10} className="animate-spin" /> : null}
+                            {cartonLabel}
                           </button>
                           <button
-                            onClick={() => handleDownloadLabels(s.shipmentId, 'box')}
+                            onClick={() => handleDownloadLabels(s.shipmentId, cartonType)}
                             className="h-7 px-2 bg-bg-surface border border-border-default rounded text-[11px] text-text-secondary hover:text-text-primary hover:bg-bg-hover transition-colors"
-                            title="Download box ID labels as PDF instead of printing"
+                            title={partnered ? 'Download carton labels as PDF (FBA box ID + UPS)' : 'Download FBA box ID labels as PDF'}
                           >
                             PDF
                           </button>
-                          {/* Shipping labels — Partnered carrier only (combined FBA + UPS) */}
-                          {batch.transportationStatus === 'CONFIRMED' && (batch.transportationCarrier || '').toLowerCase().includes('ups') && (
-                            <>
-                              <span className="text-text-tertiary text-[11px]">·</span>
-                              <button
-                                onClick={() => handlePrintLabels(s.shipmentId, 'shipping')}
-                                disabled={printingLabel === `shipping-${s.shipmentId}`}
-                                className="h-7 px-2.5 bg-positive/15 border border-positive/30 rounded text-[11px] font-medium text-positive hover:bg-positive/25 disabled:opacity-50 transition-colors flex items-center gap-1"
-                                title="Print combined FBA + UPS shipping labels to Rollo (Partnered carrier)"
-                              >
-                                {printingLabel === `shipping-${s.shipmentId}` ? <Loader2 size={10} className="animate-spin" /> : null}
-                                Print shipping labels
-                              </button>
-                              <button
-                                onClick={() => handleDownloadLabels(s.shipmentId, 'shipping')}
-                                className="h-7 px-2 bg-bg-surface border border-border-default rounded text-[11px] text-text-secondary hover:text-text-primary hover:bg-bg-hover transition-colors"
-                                title="Download shipping labels as PDF (FBA top + UPS bottom)"
-                              >
-                                PDF
-                              </button>
-                            </>
-                          )}
                         </div>
                       </div>
                     );
@@ -2764,9 +3032,16 @@ function UnassignedItemRow({
 
   // Reset qty when remaining changes (e.g. after a partial add)
   useEffect(() => { setQty(remaining); }, [remaining]);
-  // Reset target box if it's no longer in this group's boxes
+  // Track box count so a NEWLY-ADDED box becomes the default target: when the
+  // user clicks "Add box", they're about to pack into it — every unassigned
+  // row should point there so adding is one click, not dropdown-then-click.
+  // (July 8, 2026 boxing-UX request.) Also reset the target if its box was
+  // removed.
+  const prevBoxCount = useRef(boxIndices.length);
   useEffect(() => {
-    if (!boxIndices.includes(targetBoxIdx)) {
+    const grew = boxIndices.length > prevBoxCount.current;
+    prevBoxCount.current = boxIndices.length;
+    if (grew || !boxIndices.includes(targetBoxIdx)) {
       setTargetBoxIdx(boxIndices[boxIndices.length - 1] ?? 0);
     }
   }, [boxIndices, targetBoxIdx]);
@@ -2889,16 +3164,48 @@ function CarrierBookingPanel({ batchId }: { batchId: number }) {
     }
   }
 
-  // Sort: Amazon Partnered first (they include a quote and Amazon-generated
-  // shipping labels), then small parcel by carrier, then LTL.
-  const sorted = [...options].sort((a, b) => {
-    const aPartnered = a.shippingSolution === 'AMAZON_PARTNERED_CARRIER' ? 0 : 1;
-    const bPartnered = b.shippingSolution === 'AMAZON_PARTNERED_CARRIER' ? 0 : 1;
-    if (aPartnered !== bPartnered) return aPartnered - bPartnered;
+  // A placement can span multiple shipments (Amazon splits across FCs). Amazon
+  // returns a transportation option PER shipment, so a single carrier choice
+  // (e.g. Amazon Partnered UPS Ground) shows up once per shipment. Collapse
+  // those into ONE choice per (solution, mode, carrier), summing the quote
+  // across shipments — so the card shows the TRUE total you'll pay, and only
+  // choices available for EVERY shipment are offered (Amazon requires a carrier
+  // for all shipments to confirm). July 8, 2026.
+  const shipmentIds = [...new Set(options.map((o) => o.shipmentId))];
+  const groupMap = new Map<string, TransportationOption[]>();
+  for (const o of options) {
+    const key = `${o.shippingSolution}|${o.shippingMode}|${(o.carrier?.name || '').toLowerCase()}`;
+    if (!groupMap.has(key)) groupMap.set(key, []);
+    groupMap.get(key)!.push(o);
+  }
+  const choices = [...groupMap.values()]
+    // Keep only carrier choices offered for every shipment in the placement.
+    .filter((opts) => shipmentIds.every((sid) => opts.some((o) => o.shipmentId === sid)))
+    .map((opts) => {
+      // One representative option per shipment (dedupe if Amazon repeats).
+      const perShipment = shipmentIds.map((sid) => opts.find((o) => o.shipmentId === sid)!);
+      const anyQuoted = perShipment.some((o) => o.quote?.cost?.amount != null);
+      const totalCost = perShipment.reduce((s, o) => s + (o.quote?.cost?.amount || 0), 0);
+      const first = perShipment[0];
+      return {
+        key: first.transportationOptionId,
+        repOptionId: first.transportationOptionId,
+        carrierName: first.carrier?.name || first.shippingSolution,
+        shippingMode: first.shippingMode,
+        shippingSolution: first.shippingSolution,
+        isPartnered: first.shippingSolution === 'AMAZON_PARTNERED_CARRIER',
+        totalCost: anyQuoted ? totalCost : null,
+        shipmentCount: perShipment.length,
+      };
+    });
+  const sorted = choices.sort((a, b) => {
+    const aP = a.isPartnered ? 0 : 1;
+    const bP = b.isPartnered ? 0 : 1;
+    if (aP !== bP) return aP - bP;
     const aSmall = a.shippingMode === 'GROUND_SMALL_PARCEL' ? 0 : 1;
     const bSmall = b.shippingMode === 'GROUND_SMALL_PARCEL' ? 0 : 1;
     if (aSmall !== bSmall) return aSmall - bSmall;
-    return (a.carrier?.name || '').localeCompare(b.carrier?.name || '');
+    return a.carrierName.localeCompare(b.carrierName);
   });
 
   return (
@@ -2933,52 +3240,57 @@ function CarrierBookingPanel({ batchId }: { batchId: number }) {
       {!loading && !regenerating && !error && sorted.length === 0 && (
         <div className="text-[11px] text-text-tertiary italic">No carrier options returned by Amazon. Try Refresh.</div>
       )}
-      {!loading && !regenerating && sorted.length > 0 && !sorted.some((o) => o.shippingSolution === 'AMAZON_PARTNERED_CARRIER') && (
+      {!loading && !regenerating && sorted.length > 0 && !sorted.some((c) => c.isPartnered) && (
         <div className="text-[11px] text-amber-400/90 italic">
           No Amazon Partnered rate yet — it&apos;s computed a moment after placement and may need another Refresh to appear.
         </div>
       )}
+      {shipmentIds.length > 1 && (
+        <div className="text-[10px] text-text-tertiary">
+          This placement has {shipmentIds.length} shipments — prices shown are the <span className="font-medium">total across all shipments</span>, and your carrier applies to every shipment.
+        </div>
+      )}
       {!loading && sorted.length > 0 && (
         <div className="grid grid-cols-1 md:grid-cols-2 gap-2 max-h-96 overflow-y-auto">
-          {sorted.map((o) => {
-            const isSelected = selected === o.transportationOptionId;
-            const cost = o.quote?.cost?.amount;
-            const isPartnered = o.shippingSolution === 'AMAZON_PARTNERED_CARRIER';
+          {sorted.map((c) => {
+            const isSelected = selected === c.repOptionId;
             return (
               <button
-                key={o.transportationOptionId}
+                key={c.key}
                 type="button"
-                onClick={() => setSelected(o.transportationOptionId)}
+                onClick={() => setSelected(c.repOptionId)}
                 className={`text-left border rounded p-2.5 transition-colors ${
                   isSelected
                     ? 'border-accent bg-accent/15 ring-1 ring-accent'
-                    : isPartnered
+                    : c.isPartnered
                       ? 'border-positive/40 bg-positive/5 hover:border-positive/60'
                       : 'border-border-subtle bg-bg-surface hover:border-border-default'
                 }`}
               >
                 <div className="flex items-center gap-1.5 mb-0.5">
                   <div className="text-xs font-medium text-text-primary truncate flex-1">
-                    {o.carrier?.name || o.shippingSolution}
+                    {c.carrierName}
                   </div>
-                  {isPartnered && (
+                  {c.isPartnered && (
                     <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-positive/20 text-positive uppercase tracking-wider shrink-0">
                       Partnered
                     </span>
                   )}
                 </div>
                 <div className="text-[10px] text-text-tertiary uppercase tracking-wider">
-                  {o.shippingMode.replace(/_/g, ' ')}
+                  {c.shippingMode.replace(/_/g, ' ')}
                 </div>
-                {cost !== undefined && (
-                  <div className="text-sm font-mono text-positive mt-1 font-medium">${cost.toFixed(2)}</div>
-                )}
-                {(!cost && o.shippingSolution === 'USE_YOUR_OWN_CARRIER') && (
+                {c.totalCost != null ? (
+                  <div className="text-sm font-mono text-positive mt-1 font-medium">
+                    ${c.totalCost.toFixed(2)}
+                    {c.shipmentCount > 1 && <span className="text-[10px] text-text-tertiary font-sans"> total · {c.shipmentCount} shipments</span>}
+                  </div>
+                ) : c.shippingSolution === 'USE_YOUR_OWN_CARRIER' ? (
                   <div className="text-[10px] text-text-tertiary mt-1 italic">
                     Pricing via your own carrier account
                   </div>
-                )}
-                {isPartnered && (
+                ) : null}
+                {c.isPartnered && (
                   <div className="text-[10px] text-positive/80 mt-1">
                     ✓ Amazon generates the UPS labels
                   </div>

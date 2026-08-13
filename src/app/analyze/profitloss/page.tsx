@@ -139,7 +139,7 @@ export default function ProfitLossPage() {
               <td colSpan={2} className="px-4 py-2 text-xs font-semibold tracking-widest uppercase text-accent">Income</td>
             </tr>
             <PLRow label="Sales" amount={data.income.sales} />
-            <PLRow label="MFN Shipping Credits" amount={data.income.shippingCredits} />
+            <PLRow label="Shipping Credits" amount={data.income.shippingCredits} />
             <PLRow label="Other Income" amount={data.income.otherIncome} />
             <PLRow label="Total Income" amount={data.income.total} bold />
 

@@ -17,6 +17,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import Database from 'better-sqlite3';
 import path from 'path';
 import { clearTokenCache } from '@/lib/sp-api/auth';
+import { resolveShipFromContact } from '@/lib/listing-ship-from';
 import {
   generateTransportationOptions,
   listTransportationOptions,
@@ -90,11 +91,7 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
       refreshToken: s.refreshToken,
       marketplaceId: s.marketplaceId || 'ATVPDKIKX0DER',
     };
-    contactInformation = {
-      name: s.listing_ship_from_name || 'Your Business',
-      phoneNumber: s.listing_ship_from_phone || '0000000000',
-      email: s.listing_ship_from_email || 'you@example.com',
-    };
+    contactInformation = resolveShipFromContact(s);
   } finally {
     db.close();
   }

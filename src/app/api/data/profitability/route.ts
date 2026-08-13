@@ -3,7 +3,7 @@ import Database from 'better-sqlite3';
 import path from 'path';
 
 function getDb() {
-  const dbPath = path.join(process.cwd(), 'data', 'flipledger.db');
+  const dbPath = process.env.FLIPLEDGER_DB_PATH || path.join(process.cwd(), 'data', 'flipledger.db');
   const db = new Database(dbPath, { readonly: true });
   db.pragma('journal_mode = WAL');
   return db;
@@ -43,7 +43,7 @@ export async function GET(request: NextRequest) {
         groupCol = 'oi.sku';
         selectCols = `oi.sku as groupKey, p.name as productName, oi.asin, p.category, s.name as supplierName`;
         joinClause = `LEFT JOIN products p ON oi.asin = p.asin
-          LEFT JOIN inventory_ledger il_s ON oi.sku = il_s.sku
+          LEFT JOIN (SELECT sku, MIN(supplier_id) as supplier_id FROM inventory_ledger GROUP BY sku) il_s ON oi.sku = il_s.sku
           LEFT JOIN suppliers s ON il_s.supplier_id = s.id`;
         groupByClause = 'oi.sku';
         break;
@@ -164,28 +164,73 @@ export async function GET(request: NextRequest) {
 
     const refundsMap = new Map(refundsByGroup.map((r: any) => [r.groupKey, { count: r.refundCount, units: r.refundUnits }]));
 
-    // Get on-hand inventory per group
-    const onHandGroupKey = groupBy === 'sku' ? 'il.sku' : groupBy === 'category' ? 'p.category' : groupBy === 'supplier' ? 's.name' : 'il.asin';
+    // Get on-hand inventory + its value at cost per group.
+    //
+    // Units come from live_inventory (real FBA/WFS counts), NOT from
+    // inventory_ledger.quantity_remaining — the ledger carries placeholder
+    // headroom lots (qty 1000) that exist for FIFO coverage, not as physical
+    // stock, and summing them reports ~195K phantom units. Same valuation
+    // rules as /api/data/inventory-overview: marketplace stock at the latest
+    // lot's buy_price, plus local/unsynced stock (small real lots for SKUs
+    // live_inventory doesn't track, e.g. eBay cards) at their weighted cost.
+    const onHandGroupKey = groupBy === 'sku' ? 'stock.sku' : groupBy === 'category' ? 'p.category' : groupBy === 'supplier' ? 's.name' : 'stock.asin';
+    const liveMktFilter = marketplace ? `AND li.marketplace = '${marketplace}'` : '';
+    const localMktFilter = marketplace ? `AND COALESCE(p_loc.marketplace, 'amazon') = '${marketplace}'` : '';
     const onHandByGroup = db.prepare(`
+      WITH latest_lot_sku AS (
+        SELECT sku, buy_price, supplier_id FROM (
+          SELECT sku, buy_price, supplier_id, ROW_NUMBER() OVER (PARTITION BY sku ORDER BY id DESC) rn
+          FROM inventory_ledger WHERE sku IS NOT NULL AND sku != ''
+        ) WHERE rn = 1
+      ),
+      latest_lot_asin AS (
+        SELECT asin, buy_price, supplier_id FROM (
+          SELECT asin, buy_price, supplier_id, ROW_NUMBER() OVER (PARTITION BY asin ORDER BY id DESC) rn
+          FROM inventory_ledger WHERE asin IS NOT NULL AND asin != ''
+        ) WHERE rn = 1
+      ),
+      stock AS (
+        SELECT li.sku as sku, li.asin as asin, li.total_qty as qty,
+               COALESCE(ls.buy_price, la.buy_price, 0) as unitCost,
+               COALESCE(ls.supplier_id, la.supplier_id) as supplier_id
+        FROM live_inventory li
+        LEFT JOIN latest_lot_sku ls ON ls.sku = li.sku
+        LEFT JOIN latest_lot_asin la ON la.asin = li.asin
+        WHERE li.total_qty > 0 ${liveMktFilter}
+        UNION ALL
+        SELECT il.sku, il.asin, SUM(il.quantity_remaining),
+               CAST(SUM(il.quantity_remaining * il.buy_price) / SUM(il.quantity_remaining) AS INTEGER),
+               MIN(il.supplier_id)
+        FROM inventory_ledger il
+        LEFT JOIN products p_loc ON p_loc.asin = il.asin OR p_loc.asin = il.sku
+        WHERE il.quantity_remaining > 0
+          AND il.quantity <= 20
+          AND il.buy_price > 0
+          AND NOT EXISTS (
+            SELECT 1 FROM live_inventory li
+            WHERE li.sku = il.sku OR (il.asin IS NOT NULL AND il.asin != '' AND li.asin = il.asin)
+          )
+          ${localMktFilter}
+        GROUP BY il.sku
+      )
       SELECT
         ${onHandGroupKey} as groupKey,
-        SUM(il.quantity_remaining) as onHand,
-        AVG(il.buy_price) as avgCostPerUnit
-      FROM inventory_ledger il
-      ${groupBy === 'category' ? 'LEFT JOIN products p ON il.asin = p.asin' : ''}
-      ${groupBy === 'supplier' ? 'LEFT JOIN suppliers s ON il.supplier_id = s.id' : ''}
-      WHERE il.quantity_remaining > 0
+        SUM(stock.qty) as onHand,
+        SUM(stock.qty * stock.unitCost) as inventoryValue
+      FROM stock
+      ${groupBy === 'category' ? 'LEFT JOIN products p ON p.asin = stock.asin' : ''}
+      ${groupBy === 'supplier' ? 'LEFT JOIN suppliers s ON s.id = stock.supplier_id' : ''}
       GROUP BY ${onHandGroupKey}
     `).all() as any[];
 
-    const onHandMap = new Map(onHandByGroup.map((h: any) => [h.groupKey, { onHand: h.onHand, avgCost: h.avgCostPerUnit }]));
+    const onHandMap = new Map(onHandByGroup.map((h: any) => [h.groupKey, { onHand: h.onHand, value: h.inventoryValue }]));
 
     // Build result rows
     const result = rows.map((row: any) => {
       const fees = feesMap.get(row.groupKey) || 0;
       const cogs = cogsMap.get(row.groupKey) || 0;
       const refunds = refundsMap.get(row.groupKey) || { count: 0, units: 0 };
-      const onHand = onHandMap.get(row.groupKey) || { onHand: 0, avgCost: 0 };
+      const onHand = onHandMap.get(row.groupKey) || { onHand: 0, value: 0 };
       const shippingCost = row.shippingCost || 0;
       const shippingCharged = row.shippingCharged || 0;
       const profit = row.revenue + shippingCharged - cogs - fees - shippingCost;
@@ -212,6 +257,7 @@ export async function GET(request: NextRequest) {
         roi,
         margin,
         onHand: onHand.onHand,
+        inventoryValue: onHand.value,
         shippingCharged: row.shippingCharged,
       };
     });
@@ -229,6 +275,12 @@ export async function GET(request: NextRequest) {
       acc.onHand += r.onHand;
       return acc;
     }, { orders: 0, unitsSold: 0, revenue: 0, fees: 0, cogs: 0, shippingCost: 0, profit: 0, refunds: 0, onHand: 0 });
+
+    // Inventory value is a point-in-time snapshot of everything on hand, so it
+    // is the grand total across all stock — NOT the sum of the visible rows,
+    // which only cover SKUs that sold inside the selected date range.
+    totals.inventoryValue = onHandByGroup.reduce((sum: number, h: any) => sum + (h.inventoryValue || 0), 0);
+    totals.inventoryUnits = onHandByGroup.reduce((sum: number, h: any) => sum + (h.onHand || 0), 0);
 
     totals.roi = totals.cogs > 0 ? (totals.profit / totals.cogs) * 100 : 0;
     totals.margin = totals.revenue > 0 ? (totals.profit / totals.revenue) * 100 : 0;

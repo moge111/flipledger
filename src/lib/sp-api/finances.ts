@@ -36,6 +36,13 @@ export async function syncFinancialEvents(
   let eventsProcessed = 0;
   let nextToken: string | undefined;
 
+  // Per-RUN service-fee batch tracker. This was a shared module-level Map
+  // reset at sync start — concurrent syncs (stacked auto-sync loops, or a
+  // manual sync overlapping the hourly tick) corrupted each other's counts,
+  // inflating batchCount and inserting thousands of orphaned ServiceFeeEvent
+  // rows (17.5K in June 2026 alone). A local map cannot be corrupted.
+  const serviceFeeTracker = new Map<string, number>();
+
   try {
     do {
       const params: Record<string, string> = {};
@@ -85,7 +92,7 @@ export async function syncFinancialEvents(
       if (eventGroup.ServiceFeeEventList) {
         for (const event of eventGroup.ServiceFeeEventList) {
           try {
-            processServiceFeeEvent(db, event);
+            processServiceFeeEvent(db, event, serviceFeeTracker);
             eventsProcessed++;
           } catch (err) {
             errors.push(`ServiceFeeEvent error: ${err}`);
@@ -432,10 +439,18 @@ function processRefundEvent(db: Database.Database, event: any) {
 
 // Track service fees seen in this sync batch to avoid inserting duplicates
 // from the same API response. Reset at the start of each sync.
-const serviceFeeTracker = new Map<string, number>();
-export function resetServiceFeeTracker() { serviceFeeTracker.clear(); }
+// Kept as a no-op for callers that still import it; the tracker is now a
+// per-run local inside syncFinancialEvents (see comment there).
+export function resetServiceFeeTracker() {}
 
-function processServiceFeeEvent(db: Database.Database, event: any) {
+// One-off per-shipment fee types whose pending copies roll dates across month
+// boundaries. Deduped over a trailing 60-day window instead of calendar month.
+export const ONE_OFF_SERVICE_FEE_TYPES = new Set([
+  'FBAInboundTransportationFee',
+  'FBAInboundConvenienceFee',
+]);
+
+function processServiceFeeEvent(db: Database.Database, event: any, serviceFeeTracker: Map<string, number>) {
   const now = new Date().toISOString();
   const fees = event.FeeList || [];
   const postedDate = event.PostedDate || now;
@@ -449,33 +464,56 @@ function processServiceFeeEvent(db: Database.Database, event: any) {
     const sku = event.SellerSKU || null;
     const currency = fee.FeeAmount?.CurrencyCode || 'USD';
 
-    // Dedup is MONTH-scoped, not day-scoped. Amazon's Financial Events API
-    // returns pending/un-settled service fees (subscription, storage, inbound
-    // transportation, etc.) with a ROLLING PostedDate — every daily sync gets
-    // the same fee re-dated to "today", so day-scoped dedup let the same fee
-    // in once per day. Storage/subscription/inbound fees are charged at most
-    // once per calendar month, so collapsing to one per (fee_type, amount,
-    // asin, month) is correct. The monthly transaction-report import remains
-    // the authoritative source and re-dates them precisely.
+    // Dedup scope depends on the fee's cadence. Amazon's Financial Events API
+    // returns pending/un-settled service fees with a ROLLING PostedDate —
+    // every sync gets the same fee re-dated to "today".
+    //
+    // MONTHLY-RECURRING fees (subscription, storage): charged once per
+    // calendar month with IDENTICAL amounts month over month, so dedup is
+    // month-scoped — one per (fee_type, amount, asin, month).
+    //
+    // ONE-OFF shipment fees (inbound transportation = Partnered UPS, inbound
+    // convenience = placement): charged once per shipment, but stay PENDING
+    // for weeks. Month-scoped dedup re-inserted the entire pending set every
+    // time its rolling date crossed a month boundary (July 2026: ~$254 of
+    // dupes). These use a trailing 60-day window instead — a genuine repeat
+    // of the same amount within 60 days is far rarer than a rolling dupe,
+    // and same-batch repeats are still preserved by the batch count.
+    const isOneOff = ONE_OFF_SERVICE_FEE_TYPES.has(feeType);
     const month = postedDate.substring(0, 7);
-    const dedupKey = `${feeType}|${amount}|${currency}|${asin || ''}|${sku || ''}|${month}`;
+    const dedupKey = isOneOff
+      ? `${feeType}|${amount}|${currency}|${asin || ''}|${sku || ''}|rolling`
+      : `${feeType}|${amount}|${currency}|${asin || ''}|${sku || ''}|${month}`;
 
     // Count how many of this exact fee we've seen in this sync batch
     const batchCount = (serviceFeeTracker.get(dedupKey) || 0) + 1;
     serviceFeeTracker.set(dedupKey, batchCount);
 
-    // Count how many already exist in the DB for this calendar month
-    const dbCount = (db.prepare(`
-      SELECT COUNT(*) as cnt FROM fee_details
-      WHERE fee_type = ?
-        AND amount = ?
-        AND COALESCE(asin, '') = ?
-        AND (order_id IS NULL OR order_id = '')
-        AND strftime('%Y-%m', posted_date) = ?
-    `).get(feeType, amount, asin || '', month) as any).cnt;
+    // Count how many already exist in the DB within the dedup scope
+    const dbCount = isOneOff
+      ? (db.prepare(`
+          SELECT COUNT(*) as cnt FROM fee_details
+          WHERE fee_type = ?
+            AND amount = ?
+            AND COALESCE(asin, '') = ?
+            AND (order_id IS NULL OR order_id = '')
+            AND posted_date >= datetime(?, '-60 days')
+        `).get(feeType, amount, asin || '', postedDate) as any).cnt
+      : (db.prepare(`
+          SELECT COUNT(*) as cnt FROM fee_details
+          WHERE fee_type = ?
+            AND amount = ?
+            AND COALESCE(asin, '') = ?
+            AND (order_id IS NULL OR order_id = '')
+            AND strftime('%Y-%m', posted_date) = ?
+        `).get(feeType, amount, asin || '', month) as any).cnt;
 
-    // Only insert if this batch has seen more than the DB already has
-    if (batchCount <= dbCount) continue;
+    // Only insert if this batch has seen more than the DB already has.
+    // One-off types are stricter: at most ONE copy per (type, amount, asin)
+    // per 60-day window regardless of batch multiplicity — Amazon's response
+    // can contain the SAME fee twice (settled-dated copy + rolling pending
+    // copy), which count-based dedup would misread as two real fees.
+    if (isOneOff ? dbCount >= 1 : batchCount <= dbCount) continue;
 
     // Use INSERT OR IGNORE — the COALESCE unique index may still block some inserts
     // when timestamps collide. That's OK for order-linked events but service fees need

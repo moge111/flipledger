@@ -201,8 +201,57 @@ Thank you,`,
   confidence: 'low',
 };
 
+// Lost-in-pipeline: Walmart deducted the refund but the unit never came back
+// to the seller's inventory (no restock, no RTV). This is an INVENTORY claim
+// ("Initiate claim" on the return page / a Seller Support case), NOT a refund
+// dispute — the Dispute button is blocked for WFS returns. The return reason
+// is irrelevant here; the claim is about the missing unit.
+export const LOST_IN_PIPELINE_TEMPLATE: DisputeTemplate = {
+  title: 'WFS return never returned to inventory (lost in returns processing)',
+  reasons: [],
+  body:
+`Hi Walmart Seller Support,
+
+I am requesting reimbursement for a WFS return that was deducted from my settlement but whose unit was never returned to my inventory.
+
+Order / PO #: {orderId}
+Item: {productName}
+SKU: {sku}
+Refund deducted from my payout: {refundAmount} (settled around {refundDate})
+Return reason given by customer: {reason}
+RMA: [open the return in Seller Center and paste the RMA number here]
+
+It has now been more than 60 days since the refund was deducted, and the returned unit has not:
+- been restocked to my sellable WFS inventory,
+- been returned to me as an RTV, or
+- generated any inventory adjustment or reimbursement.
+
+Per Walmart's stated policy (Seller Support, June 2026), Lost In Transit returns are proactively identified and automatically reimbursed when a return is not delivered and processed within 60 days. That window has passed and no reimbursement is visible on my settlements.
+
+Please investigate this return and either restore the unit to my sellable inventory or issue a reimbursement.
+
+Thank you.`,
+  evidenceChecklist: [
+    'Screenshot of the return page in Seller Center (shows refund issued + shipping/receiving status)',
+    'Screenshot of current WFS inventory for the SKU showing zero/unchanged stock',
+    'Settlement line showing the refund deduction',
+  ],
+  confidence: 'high',
+};
+
 export function getTemplateForReason(reason: string): DisputeTemplate {
   return TEMPLATES.find((t) => t.reasons.includes(reason)) || FALLBACK;
+}
+
+/**
+ * Template selection with candidate context: lost-in-pipeline candidates get
+ * the inventory-claim template regardless of the customer's return reason.
+ */
+export function getTemplateForCandidate(reason: string, eligibilityReasons: string[]): DisputeTemplate {
+  if (eligibilityReasons.some((t) => t.includes('never returned') || t.includes('lost in Walmart'))) {
+    return LOST_IN_PIPELINE_TEMPLATE;
+  }
+  return getTemplateForReason(reason);
 }
 
 export function renderTemplate(

@@ -43,7 +43,7 @@ export async function syncOrders(
       } else {
         params.CreatedAfter = startDate;
         if (endDate) params.CreatedBefore = endDate;
-        params.OrderStatuses = 'Pending,Unshipped,PartiallyShipped,Shipped';
+        params.OrderStatuses = 'Pending,Unshipped,PartiallyShipped,Shipped,Canceled';
       }
 
       const response = await spApiRequest(credentials, '/orders/v0/orders', params, 8);
@@ -59,6 +59,25 @@ export async function syncOrders(
           const purchaseDate = order.PurchaseDate;
           const status = order.OrderStatus;
           const channel = order.FulfillmentChannel === 'AFN' ? 'FBA' : 'MFN';
+
+          // Canceled orders: mark and reverse any previously-synced line items so
+          // they don't linger as phantom accrual revenue / consumed FIFO COGS.
+          // Canceled-before-ship orders have no financial events, so those are
+          // untouched. (Mirrors the eBay cancellation reversal.)
+          if (status === 'Canceled') {
+            db.prepare(`
+              INSERT INTO orders (order_id, purchase_date, status, marketplace, fulfillment_channel, is_estimated, created_at)
+              VALUES (?, ?, 'Canceled', 'amazon', ?, 0, ?)
+              ON CONFLICT(order_id) DO UPDATE SET status = 'Canceled'
+            `).run(orderId, purchaseDate, channel, now);
+            const removed = db.prepare('DELETE FROM order_items WHERE order_id = ?').run(orderId);
+            db.prepare('DELETE FROM sales_tax WHERE order_id = ?').run(orderId);
+            if (removed.changes > 0) {
+              console.log(`[Orders] ${orderId} canceled after sync — ${removed.changes} line item(s) reversed`);
+            }
+            ordersProcessed++;
+            continue;
+          }
           const isEstimated = (order.OrderStatus === 'Pending' || order.OrderStatus === 'Unshipped') ? 1 : 0;
           // shipped_at: when status is Shipped or PartiallyShipped, LastUpdateDate is when it shipped.
           // Don't overwrite a previously-recorded shipped_at on subsequent syncs (keep first-seen ship time).

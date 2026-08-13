@@ -39,6 +39,28 @@ interface DashboardData {
 
 const CHART_COLORS = ['#6366f1', '#22c55e', '#f59e0b', '#ec4899', '#06b6d4', '#a855f7', '#f97316'];
 
+interface TxRow {
+  time: string;
+  type: 'sale' | 'refund' | 'fee' | 'reimbursement';
+  marketplace: string;
+  title: string;
+  subtitle: string;
+  orderId: string | null;
+  amount: number;
+  deferred?: boolean;
+  releaseDate?: string | null;
+  settled?: boolean;
+}
+
+interface TxSummary {
+  count: number;
+  salesNet: number;
+  refunds: number;
+  fees: number;
+  reimbursements: number;
+  net: number;
+}
+
 interface DayDetail {
   order_id: string;
   marketplace: string;
@@ -61,7 +83,27 @@ export default function Dashboard() {
   const [showInFlight, setShowInFlight] = useState(false);
   const [inFlightItems, setInFlightItems] = useState<any[]>([]);
   const [inFlightLoading, setInFlightLoading] = useState(false);
+  const [transactions, setTransactions] = useState<TxRow[]>([]);
+  const [txSummary, setTxSummary] = useState<TxSummary | null>(null);
+  const [txLoading, setTxLoading] = useState(false);
   const { dateRange, setDateRange, marketplace, setMarketplace, marketplaceParam, dateBasis, setDateBasis, dateBasisParam } = useFilters();
+
+  // Single-day view (Today / Yesterday / a clicked day): show the exact
+  // transaction feed for that day automatically.
+  const singleDay = dateRange.startDate === dateRange.endDate;
+
+  useEffect(() => {
+    if (!singleDay) { setTransactions([]); setTxSummary(null); return; }
+    setTxLoading(true);
+    fetch(`/api/data/transactions?startDate=${dateRange.startDate}&endDate=${dateRange.endDate}${marketplaceParam}${dateBasisParam}`)
+      .then(r => r.json())
+      .then(d => {
+        setTransactions(d.transactions || []);
+        setTxSummary(d.summary || null);
+        setTxLoading(false);
+      })
+      .catch(() => setTxLoading(false));
+  }, [singleDay, dateRange.startDate, dateRange.endDate, marketplaceParam, dateBasisParam]);
 
   const fetchData = useCallback(async () => {
     setLoading(true);
@@ -367,6 +409,127 @@ export default function Dashboard() {
         </div>
       )}
 
+      {/* Single-day transaction feed: every transaction that posted this day */}
+      {singleDay && (
+        <div className="bg-bg-surface border border-border-subtle rounded-lg overflow-hidden mb-6">
+          <div className="flex items-center justify-between px-4 py-3 border-b border-border-subtle">
+            <div className="flex items-center gap-2">
+              <span className="text-sm font-semibold text-text-primary">
+                Transactions · {new Date(dateRange.startDate + 'T00:00:00').toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })}
+              </span>
+              {txSummary && (
+                <span className="text-xs text-text-tertiary">
+                  {txSummary.count} transaction{txSummary.count !== 1 ? 's' : ''}
+                </span>
+              )}
+            </div>
+            {txSummary && txSummary.count > 0 && (
+              <span className={`text-sm font-mono font-medium ${txSummary.net >= 0 ? 'text-positive' : 'text-negative'}`}>
+                Net {txSummary.net >= 0 ? '+' : ''}{formatCurrency(txSummary.net)}
+              </span>
+            )}
+          </div>
+          {txLoading ? (
+            <div className="p-4 text-sm text-text-tertiary">Loading transactions...</div>
+          ) : transactions.length === 0 ? (
+            <div className="p-4 text-sm text-text-tertiary">
+              Nothing has posted for this day yet. On Cash basis, Amazon sales post 1–3 days after shipment
+              (and sit in the DD7 hold — see the in-flight cards above); Walmart fees settle via recon 1–3 weeks later.
+            </div>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full">
+                <thead>
+                  <tr className="bg-bg-elevated">
+                    <th className="px-4 py-2 text-left text-[11px] font-medium tracking-widest uppercase text-text-tertiary border-b border-border-subtle w-20">Time</th>
+                    <th className="px-4 py-2 text-left text-[11px] font-medium tracking-widest uppercase text-text-tertiary border-b border-border-subtle w-24">Type</th>
+                    <th className="px-4 py-2 text-left text-[11px] font-medium tracking-widest uppercase text-text-tertiary border-b border-border-subtle">Details</th>
+                    <th className="px-4 py-2 text-left text-[11px] font-medium tracking-widest uppercase text-text-tertiary border-b border-border-subtle w-16">Mkt</th>
+                    <th className="px-4 py-2 text-left text-[11px] font-medium tracking-widest uppercase text-text-tertiary border-b border-border-subtle w-44">Order</th>
+                    <th className="px-4 py-2 text-right text-[11px] font-medium tracking-widest uppercase text-text-tertiary border-b border-border-subtle w-28">Amount</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {transactions.map((t, i) => (
+                    <tr key={i} className="border-b border-border-subtle/50 hover:bg-bg-hover transition-colors">
+                      <td className="px-4 py-2 text-xs font-mono text-text-tertiary whitespace-nowrap">
+                        {t.time && t.time.length > 10
+                          ? new Date(t.time).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })
+                          : '—'}
+                      </td>
+                      <td className="px-4 py-2">
+                        <span className={`inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold uppercase tracking-wider ${
+                          t.type === 'sale' ? 'bg-positive/10 text-positive' :
+                          t.type === 'refund' ? 'bg-negative/10 text-negative' :
+                          t.type === 'fee' ? 'bg-amber-500/10 text-amber-400' :
+                          'bg-cyan-500/10 text-cyan-400'
+                        }`}>
+                          {t.type === 'reimbursement' ? 'REIMB' : t.type.toUpperCase()}
+                        </span>
+                      </td>
+                      <td className="px-4 py-2 text-sm">
+                        <div className="flex items-center gap-1.5">
+                          <span className="text-text-primary font-medium truncate max-w-[320px]">{t.title}</span>
+                          {t.deferred && (
+                            <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-purple-500/10 text-purple-400 whitespace-nowrap"
+                              title="Held under Amazon's Delivery Date Policy — not in your available balance yet">
+                              DD7{t.releaseDate ? ` · rel ${new Date(t.releaseDate).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}` : ''}
+                            </span>
+                          )}
+                          {t.type === 'refund' && t.settled === false && (
+                            <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-bg-elevated text-text-tertiary whitespace-nowrap"
+                              title="Walmart hasn't settled this deduction yet — excluded from P&L and the net total until it appears in recon">
+                              NOT SETTLED
+                            </span>
+                          )}
+                        </div>
+                        <div className="text-[11px] text-text-tertiary truncate max-w-[380px]">{t.subtitle}</div>
+                      </td>
+                      <td className="px-4 py-2">
+                        <span className={`inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold uppercase tracking-wider ${
+                          t.marketplace === 'amazon' ? 'bg-orange-500/10 text-orange-400' :
+                          t.marketplace === 'walmart' ? 'bg-blue-500/10 text-blue-400' :
+                          t.marketplace === 'ebay' ? 'bg-green-500/10 text-green-400' :
+                          t.marketplace === 'paypal' ? 'bg-cyan-500/10 text-cyan-400' :
+                          'bg-purple-500/10 text-purple-400'
+                        }`}>
+                          {t.marketplace === 'amazon' ? 'AMZ' : t.marketplace === 'walmart' ? 'WMT' : t.marketplace === 'ebay' ? 'EBAY' : t.marketplace === 'paypal' ? 'PP' : (t.marketplace || '').toUpperCase()}
+                        </span>
+                      </td>
+                      <td className="px-4 py-2 text-xs font-mono">
+                        {t.orderId ? (
+                          <a href={`/lookup/${encodeURIComponent(t.orderId)}`} className="text-accent hover:underline">{t.orderId}</a>
+                        ) : (
+                          <span className="text-text-tertiary">—</span>
+                        )}
+                      </td>
+                      <td className={`px-4 py-2 text-right text-sm font-mono font-medium ${t.amount >= 0 ? 'text-positive' : 'text-negative'}`}>
+                        {t.amount >= 0 ? '+' : ''}{formatCurrency(t.amount)}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+                {txSummary && (
+                  <tfoot>
+                    <tr className="bg-bg-elevated">
+                      <td colSpan={5} className="px-4 py-2 text-xs text-text-tertiary">
+                        Sales net {formatCurrency(txSummary.salesNet)}
+                        {txSummary.refunds !== 0 && <> · Refunds {formatCurrency(txSummary.refunds)}</>}
+                        {txSummary.fees !== 0 && <> · Fees {formatCurrency(txSummary.fees)}</>}
+                        {txSummary.reimbursements !== 0 && <> · Reimb {formatCurrency(txSummary.reimbursements)}</>}
+                      </td>
+                      <td className={`px-4 py-2 text-right text-sm font-mono font-semibold ${txSummary.net >= 0 ? 'text-positive' : 'text-negative'}`}>
+                        {txSummary.net >= 0 ? '+' : ''}{formatCurrency(txSummary.net)}
+                      </td>
+                    </tr>
+                  </tfoot>
+                )}
+              </table>
+            </div>
+          )}
+        </div>
+      )}
+
       {/* Settlement fee note */}
       {stats.serviceFees > stats.totalRevenue * 0.3 && stats.serviceFees > 10000 && (
         <div className="mb-6 p-3 bg-amber-500/10 border border-amber-500/20 rounded-lg flex items-start gap-2">
@@ -393,9 +556,9 @@ export default function Dashboard() {
                   ? 'bg-accent/15 text-accent border-accent/30'
                   : 'bg-bg-elevated text-text-tertiary border-border-default hover:text-text-secondary'
               }`}
-              title="View all transactions in the selected date range"
+              title="View sales grouped by product for the selected date range"
             >
-              {selectedDay === '__range__' ? '✕ Hide transactions' : 'View transactions'}
+              {selectedDay === '__range__' ? '✕ Hide breakdown' : 'Sales by product'}
             </button>
           </div>
           <ResponsiveContainer width="100%" height={280}>

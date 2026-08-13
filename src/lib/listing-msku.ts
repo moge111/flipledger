@@ -124,11 +124,38 @@ export function formatBuyCost(buyPriceDollars: number | string | null | undefine
   return Number.isInteger(rounded) ? String(rounded) : rounded.toFixed(2);
 }
 
+/** Suffix that marks an MSKU as merchant-fulfilled. See MFN_SUFFIX usage below. */
+export const MFN_SUFFIX = '-mfn';
+
+/** True when the MSKU already carries the merchant-fulfilled marker. */
+export function hasMfnSuffix(msku: string | null | undefined): boolean {
+  return !!msku && msku.toLowerCase().endsWith(MFN_SUFFIX);
+}
+
 /**
  * Generate an MSKU from supplier, product name, and buy cost.
  * Skips empty parts gracefully.
+ *
+ * `channel` matters: Amazon lets a given MSKU sit on exactly ONE fulfillment
+ * channel at a time. PUTting an MFN offer onto an MSKU that is currently FBA
+ * flips the whole listing to merchant-fulfilled and strands the FBA units. So
+ * an MFN listing of an ASIN you also sell FBA needs its OWN MSKU — we mark it
+ * with a `-mfn` suffix so the two are distinguishable at a glance.
  */
 export function generateMSKU(
+  supplier: string | null | undefined,
+  productName: string | null | undefined,
+  buyPriceDollars: number | string | null | undefined,
+  fallbackAsin?: string | null,
+  channel?: 'FBA' | 'MFN' | null
+): string {
+  const base = generateMskuBase(supplier, productName, buyPriceDollars, fallbackAsin);
+  if (!base) return '';
+  if (channel === 'MFN' && !hasMfnSuffix(base)) return `${base}${MFN_SUFFIX}`;
+  return base;
+}
+
+function generateMskuBase(
   supplier: string | null | undefined,
   productName: string | null | undefined,
   buyPriceDollars: number | string | null | undefined,

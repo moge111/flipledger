@@ -3,7 +3,7 @@
 import { useEffect, useState, useCallback } from 'react';
 import { formatCurrency, formatDate, formatNumber } from '@/lib/formatters';
 import { ExternalLink, RefreshCw, AlertCircle, Loader2, CheckCircle2, XCircle, Inbox, Copy, Check, FileText, X as XClose } from 'lucide-react';
-import { getTemplateForReason, renderTemplate, type DisputeTemplate } from '@/lib/walmart-disputes/templates';
+import { getTemplateForCandidate, renderTemplate, type DisputeTemplate } from '@/lib/walmart-disputes/templates';
 import CopyableText from '@/components/ui/CopyableText';
 
 interface Candidate {
@@ -101,7 +101,7 @@ export default function WalmartDisputesPage() {
   const walmartFilingUrl = 'https://seller.walmart.com/returns-reimbursements/dashboard';
 
   function openTemplate(c: Candidate) {
-    const template = getTemplateForReason(c.returnReason);
+    const template = getTemplateForCandidate(c.returnReason, c.eligibilityReasons || []);
     const body = renderTemplate(template, {
       orderId: c.orderId,
       refundDate: formatDate(c.refundDate),
@@ -344,7 +344,7 @@ export default function WalmartDisputesPage() {
 
       {/* Dispute template modal */}
       {openCandidate && (() => {
-        const template = getTemplateForReason(openCandidate.returnReason);
+        const template = getTemplateForCandidate(openCandidate.returnReason, openCandidate.eligibilityReasons || []);
         return (
           <div
             className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4"

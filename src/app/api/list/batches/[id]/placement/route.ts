@@ -127,6 +127,15 @@ export async function GET(
     try {
       options = await listPlacementOptions(creds, batch.inboundPlanId);
     } catch (err) {
+      // A FAILED generate never produced options — return an empty list so
+      // the UI can offer a retry instead of surfacing a 500.
+      if (batch.placementStatus === 'FAILED') {
+        return NextResponse.json({
+          generated: false,
+          placementStatus: batch.placementStatus,
+          options: [],
+        });
+      }
       return NextResponse.json({ error: `listPlacementOptions failed: ${err}` }, { status: 500 });
     }
 
@@ -219,21 +228,52 @@ async function handleGenerate(
   // Mark placement in-progress
   updateBatchPlacement(batchId, { status: 'IN_PROGRESS', error: null });
 
-  // 1. generatePlacementOptions
-  let op: { operationId: string };
-  try {
-    op = await generatePlacementOptions(creds, inboundPlanId);
-  } catch (err) {
-    updateBatchPlacement(batchId, { status: 'FAILED', error: `generatePlacementOptions: ${err}` });
-    return NextResponse.json({ error: String(err) }, { status: 500 });
-  }
-  updateBatchPlacement(batchId, { operationId: op.operationId });
+  // 1+2. generatePlacementOptions + wait for the operation.
+  //
+  // Amazon's placement engine intermittently fails the generate OPERATION
+  // with a bare InternalServerError ("Something went wrong") — a transient
+  // Amazon-side error, same family as the Partnered-UPS lazy-rate warm-up.
+  // Retry a few times before declaring failure. (This exact error stranded
+  // batch 26 at the placement step on June 22, 2026 — the packing had
+  // succeeded, one transient 500 killed the whole flow.)
+  const GEN_MAX_ATTEMPTS = 3;
+  const GEN_RETRY_DELAY_MS = 20_000;
+  const isTransient = (msg: string) =>
+    msg.includes('InternalServerError') || msg.includes('Something went wrong');
+  let genError = '';
+  let generated = false;
+  for (let attempt = 1; attempt <= GEN_MAX_ATTEMPTS; attempt++) {
+    let op: { operationId: string };
+    try {
+      op = await generatePlacementOptions(creds, inboundPlanId);
+    } catch (err) {
+      genError = `generatePlacementOptions: ${err}`;
+      if (isTransient(String(err)) && attempt < GEN_MAX_ATTEMPTS) {
+        console.warn(`[placement] transient generate error (attempt ${attempt}/${GEN_MAX_ATTEMPTS}), retrying in ${GEN_RETRY_DELAY_MS / 1000}s:`, err);
+        await new Promise((r) => setTimeout(r, GEN_RETRY_DELAY_MS));
+        continue;
+      }
+      updateBatchPlacement(batchId, { status: 'FAILED', error: genError });
+      return NextResponse.json({ error: String(err) }, { status: 500 });
+    }
+    updateBatchPlacement(batchId, { operationId: op.operationId });
 
-  // 2. Wait for op to finish
-  const result = await waitForOperation(creds, op.operationId, 180_000);
-  if (!result.success) {
-    updateBatchPlacement(batchId, { status: 'FAILED', error: `generatePlacementOptions op failed: ${result.error}` });
-    return NextResponse.json({ error: result.error }, { status: 500 });
+    const result = await waitForOperation(creds, op.operationId, 180_000);
+    if (result.success) {
+      generated = true;
+      break;
+    }
+    genError = `generatePlacementOptions op failed: ${result.error}`;
+    if (isTransient(result.error || '') && attempt < GEN_MAX_ATTEMPTS) {
+      console.warn(`[placement] transient op failure (attempt ${attempt}/${GEN_MAX_ATTEMPTS}), retrying in ${GEN_RETRY_DELAY_MS / 1000}s:`, result.error);
+      await new Promise((r) => setTimeout(r, GEN_RETRY_DELAY_MS));
+      continue;
+    }
+    break;
+  }
+  if (!generated) {
+    updateBatchPlacement(batchId, { status: 'FAILED', error: genError });
+    return NextResponse.json({ error: genError }, { status: 500 });
   }
 
   // 3. List the options so the frontend can display them immediately.

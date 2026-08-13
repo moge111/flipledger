@@ -3,7 +3,7 @@ import Database from 'better-sqlite3';
 import path from 'path';
 
 function getDb() {
-  const dbPath = path.join(process.cwd(), 'data', 'flipledger.db');
+  const dbPath = process.env.FLIPLEDGER_DB_PATH || path.join(process.cwd(), 'data', 'flipledger.db');
   const db = new Database(dbPath, { readonly: true });
   db.pragma('journal_mode = WAL');
   return db;
@@ -67,6 +67,31 @@ export async function GET(request: NextRequest) {
       WHERE fe.posted_date >= ? AND fe.posted_date < ? ${MF}
     `).get(prevStart, startDate) as any;
 
+    // Non-MFN shipping credits are income only when Amazon also charges them
+    // back (the chargeback is already counted in fees, so the pair nets to
+    // zero). Must mirror the P&L exactly — see the long note in
+    // src/app/api/data/profitloss/route.ts. Excluding the credit while keeping
+    // the chargeback fee double-penalised every one of these orders.
+    const chargedBackShipping = db.prepare(`
+      SELECT COALESCE(SUM(MIN(x.sc, x.cb)), 0) as total
+      FROM (
+        SELECT oi.order_id,
+               SUM(oi.shipping_charged) as sc,
+               COALESCE((SELECT -SUM(fd.amount) FROM fee_details fd
+                         WHERE fd.order_id = oi.order_id
+                           AND fd.fee_type = 'ShippingChargeback'), 0) as cb
+        FROM order_items oi
+        JOIN ${FE} fe ON oi.order_id = fe.order_id
+        JOIN orders o ON oi.order_id = o.order_id
+        WHERE fe.posted_date >= ? AND fe.posted_date < ? ${MF}
+          AND o.fulfillment_channel NOT IN ('MFN', 'Seller')
+        GROUP BY oi.order_id
+      ) x
+      WHERE x.sc > 0 AND x.cb > 0
+    `);
+    salesData.totalRevenue += (chargedBackShipping.get(startDate, endDateNext) as any).total;
+    prevSalesData.totalRevenue += (chargedBackShipping.get(prevStart, startDate) as any).total;
+
     // ─── Order fees ───────────────────────────────────────────────────
     const orderFeeData = db.prepare(`
       SELECT COALESCE(-SUM(fd.amount), 0) as totalFees
@@ -105,6 +130,13 @@ export async function GET(request: NextRequest) {
     `).get(prevStart, startDate) as any;
 
     // ─── COGS ─────────────────────────────────────────────────────────
+    // Net of cross-year return relief (cogs_reversals, dated by refund_date)
+    // — mirrors the P&L exactly so Dashboard = P&L parity holds.
+    const cogsReversalQ = db.prepare(`
+      SELECT COALESCE(SUM(amount), 0) as total FROM cogs_reversals
+      WHERE refund_date >= ? AND refund_date < ? ${MF_R}
+    `);
+
     const cogsData = db.prepare(`
       SELECT COALESCE(SUM(oi.cogs_per_unit * oi.quantity), 0) as totalCogs
       FROM order_items oi
@@ -112,6 +144,7 @@ export async function GET(request: NextRequest) {
       JOIN orders o ON oi.order_id = o.order_id
       WHERE fe.posted_date >= ? AND fe.posted_date < ? ${MF}
     `).get(startDate, endDateNext) as any;
+    cogsData.totalCogs -= (cogsReversalQ.get(startDate, endDateNext) as any).total;
 
     const prevCogsData = db.prepare(`
       SELECT COALESCE(SUM(oi.cogs_per_unit * oi.quantity), 0) as totalCogs
@@ -120,6 +153,7 @@ export async function GET(request: NextRequest) {
       JOIN orders o ON oi.order_id = o.order_id
       WHERE fe.posted_date >= ? AND fe.posted_date < ? ${MF}
     `).get(prevStart, startDate) as any;
+    prevCogsData.totalCogs -= (cogsReversalQ.get(prevStart, startDate) as any).total;
 
     // ─── Refunds ──────────────────────────────────────────────────────
     // Walmart refunds: only count those settled in recon (matches Walmart Net

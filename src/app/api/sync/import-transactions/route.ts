@@ -191,9 +191,11 @@ export async function POST(request: NextRequest) {
     // wipes ServiceFeeEvent data NEWER than the CSV (e.g. May/June pending
     // fees when the CSV ends Apr 10) and the import replaces it with nothing.
     let csvMaxDate = '';
+    let csvMinDate = '9999';
     for (const row of rows) {
       const d = parseDateToISO(row.dateTime);
       if (d && d > csvMaxDate) csvMaxDate = d;
+      if (d && d < csvMinDate) csvMinDate = d;
     }
     if (!csvMaxDate) {
       db.close();
@@ -204,19 +206,20 @@ export async function POST(request: NextRequest) {
       // === 1. DELETE old service fee data (wrong timestamps from Financial Events API) ===
       // Scoped to the CSV's coverage window. Delete fee_details FIRST (before
       // their parent events), then events.
+      // Delete every fee_details child of the events deleted below — keyed off
+      // the PARENT event set, not a fee_type list. A hardcoded type list missed
+      // the settlement-parser type names (StorageFee, SubscriptionFee,
+      // Adjustment, Shippinglabelpurchaseforreturn, StorageRenewalBilling, …),
+      // leaving orphaned fee_details behind every import (caught by
+      // tests/live-invariants.test.ts, July 6 2026).
       const deletedFeeDetails = db.prepare(`
         DELETE FROM fee_details
         WHERE (order_id IS NULL OR order_id = '')
-        AND date(posted_date) <= date(?)
-        AND fee_type IN ('Subscription', 'FBAStorageFee', 'FBALongTermStorageFee', 'FBARemovalFee',
-                         'CostOfAdvertising', 'FBAInboundTransportationFee', 'FBAInboundConvenienceFee',
-                         'FBAInboundPlacementServiceFee', 'UnplannedServiceCharge',
-                         'CustomerReturnHRRUnitFee', 'FBADisposalFee', 'FBAInboundDefectFee',
-                         'FBAInboundShipmentCartonLevelInfoFee', 'InboundTransportationFee',
-                         'RemovalComplete', 'DisposalComplete')
         AND financial_event_id IN (
           SELECT id FROM financial_events
-          WHERE event_type IN ('ServiceFeeEvent', 'SettlementServiceFee') AND marketplace = 'amazon'
+          WHERE event_type IN ('ServiceFeeEvent', 'SettlementServiceFee')
+            AND marketplace = 'amazon'
+            AND date(posted_date) <= date(?)
         )
       `).run(csvMaxDate);
 
@@ -230,19 +233,24 @@ export async function POST(request: NextRequest) {
         AND date(posted_date) <= date(?)
       `).run(csvMaxDate);
 
-      // Also delete any previous transaction report imports (for idempotency)
-      // Delete fee_details tied to previous transaction report imports
+      // Also delete any previous transaction report imports (for idempotency).
+      // Scoped to THIS CSV's coverage window — a prior import may cover months
+      // this CSV doesn't (e.g. Oct-Dec 2025 from the first import vs a
+      // Jan-Jun 2026 export); rows outside the window have nothing to replace
+      // them and must survive.
       db.prepare(`
         DELETE FROM fee_details
         WHERE financial_event_id IN (
           SELECT id FROM financial_events
           WHERE event_type IN ('TransactionReportServiceFee', 'TransactionReportInventoryFee', 'TransactionReportLiquidation')
+          AND date(posted_date) >= date(?) AND date(posted_date) <= date(?)
         )
-      `).run();
+      `).run(csvMinDate, csvMaxDate);
       db.prepare(`
         DELETE FROM financial_events
         WHERE event_type IN ('TransactionReportServiceFee', 'TransactionReportInventoryFee', 'TransactionReportLiquidation')
-      `).run();
+        AND date(posted_date) >= date(?) AND date(posted_date) <= date(?)
+      `).run(csvMinDate, csvMaxDate);
 
       stats.serviceFees.deleted = deletedFeeDetails.changes;
       stats.fbaInventoryFees.deleted = deletedEvents.changes;
@@ -289,10 +297,12 @@ export async function POST(request: NextRequest) {
 
       // === 3. Shipping Services ===
       // Clean up previous import's shipping adjustments and return postage
+      // (scoped to this CSV's coverage window, same reasoning as above)
       db.prepare(`
         DELETE FROM fee_details WHERE fee_type IN ('ShippingLabelAdjustment', 'ReturnPostageBilling')
         AND fee_category = 'Other Fees' AND financial_event_id = 0
-      `).run();
+        AND date(posted_date) >= date(?) AND date(posted_date) <= date(?)
+      `).run(csvMinDate, csvMaxDate);
 
       const updateShippingCost = db.prepare(`
         UPDATE order_items SET shipping_cost = ? WHERE order_id = ?

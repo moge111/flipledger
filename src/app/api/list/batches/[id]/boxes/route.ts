@@ -18,7 +18,7 @@ import Database from 'better-sqlite3';
 import path from 'path';
 
 function getDb() {
-  const dbPath = path.join(process.cwd(), 'data', 'flipledger.db');
+  const dbPath = process.env.FLIPLEDGER_DB_PATH || path.join(process.cwd(), 'data', 'flipledger.db');
   const db = new Database(dbPath);
   db.pragma('journal_mode = WAL');
   db.pragma('foreign_keys = ON');
@@ -129,9 +129,16 @@ export async function POST(
       }, { status: 400 });
     }
 
-    // Load batch items to validate quantities
+    // Load batch items to validate quantities. Only items actually in the
+    // shipment need boxing — items excluded at Send (NOT_INBOUND_READY: no
+    // FNSKU; FAILED: rejected at listing creation) were dropped from the
+    // inbound plan and can't be boxed. Including them here made the
+    // full-allocation check below reject every save because they can never be
+    // allocated (July 8, 2026: the excluded Giganotosaurus blocked Confirm
+    // packing on batch 28 both client- AND server-side).
     const batchItems = db.prepare(`
-      SELECT id, quantity FROM listing_batch_items WHERE batch_id = ?
+      SELECT id, quantity FROM listing_batch_items
+      WHERE batch_id = ? AND COALESCE(listing_status,'') NOT IN ('NOT_INBOUND_READY', 'FAILED')
     `).all(batchId) as { id: number; quantity: number }[];
     const itemQtyMap = new Map<number, number>();
     for (const it of batchItems) itemQtyMap.set(it.id, it.quantity);
@@ -211,24 +218,29 @@ export async function POST(
       }
     }
 
-    // Every batch item must be fully allocated across boxes — no more, no less.
+    // Saving boxes is a DRAFT operation — partial allocation is fine (the
+    // user is mid-packing, and the boxing UI auto-saves as they edit so a
+    // crash never loses work). Only OVER-allocation is rejected here (never
+    // valid). The exact-match invariant is enforced where it matters: the
+    // /pack pre-flight check, before anything is pushed to Amazon.
     for (const [itemId, expectedQty] of itemQtyMap.entries()) {
       const allocatedQty = allocMap.get(itemId) || 0;
-      if (allocatedQty !== expectedQty) {
+      if (allocatedQty > expectedQty) {
         return NextResponse.json({
           error: `Item ${itemId} has ${expectedQty} units in the batch but ${allocatedQty} allocated across boxes`,
         }, { status: 400 });
       }
     }
 
-    // Multi-group: per-group allocations must match Amazon's group allocations
+    // Multi-group: per-group allocations must not EXCEED Amazon's group
+    // allocations (under-allocation is a valid draft state).
     if (isMultiGroup) {
       for (const g of packGroups) {
         const expected = groupItemQtyMap[g.packingGroupId];
         const actual = allocPerGroup[g.packingGroupId] || new Map();
-        for (const [itemId, expectedQty] of expected.entries()) {
-          const actualQty = actual.get(itemId) || 0;
-          if (actualQty !== expectedQty) {
+        for (const [itemId, actualQty] of actual.entries()) {
+          const expectedQty = expected.get(itemId) || 0;
+          if (actualQty > expectedQty) {
             return NextResponse.json({
               error: `Pack group ${g.packingGroupId}: item ${itemId} expected ${expectedQty} units but ${actualQty} allocated`,
             }, { status: 400 });

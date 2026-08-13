@@ -3,7 +3,7 @@ import Database from 'better-sqlite3';
 import path from 'path';
 
 function getDb() {
-  const dbPath = path.join(process.cwd(), 'data', 'flipledger.db');
+  const dbPath = process.env.FLIPLEDGER_DB_PATH || path.join(process.cwd(), 'data', 'flipledger.db');
   const db = new Database(dbPath, { readonly: true });
   db.pragma('journal_mode = WAL');
   return db;
@@ -26,6 +26,38 @@ export async function GET(request: NextRequest) {
   const mktFilter = marketplace ? 'AND o.marketplace = ?' : '';
   const mktParams = marketplace ? [marketplace] : [];
 
+  // Shipping charged to the buyer that belongs in gross receipts.
+  //
+  // This page reconciles to the 1099-K, whose gross is BEFORE deductions — so
+  // a shipping credit belongs here whenever it reached the account, even if
+  // something else claws it back. Three settlement patterns, verified against
+  // Amazon's Unified Transaction Report and the raw ShipmentEvent payloads:
+  //   MFN/Seller  — always yours (you set the rate and keep it).
+  //   Non-MFN + ShippingChargeback — credit and chargeback are both in
+  //     Amazon's payout total; the chargeback is deducted under fees below.
+  //   Non-MFN + an equal, offsetting promotional rebate (Amazon Global export
+  //     orders) — the rebate is deducted under promotionalRebates below.
+  // Excluded: Walmart WFS (no shipping credit line exists in recon at all —
+  //   Walmart keeps the customer's shipping fee) and any non-MFN credit with
+  //   no offset on either side.
+  //
+  // NOTE — this deliberately differs from the P&L rule, which admits only the
+  // charged-back case. The P&L does not deduct promotional rebates at all
+  // (product discounts are already baked into total_price), so counting an
+  // export credit there would have no matching offset. Same economics, two
+  // presentations. See src/app/api/data/profitloss/route.ts.
+  const SHIP_INCOME = `CASE
+    WHEN o.fulfillment_channel IN ('MFN', 'Seller') THEN COALESCE(oi.shipping_charged, 0)
+    WHEN COALESCE(oi.shipping_charged, 0) > 0 AND EXISTS (
+      SELECT 1 FROM fee_details fd
+      WHERE fd.order_id = oi.order_id AND fd.fee_type = 'ShippingChargeback'
+    ) THEN COALESCE(oi.shipping_charged, 0)
+    WHEN COALESCE(oi.shipping_charged, 0) > 0
+     AND -COALESCE(oi.promotional_rebate, 0) = COALESCE(oi.shipping_charged, 0)
+      THEN COALESCE(oi.shipping_charged, 0)
+    ELSE 0
+  END`;
+
   try {
     // ═══ INCOME ═══════════════════════════════════════════════════════
 
@@ -33,8 +65,8 @@ export async function GET(request: NextRequest) {
     const income = db.prepare(`
       SELECT
         COALESCE(SUM(oi.total_price), 0) as productSales,
-        COALESCE(SUM(COALESCE(oi.shipping_charged, 0)), 0) as shippingIncome,
-        COALESCE(SUM(oi.total_price + COALESCE(oi.shipping_charged, 0)), 0) as grossReceipts,
+        COALESCE(SUM(${SHIP_INCOME}), 0) as shippingIncome,
+        COALESCE(SUM(oi.total_price + ${SHIP_INCOME}), 0) as grossReceipts,
         COUNT(DISTINCT o.order_id) as orderCount,
         COALESCE(SUM(oi.quantity), 0) as unitsSold
       FROM order_items oi
@@ -86,7 +118,7 @@ export async function GET(request: NextRequest) {
       SELECT
         strftime('%Y-%m', o.purchase_date) as month,
         COALESCE(SUM(oi.total_price), 0) as productSales,
-        COALESCE(SUM(COALESCE(oi.shipping_charged, 0)), 0) as shippingIncome,
+        COALESCE(SUM(${SHIP_INCOME}), 0) as shippingIncome,
         COUNT(DISTINCT o.order_id) as orderCount,
         COALESCE(SUM(oi.quantity), 0) as unitsSold
       FROM order_items oi
@@ -98,13 +130,21 @@ export async function GET(request: NextRequest) {
 
     // ═══ COGS (FIFO) ═════════════════════════════════════════════════
 
-    // Cost of goods sold (from pre-calculated FIFO cogs_per_unit)
+    // Cost of goods sold (from pre-calculated FIFO cogs_per_unit), net of
+    // cross-year return relief: an item sold in a PRIOR year keeps its COGS in
+    // that (filed) year; the return credits COGS in THIS year via
+    // cogs_reversals, dated at the refund.
     const cogsSold = db.prepare(`
       SELECT COALESCE(SUM(oi.cogs_per_unit * oi.quantity), 0) as total
       FROM order_items oi
       JOIN orders o ON oi.order_id = o.order_id
       WHERE o.purchase_date >= ? AND o.purchase_date < ? ${mktFilter}
     `).get(startDate, endDate, ...mktParams) as any;
+    const cogsReversalsYear = db.prepare(`
+      SELECT COALESCE(SUM(amount), 0) as total FROM cogs_reversals
+      WHERE refund_date >= ? AND refund_date < ? ${marketplace ? 'AND marketplace = ?' : ''}
+    `).get(startDate, endDate, ...mktParams) as any;
+    cogsSold.total -= cogsReversalsYear.total;
 
     // Inbound shipping to FBA
     const inboundShipping = db.prepare(`
@@ -159,7 +199,10 @@ export async function GET(request: NextRequest) {
     }
     const totalAmazonFees = Object.values(feeSummary).reduce((s, v) => s + v, 0);
 
-    // Promotional rebates
+    // Promotional rebates. Includes the export-order rebates that offset a
+    // shipping credit — SHIP_INCOME counts that credit in gross receipts, so
+    // the pair must be deducted here or net income is overstated. The two
+    // rules are a matched pair: change one, change both.
     const promos = db.prepare(`
       SELECT COALESCE(SUM(ABS(COALESCE(oi.promotional_rebate, 0))), 0) as total
       FROM order_items oi
@@ -227,8 +270,8 @@ export async function GET(request: NextRequest) {
       SELECT
         o.marketplace,
         COALESCE(SUM(oi.total_price), 0) as productSales,
-        COALESCE(SUM(COALESCE(oi.shipping_charged, 0)), 0) as shippingIncome,
-        COALESCE(SUM(oi.total_price + COALESCE(oi.shipping_charged, 0)), 0) as grossReceipts,
+        COALESCE(SUM(${SHIP_INCOME}), 0) as shippingIncome,
+        COALESCE(SUM(oi.total_price + ${SHIP_INCOME}), 0) as grossReceipts,
         COUNT(DISTINCT o.order_id) as orderCount,
         COALESCE(SUM(oi.quantity), 0) as unitsSold,
         COALESCE(SUM(oi.cogs_per_unit * oi.quantity), 0) as cogs
@@ -238,6 +281,17 @@ export async function GET(request: NextRequest) {
       GROUP BY o.marketplace
       ORDER BY grossReceipts DESC
     `).all(startDate, endDate) as any[];
+
+    // Net each marketplace's COGS of its cross-year return relief (same rule
+    // as the aggregate cogsSold above).
+    const reversalsByMarketplace = db.prepare(`
+      SELECT marketplace, COALESCE(SUM(amount), 0) as total FROM cogs_reversals
+      WHERE refund_date >= ? AND refund_date < ? GROUP BY marketplace
+    `).all(startDate, endDate) as any[];
+    for (const rev of reversalsByMarketplace) {
+      const row = marketplaceBreakdown.find((m: any) => m.marketplace === rev.marketplace);
+      if (row) row.cogs -= rev.total;
+    }
 
     // Fees per marketplace (order-linked)
     const feesByMarketplace = db.prepare(`

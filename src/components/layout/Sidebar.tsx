@@ -25,6 +25,8 @@ import {
   Menu,
   RefreshCw,
   ScanBarcode,
+  ShieldCheck,
+  Warehouse,
 } from 'lucide-react';
 import { useState, useEffect } from 'react';
 import GlobalSearch from '@/components/ui/GlobalSearch';
@@ -55,6 +57,7 @@ const navSections: NavSection[] = [
     title: '',
     items: [
       { label: 'Dashboard', href: '/', icon: <LayoutDashboard size={18} /> },
+      { label: 'Inventory', href: '/inventory', icon: <Warehouse size={18} /> },
       { label: 'Products & COGS', href: '/products', icon: <ShoppingBag size={18} /> },
     ],
   },
@@ -62,15 +65,18 @@ const navSections: NavSection[] = [
     title: 'LISTING',
     items: [
       { label: 'Batches', href: '/list', icon: <ScanBarcode size={18} /> },
+      { label: 'MFN Orders', href: '/mfn/orders', icon: <ShoppingCart size={18} /> },
     ],
   },
   {
     title: 'ANALYZE',
     items: [
       { label: 'Profit & Loss', href: '/analyze/profitloss', icon: <TrendingUp size={18} /> },
+      { label: 'Cash Flow', href: '/analyze/cashflow', icon: <DollarSign size={18} /> },
       { label: 'Sales Tax', href: '/analyze/salestax', icon: <Receipt size={18} /> },
       { label: 'Removals', href: '/analyze/removals', icon: <PackageMinus size={18} /> },
       { label: 'Inventory Valuation', href: '/analyze/inventory-valuation', icon: <Package size={18} /> },
+      { label: 'Merchant Inventory', href: '/analyze/merchant-inventory', icon: <Store size={18} /> },
       { label: 'ASIN Profitability', href: '/analyze/asin-profitability', icon: <BarChart3 size={18} /> },
       { label: 'SKU Profitability', href: '/analyze/sku-profitability', icon: <Tags size={18} /> },
       { label: 'Supplier Profitability', href: '/analyze/supplier-profitability', icon: <Store size={18} /> },
@@ -92,10 +98,10 @@ const navSections: NavSection[] = [
       { label: 'Settlements', href: '/bookkeep/settlements', icon: <Wallet size={18} /> },
       { label: 'Refunds', href: '/bookkeep/refunds', icon: <Undo2 size={18} /> },
       { label: 'Reimbursements', href: '/bookkeep/reimbursements', icon: <HandCoins size={18} /> },
-      { label: 'Claims to File', href: '/bookkeep/claims-to-file', icon: <HandCoins size={18} /> },
-      { label: 'Reimbursement Re-Evaluations', href: '/bookkeep/reimbursement-reevaluations', icon: <HandCoins size={18} /> },
-      { label: 'Amazon Disputes', href: '/bookkeep/amazon-disputes', icon: <HandCoins size={18} /> },
-      { label: 'Walmart Disputes', href: '/bookkeep/walmart-disputes', icon: <HandCoins size={18} /> },
+      // Claims to File / Re-Evaluations / Amazon Disputes / Walmart Disputes
+      // pages still exist but are reached through the Recovery Hub (its
+      // unified queue covers all of them — "Browse by source" cards link out).
+      { label: 'Recovery Hub', href: '/bookkeep/recovery', icon: <ShieldCheck size={18} /> },
       { label: 'Inbound Shipping', href: '/bookkeep/inbound-shipping', icon: <Truck size={18} /> },
       { label: 'Other Expenses', href: '/bookkeep/other-expenses', icon: <CreditCard size={18} /> },
     ],

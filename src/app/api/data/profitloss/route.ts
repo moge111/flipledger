@@ -3,7 +3,7 @@ import Database from 'better-sqlite3';
 import path from 'path';
 
 function getDb() {
-  const dbPath = path.join(process.cwd(), 'data', 'flipledger.db');
+  const dbPath = process.env.FLIPLEDGER_DB_PATH || path.join(process.cwd(), 'data', 'flipledger.db');
   const db = new Database(dbPath, { readonly: true });
   db.pragma('journal_mode = WAL');
   return db;
@@ -60,17 +60,41 @@ export async function GET(request: NextRequest) {
       WHERE fe.posted_date >= ? AND fe.posted_date < ? ${MF} AND o.fulfillment_channel IN ('MFN', 'Seller')
     `).get(startDate, endDateNext) as any;
 
-    // FBA/WFS shipping credits (Amazon/Walmart charges buyer, passes to seller)
+    // FBA/WFS shipping credits — income ONLY when Amazon also charges it back.
+    //
+    // A non-MFN shipping credit is settled one of three ways, verified against
+    // Amazon's Unified Transaction Report (`total` column, the authoritative
+    // payout) and the per-order raw ShipmentEvent payloads:
+    //   1. ShippingChargeback fee of equal size (Amazon keeps the shipping).
+    //      The credit IS in Amazon's payout total and so is the chargeback —
+    //      they net to zero. Counting the fee but NOT the credit (the old
+    //      behaviour) double-penalised every one of these orders.
+    //   2. An offsetting promotional rebate of equal size (Amazon Global export
+    //      orders). Never reaches the seller, and FL does not subtract promo
+    //      rebates, so the credit must stay out of income.
+    //   3. Walmart WFS: no credit line exists in recon at all — Walmart keeps
+    //      the customer shipping fee to fund fulfilment.
+    // Gating on "a ShippingChargeback exists" admits exactly case 1 and
+    // correctly excludes 2 and 3 for every marketplace.
     const fbaShippingCredits = db.prepare(`
-      SELECT COALESCE(SUM(oi.shipping_charged), 0) as total
-      FROM order_items oi
-      JOIN orders o ON oi.order_id = o.order_id
-      JOIN ${DATE_SUB} fe ON oi.order_id = fe.order_id
-      WHERE fe.posted_date >= ? AND fe.posted_date < ? ${MF} AND o.fulfillment_channel NOT IN ('MFN', 'Seller')
+      SELECT COALESCE(SUM(MIN(x.sc, x.cb)), 0) as total
+      FROM (
+        SELECT oi.order_id,
+               SUM(oi.shipping_charged) as sc,
+               COALESCE((SELECT -SUM(fd.amount) FROM fee_details fd
+                         WHERE fd.order_id = oi.order_id
+                           AND fd.fee_type = 'ShippingChargeback'), 0) as cb
+        FROM order_items oi
+        JOIN orders o ON oi.order_id = o.order_id
+        JOIN ${DATE_SUB} fe ON oi.order_id = fe.order_id
+        WHERE fe.posted_date >= ? AND fe.posted_date < ? ${MF}
+          AND o.fulfillment_channel NOT IN ('MFN', 'Seller')
+        GROUP BY oi.order_id
+      ) x
+      WHERE x.sc > 0 AND x.cb > 0
     `).get(startDate, endDateNext) as any;
 
-    // Only include MFN shipping credits as income — FBA shipping credits are offset by ShippingChargeback fees
-    const shippingCredits = { total: mfnShippingCredits.total };
+    const shippingCredits = { total: mfnShippingCredits.total + fbaShippingCredits.total };
 
     // Promotional rebates (negative — reduces income)
     const promoRebates = db.prepare(`
@@ -86,13 +110,24 @@ export async function GET(request: NextRequest) {
     `).get(startDate, endDateNext) as any;
 
     // COGS (FIFO)
-    const cogsTotal = db.prepare(`
+    const cogsGross = db.prepare(`
       SELECT COALESCE(SUM(oi.cogs_per_unit * oi.quantity), 0) as total
       FROM order_items oi
       JOIN ${DATE_SUB} fe ON oi.order_id = fe.order_id
       JOIN orders o ON oi.order_id = o.order_id
       WHERE fe.posted_date >= ? AND fe.posted_date < ? ${MF}
     `).get(startDate, endDateNext) as any;
+
+    // Cross-year return relief: an item sold in a prior year and returned in
+    // this period keeps its COGS in the sale year (filed-year integrity) and
+    // credits COGS here, dated at the refund (always refund_date, matching how
+    // refunds themselves are dated on either basis).
+    const cogsReversals = db.prepare(`
+      SELECT COALESCE(SUM(amount), 0) as total FROM cogs_reversals
+      WHERE refund_date >= ? AND refund_date < ? ${MF_R}
+    `).get(startDate, endDateNext) as any;
+
+    const cogsTotal = { total: cogsGross.total - cogsReversals.total };
 
     // Order-linked fees (by order's posted_date)
     // Use -SUM(amount) instead of SUM(ABS(amount)) so that positive clawbacks reduce the fee total
@@ -319,6 +354,7 @@ export async function GET(request: NextRequest) {
       },
       expenses: {
         cogs: cogsTotal.total,
+        cogsReversals: cogsReversals.total,
         feeHierarchy,
         shippingCosts: shippingCosts.total,
         otherExpenses: totalExpenses.total,

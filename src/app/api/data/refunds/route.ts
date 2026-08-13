@@ -18,7 +18,14 @@ export async function GET(request: NextRequest) {
   // refunds.marketplace can be NULL for old Amazon rows — treat NULL as amazon.
   const MF_R = marketplace ? `AND COALESCE(r.marketplace, 'amazon') = '${marketplace}'` : '';
 
-  const cutoff = new Date(Date.now() - days * 86400000).toISOString();
+  // The page sends startDate/endDate from the date-range picker; honor them.
+  // Fall back to the legacy ?days= window when absent.
+  const startParam = searchParams.get('startDate');
+  const endParam = searchParams.get('endDate');
+  const cutoff = startParam || new Date(Date.now() - days * 86400000).toISOString();
+  const cutoffEnd = endParam
+    ? new Date(new Date(endParam + 'T00:00:00Z').getTime() + 86400000).toISOString()
+    : new Date(Date.now() + 86400000).toISOString();
 
   try {
     // Pull refunds + the matching v2024 Shipment transaction (if any) so we
@@ -44,8 +51,56 @@ export async function GET(request: NextRequest) {
         r.marketplace,
         ftv2.transaction_status as shipmentStatus,
         ftv2.maturity_date as shipmentMaturity,
-        ftv2.posted_date as shipmentPostedDate
+        ftv2.posted_date as shipmentPostedDate,
+        CASE WHEN COALESCE(r.marketplace, 'amazon') != 'walmart' THEN 1
+             WHEN EXISTS (
+               SELECT 1 FROM financial_events fe2
+               WHERE fe2.event_type = 'WalmartRefundEvent'
+                 AND fe2.order_id = r.order_id
+                 AND json_extract(fe2.raw_data, '$."Amount Type"') = 'Product Price'
+             ) THEN 1 ELSE 0 END as settled,
+        CASE
+          WHEN COALESCE(r.marketplace, 'amazon') = 'walmart' AND o.fulfillment_channel = 'WFS'
+               AND og.gtin IS NOT NULL
+               AND EXISTS (
+                 SELECT 1 FROM fee_details fd2
+                 JOIN financial_events fe3 ON fe3.id = fd2.financial_event_id
+                 WHERE fd2.fee_type = 'WFSInventoryRTVFee'
+                   AND fe3.asin = og.gtin
+                   AND date(fe3.posted_date) >= date(r.refund_date, '-14 days')
+               ) THEN 'rtv'
+          -- RESTOCKED requires evidence the unit is actually back: the SKU has
+          -- sellable stock right now, or it sold again after the refund. A bare
+          -- "settled + no RTV fee" claim overcounts (in-store returns spend
+          -- weeks in Walmart's reverse-logistics pipeline, invisible to us).
+          WHEN COALESCE(r.marketplace, 'amazon') = 'walmart' AND o.fulfillment_channel = 'WFS'
+               AND (
+                 EXISTS (SELECT 1 FROM live_inventory li WHERE li.sku = r.sku AND li.fulfillable_qty > 0)
+                 OR EXISTS (
+                   SELECT 1 FROM order_items oi2 JOIN orders o2 ON o2.order_id = oi2.order_id
+                   WHERE oi2.sku = r.sku AND o2.purchase_date > r.refund_date AND o2.status != 'Cancelled'
+                 )
+               ) THEN 'restocked'
+          -- No evidence anywhere after 60 days: Walmart's own policy says lost
+          -- returns are auto-reimbursed within 60 days of the return — past
+          -- that with nothing visible, a Seller Support case is warranted.
+          WHEN COALESCE(r.marketplace, 'amazon') = 'walmart' AND o.fulfillment_channel = 'WFS'
+               AND julianday('now') - julianday(r.refund_date) >= 60
+               THEN 'claim-due'
+          WHEN COALESCE(r.marketplace, 'amazon') = 'walmart' AND o.fulfillment_channel = 'WFS'
+               THEN 'in-pipeline'
+          ELSE NULL
+        END as disposition
       FROM refunds r
+      LEFT JOIN orders o ON o.order_id = r.order_id
+      LEFT JOIN (
+        SELECT order_id, MAX(json_extract(raw_data, '$."Partner GTIN"')) as gtin
+        FROM financial_events
+        WHERE marketplace = 'walmart'
+          AND event_type IN ('WalmartReconEvent', 'WalmartRefundEvent')
+          AND order_id IS NOT NULL
+        GROUP BY order_id
+      ) og ON og.order_id = r.order_id
       LEFT JOIN products p ON r.asin = p.asin
       LEFT JOIN order_items oi ON r.order_id = oi.order_id
       LEFT JOIN products p2 ON oi.asin = p2.asin
@@ -59,10 +114,10 @@ export async function GET(request: NextRequest) {
         WHERE transaction_type = 'Shipment' AND order_id IS NOT NULL
         GROUP BY order_id
       ) ftv2 ON ftv2.order_id = r.order_id
-      WHERE r.refund_date >= ? ${MF_R}
+      WHERE r.refund_date >= ? AND r.refund_date < ? ${MF_R}
       GROUP BY r.id
       ORDER BY r.refund_date DESC
-    `).all(cutoff) as any[];
+    `).all(cutoff, cutoffEnd) as any[];
 
     const items = rows.map((row) => {
       // Classify cash impact:
@@ -98,6 +153,20 @@ export async function GET(request: NextRequest) {
         feeClawback: row.feeClawback,
         netImpact: row.refundAmount - row.feeClawback,
         marketplace: row.marketplace || 'amazon',
+        // Amazon/eBay/PayPal refunds arrive settled; Walmart refunds only count
+        // once the recon deduction exists — same gate the P&L uses. ~30% of
+        // Walmart return records are ghosts Walmart never charges for.
+        settled: !!row.settled,
+        // WFS return disposition: 'rtv' = Walmart deemed it unsellable and
+        // shipped it back (RTV fee found for the GTIN near the refund date —
+        // hard evidence, shown regardless of settlement); 'restocked' = kept
+        // by WFS and back in sellable stock (only claimed once settled);
+        // 'pending' = return initiated but not yet settled/inspected.
+        // Freshness bound by the last Seller Center service-fee CSV import.
+        disposition: row.disposition === 'rtv' ? 'rtv'
+          : row.settled ? row.disposition
+          : row.disposition ? 'pending'
+          : null,
         cashImpact,
         shipmentStatus: row.shipmentStatus || null,
         shipmentMaturity: row.shipmentMaturity || null,
@@ -107,7 +176,13 @@ export async function GET(request: NextRequest) {
     const count = items.length;
     const totalRefundAmount = items.reduce((s, i) => s + i.refundAmount, 0);
     const totalClawback = items.reduce((s, i) => s + i.feeClawback, 0);
-    const totalNetImpact = items.reduce((s, i) => s + i.netImpact, 0);
+    // Net impact counts SETTLED refunds only — matches how the P&L/Dashboard
+    // count refunds. Unsettled Walmart records are surfaced separately.
+    const totalNetImpact = items.filter(i => i.settled).reduce((s, i) => s + i.netImpact, 0);
+    const unsettledWalmartImpact = items.filter(i => !i.settled).reduce((s, i) => s + i.netImpact, 0);
+    const unsettledWalmartCount = items.filter(i => !i.settled).length;
+    const claimDueCount = items.filter(i => i.disposition === 'claim-due').length;
+    const claimDueImpact = items.filter(i => i.disposition === 'claim-due').reduce((s, i) => s + i.refundAmount, 0);
 
     // Cash-flow split: held-fund refunds (no real cash out) vs realized cash deductions
     const heldFundImpact = items.filter(i => i.cashImpact === 'held-fund').reduce((s, i) => s + i.netImpact, 0);
@@ -123,6 +198,10 @@ export async function GET(request: NextRequest) {
         totalRefundAmount,
         totalClawback,
         totalNetImpact,
+        unsettledWalmartImpact,
+        unsettledWalmartCount,
+        claimDueCount,
+        claimDueImpact,
         heldFundImpact,
         realCashImpact,
         unknownImpact,

@@ -34,14 +34,73 @@ export interface PrintResult {
 }
 
 /**
+ * Parse `lpstat -p <printer>` output and decide whether the queue is
+ * DISABLED. CUPS disables a queue when it loses the USB connection ("Unable
+ * to send data") but KEEPS ACCEPTING jobs — so lpr succeeds, FlipLedger
+ * reports success, and nothing prints while jobs pile up in a paused queue
+ * (July 8, 2026 incident). Exported for tests.
+ *
+ * Typical outputs:
+ *   "printer Printer_ThermalPrinter is idle.  enabled since ..."
+ *   "printer Printer_ThermalPrinter disabled since Tue 08 Jul ... -\n\tUnable to send data to printer."
+ */
+export function isQueueDisabled(lpstatOutput: string): boolean {
+  return /^printer\s+\S+\s+disabled\b/im.test(lpstatOutput);
+}
+
+export interface PrinterQueueStatus {
+  exists: boolean;
+  disabled: boolean;
+  raw: string;
+}
+
+/** Read the CUPS queue state for one printer. */
+export async function getPrinterQueueStatus(printerName: string): Promise<PrinterQueueStatus> {
+  try {
+    const { stdout } = await execFileAsync('lpstat', ['-p', printerName]);
+    return { exists: true, disabled: isQueueDisabled(stdout), raw: stdout.trim() };
+  } catch (err: unknown) {
+    // lpstat exits non-zero for unknown printers
+    const msg = err instanceof Error ? err.message : String(err);
+    return { exists: false, disabled: false, raw: msg };
+  }
+}
+
+/**
  * Print a PDF buffer to a named CUPS printer. Returns success/error info
  * so the caller can decide whether to retry, fall back to download, etc.
+ *
+ * Before spooling, verifies the queue isn't disabled — and if it is, tries
+ * `cupsenable` once (recovers the common lost-USB case where the printer is
+ * back but CUPS never re-enabled the queue). If the queue stays disabled,
+ * returns a clear "printer offline" failure instead of a false success.
  */
 export async function printPdfBuffer(
   pdfBuffer: Buffer,
   printerName: string,
   jobTitle: string = 'FlipLedger Label'
 ): Promise<PrintResult> {
+  // Queue-health pre-check. A disabled queue still ACCEPTS jobs, so without
+  // this the print "succeeds" while nothing comes out of the printer.
+  const status = await getPrinterQueueStatus(printerName);
+  if (status.exists && status.disabled) {
+    try {
+      await execFileAsync('cupsenable', [printerName]);
+      console.log(`[print] Queue ${printerName} was disabled — re-enabled via cupsenable`);
+    } catch (err) {
+      console.warn(`[print] cupsenable ${printerName} failed:`, err);
+    }
+    const recheck = await getPrinterQueueStatus(printerName);
+    if (recheck.disabled) {
+      return {
+        success: false,
+        printer: printerName,
+        error:
+          `Printer queue "${printerName}" is DISABLED (CUPS paused it — usually a lost USB connection or the printer is off). ` +
+          `Auto re-enable failed. Check the printer's power/USB, then run: cupsenable ${printerName}`,
+      };
+    }
+  }
   // Write the PDF to a tempfile first — `lpr` reads from stdin too, but
   // some CUPS configs choke on large PDFs piped via stdin. Using a real file
   // is more reliable.

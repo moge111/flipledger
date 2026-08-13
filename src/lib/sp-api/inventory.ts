@@ -60,6 +60,7 @@ export async function syncFBAInventory(
     const skus = Array.from(knownSkus);
 
     const now = new Date().toISOString();
+    const returnedSkus = new Set<string>();
 
     // Batch in groups of 50 (API limit for sellerSkus param)
     for (let i = 0; i < skus.length; i += 50) {
@@ -83,6 +84,7 @@ export async function syncFBAInventory(
         for (const item of summaries) {
           const asin = item.asin;
           const sku = item.sellerSku;
+          if (sku) returnedSkus.add(sku);
           const name = item.productName;
           const d = item.inventoryDetails || {};
           const fulfillable = d.fulfillableQuantity || 0;
@@ -134,6 +136,38 @@ export async function syncFBAInventory(
         }
       } catch (err: any) {
         errors.push(`Inventory batch ${i}-${i + 50}: ${err.message}`);
+      }
+    }
+
+    // Rows Amazon does NOT return have no FBA inventory record — they're
+    // manually-entered MFN stock (or long-dead FBA rows). live_inventory never
+    // decrements when an MFN order ships, so these counts drift stale forever.
+    // Self-heal: subtract MFN units sold since each row's last_updated.
+    // Skipped entirely if any batch errored (an errored batch's SKUs would
+    // falsely look "not returned").
+    if (errors.length === 0) {
+      const unreturned = db.prepare(`
+        SELECT id, sku, fulfillable_qty, last_updated FROM live_inventory
+        WHERE marketplace = 'amazon' AND fulfillable_qty > 0
+      `).all().filter((r: any) => r.sku && !returnedSkus.has(r.sku)) as any[];
+
+      const mfnSoldSince = db.prepare(`
+        SELECT COALESCE(SUM(oi.quantity), 0) as sold
+        FROM order_items oi
+        JOIN orders o ON o.order_id = oi.order_id
+        WHERE oi.sku = ? AND o.marketplace = 'amazon'
+          AND o.fulfillment_channel = 'MFN'
+          AND o.status NOT IN ('Canceled', 'Cancelled')
+          AND o.purchase_date > ?
+      `);
+      for (const row of unreturned) {
+        const sold = (mfnSoldSince.get(row.sku, row.last_updated) as any).sold;
+        if (sold > 0) {
+          const newQty = Math.max(0, row.fulfillable_qty - sold);
+          db.prepare('UPDATE live_inventory SET fulfillable_qty = ?, last_updated = ? WHERE id = ?')
+            .run(newQty, now, row.id);
+          console.log(`[FBA Inventory] MFN stock ${row.sku}: ${row.fulfillable_qty} → ${newQty} (${sold} sold since ${row.last_updated.slice(0, 10)})`);
+        }
       }
     }
   } finally {

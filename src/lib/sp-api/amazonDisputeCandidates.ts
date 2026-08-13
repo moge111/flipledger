@@ -22,7 +22,11 @@
 import Database from 'better-sqlite3';
 import path from 'path';
 
-const SAFE_T_WINDOW_DAYS = 90;
+// Amazon cut the SAFE-T filing window from 60 to 30 days effective
+// February 16, 2026. The clock runs from the return delivery scan at the
+// seller's warehouse or the refund date, whichever is LATER — we only track
+// the refund date, so this is the conservative bound.
+const SAFE_T_WINDOW_DAYS = 30;
 
 // Reasons that suggest customer fault — strong SAFE-T candidates.
 const HIGH_ELIGIBILITY_REASONS = new Set([
