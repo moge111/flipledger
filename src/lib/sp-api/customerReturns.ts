@@ -28,16 +28,13 @@
  */
 import { getAccessToken, getEndpoint, fetchWithRetry } from './auth';
 import { downloadReport } from './reports';
-import Database from 'better-sqlite3';
-import path from 'path';
 import type { SPAPICredentials } from './types';
+import { openDb } from '@/lib/db-conn';
+import { createLogger } from '@/lib/log';
 
-function getDb() {
-  const dbPath = path.join(process.cwd(), 'data', 'flipledger.db');
-  const db = new Database(dbPath);
-  db.pragma('journal_mode = WAL');
-  return db;
-}
+const log = createLogger('sp-api/customerReturns');
+
+const getDb = () => openDb();
 
 export interface CustomerReturnRow {
   returnDate: string;
@@ -237,16 +234,16 @@ export async function syncFbaCustomerReturns(
 }> {
   // 1. Request the report
   const { reportId } = await createCustomerReturnsReport(credentials, startDate, endDate);
-  console.log(`[CustomerReturns] Created report ${reportId}`);
+  log.info(`Created report ${reportId}`);
 
   // 2. Wait until Amazon finishes generating it
   const { reportDocumentId } = await waitForReport(credentials, reportId);
-  console.log(`[CustomerReturns] Report ready, document ${reportDocumentId}`);
+  log.info(`Report ready, document ${reportDocumentId}`);
 
   // 3. Download and parse
   const tsv = await downloadReport(credentials, reportDocumentId);
   const rows = parseCustomerReturnsReport(tsv);
-  console.log(`[CustomerReturns] Parsed ${rows.length} return rows`);
+  log.info(`Parsed ${rows.length} return rows`);
 
   // 4. UPDATE matching refunds
   const db = getDb();

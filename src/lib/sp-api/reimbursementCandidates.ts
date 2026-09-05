@@ -20,6 +20,10 @@ import { downloadReport } from './reports';
 import Database from 'better-sqlite3';
 import path from 'path';
 import type { SPAPICredentials } from './types';
+import { openDb } from '@/lib/db-conn';
+import { createLogger } from '@/lib/log';
+
+const log = createLogger('sp-api/reimbursementCandidates');
 
 const REIMBURSEMENT_WINDOW_DAYS = 60;
 
@@ -39,12 +43,7 @@ const REIMBURSABLE_DISPOSITIONS = [
   'SELLABLE',          // Lost-but-sellable (M-coded losses) — most reimbursable bucket
 ];
 
-function getDb() {
-  const dbPath = path.join(process.cwd(), 'data', 'flipledger.db');
-  const db = new Database(dbPath);
-  db.pragma('journal_mode = WAL');
-  return db;
-}
+const getDb = () => openDb();
 
 function isReimbursable(quantity: number, disposition: string | null): boolean {
   if (quantity >= 0) return false; // positive = found/added, not a loss
@@ -252,9 +251,9 @@ export async function syncReimbursementCandidates(
     const fs = await import('fs');
     const debugPath = path.join(process.cwd(), 'data', 'debug-ledger-detail.tsv');
     fs.writeFileSync(debugPath, tsv);
-    console.log(`[reimbursementCandidates] Raw TSV dumped to ${debugPath} (${tsv.length} bytes, ${tsv.split(/\r?\n/).length} lines)`);
+    log.info(`Raw TSV dumped to ${debugPath} (${tsv.length} bytes, ${tsv.split(/\r?\n/).length} lines)`);
   } catch (err) {
-    console.warn(`[reimbursementCandidates] Failed to dump debug TSV: ${err}`);
+    log.warn(`Failed to dump debug TSV: ${err}`);
   }
 
   const rows = parseAdjustmentsReport(tsv);

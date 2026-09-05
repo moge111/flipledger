@@ -9,16 +9,10 @@
 // Body (JSON): { csv: string, mapping?: Partial<ColumnMapping> }
 // Returns: { headers, columnMapping, totals, globalErrors, rows: [...with exists flags] }
 import { NextRequest, NextResponse } from 'next/server';
-import Database from 'better-sqlite3';
-import path from 'path';
 import { parseBuyListCsv, type ColumnMapping } from '@/lib/imports/airtable-buylist';
+import { openDb } from '@/lib/db-conn';
 
-function getDb() {
-  const dbPath = path.join(process.cwd(), 'data', 'flipledger.db');
-  const db = new Database(dbPath, { readonly: true });
-  db.pragma('journal_mode = WAL');
-  return db;
-}
+const getDb = () => openDb({ readonly: true });
 
 export async function POST(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;

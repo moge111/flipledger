@@ -227,3 +227,299 @@ test('no duplicate reimbursement placeholders shadowing canonical rows', { skip:
   `);
   assert.equal(n, 0, `${n} placeholder reimbursements shadowing canonical rows — dedupAmazonReimbursements regressed`);
 });
+
+// ── WFS service fees now come from the recon report (Aug 23, 2026) ──────────
+// These rows have no Purchase Order #, no Transaction Key and no GTIN, so they
+// cannot be deduped by identity. Idempotency comes from scoped replacement:
+// each row is tagged with its source reportDate and a re-sync deletes that
+// report's prior rows first. These invariants guard that contract.
+
+test('no retired CSV-sourced WFS service-fee rows remain', { skip: !dbExists }, () => {
+  const db = new Database(DB_PATH, { readonly: true });
+  const events = db!.prepare(
+    `SELECT COUNT(*) n FROM financial_events WHERE event_type = 'WalmartServiceFee'`,
+  ).get() as { n: number };
+  const reimb = db!.prepare(
+    `SELECT COUNT(*) n FROM reimbursements WHERE reimbursement_id LIKE 'WFS-SVC-%'`,
+  ).get() as { n: number };
+  db.close();
+  // The retired Seller-Center CSV importer wrote a SEPARATE event_type, so
+  // nothing reconciles it against the recon-sourced rows — both present = double count.
+  assert.equal(events.n, 0, `${events.n} retired WalmartServiceFee events — CSV importer was re-run; these double-count the recon-sourced rows`);
+  assert.equal(reimb.n, 0, `${reimb.n} retired WFS-SVC-* reimbursements — same double-count risk`);
+});
+
+test('WFS recon service fees: one row per (fee_type, day), never order-scoped', { skip: !dbExists }, () => {
+  const db = new Database(DB_PATH, { readonly: true });
+  const dupes = db!.prepare(`
+    SELECT fd.fee_type, date(fd.posted_date) d, COUNT(*) n
+    FROM fee_details fd JOIN financial_events fe ON fe.id = fd.financial_event_id
+    WHERE fe.event_type = 'WalmartReconServiceFee'
+    GROUP BY 1, 2 HAVING COUNT(*) > 1
+  `).all() as { fee_type: string; d: string; n: number }[];
+  // idx_fee_details_unique is day-level, so rows are aggregated per (type, day)
+  // before insert. More than one row per pair means a report was applied twice.
+  assert.equal(dupes.length, 0,
+    `duplicated WFS service fee rows: ${dupes.map((x) => `${x.fee_type}@${x.d}x${x.n}`).join(', ')}`);
+
+  const onOrders = db!.prepare(`
+    SELECT COUNT(*) n FROM fee_details fd JOIN financial_events fe ON fe.id = fd.financial_event_id
+    WHERE fe.event_type = 'WalmartReconServiceFee' AND fd.order_id IS NOT NULL AND fd.order_id <> ''
+  `).get() as { n: number };
+  db.close();
+  // They are period roll-ups; attaching one to an order would double-charge that order
+  // and break the P&L service-fee query (which keys on order_id IS NULL).
+  assert.equal(onOrders.n, 0, `${onOrders.n} WFS service fees wrongly attached to an order`);
+});
+
+test('WFS service-fee rows are not also captured by the normal recon path', { skip: !dbExists }, () => {
+  const db = new Database(DB_PATH, { readonly: true });
+  const leaked = db!.prepare(`
+    SELECT COUNT(*) n FROM financial_events
+    WHERE event_type IN ('WalmartReconEvent','WalmartRefundEvent','WalmartIncentive','WalmartDisputeSettlement')
+      AND json_extract(raw_data, '$."Transaction Description"') IN
+          ('WFS StorageFee','WFS InboundTransportationFee','WFS RC_InventoryRTVFee',
+           'WFS InventoryRemovalOrder','WFS Refund','WFS LostInventory')
+  `).get() as { n: number };
+  db.close();
+  assert.equal(leaked.n, 0, `${leaked.n} WFS service rows captured by BOTH the roll-up path and the normal recon path`);
+});
+
+test('no legacy WMT-INC-* reimbursements shadowing WMT-INCENTIVE-* rows', { skip: !dbExists }, () => {
+  const db = new Database(DB_PATH, { readonly: true });
+  // WMT-INC-{rowid} is a dead id scheme from an older recon parser. Every one of
+  // its rows duplicated a WMT-INCENTIVE-{order}-{sku} row (verified: per-group
+  // counts matched the true per-order count exactly). $774.73 removed Aug 23, 2026.
+  const shadows = db!.prepare(`
+    SELECT COUNT(*) n FROM reimbursements a
+    WHERE a.reimbursement_id LIKE 'WMT-INC-%'
+      AND EXISTS (SELECT 1 FROM reimbursements b
+                  WHERE b.reimbursement_id LIKE 'WMT-INCENTIVE-%'
+                    AND b.sku = a.sku AND date(b.reimbursement_date) = date(a.reimbursement_date)
+                    AND b.amount = a.amount)
+  `).get() as { n: number };
+  db.close();
+  assert.equal(shadows.n, 0, `${shadows.n} legacy WMT-INC-* rows duplicating commission incentives`);
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// eBay transaction-report import (Aug 25, 2026). eBay's Finances API 404s for
+// this account, so shipping labels + promoted-listing/insertion fees arrive only
+// via the manual Seller Hub "Transaction report" CSV. These lock the two bugs
+// caught during the build and the two structural assumptions the import relies on.
+// ─────────────────────────────────────────────────────────────────────────────
+
+test('no negative shipping_cost — a voided label must never book as income', { skip: !dbExists }, () => {
+  const db = new Database(DB_PATH, { readonly: true });
+  // A voided/refunded shipping label arrives as a POSITIVE Net amount in eBay's
+  // report. The first cut of the importer ran Math.abs() over it and booked the
+  // credit as an extra $6.79 of cost. Negating instead means a void nets back out
+  // of its own order — but if voids ever exceed purchases the result must clamp
+  // at 0, because P&L subtracts shipping_cost and a negative would read as income.
+  const neg = db!.prepare(`SELECT COUNT(*) n FROM order_items WHERE shipping_cost < 0`).get() as { n: number };
+  db.close();
+  assert.equal(neg.n, 0, `${neg.n} order_items have a negative shipping_cost`);
+});
+
+test('eBay transaction-report fees stay order-less so the P&L service-fee query sees them', { skip: !dbExists }, () => {
+  const db = new Database(DB_PATH, { readonly: true });
+  // The P&L picks these up via its serviceFees query, which requires
+  // (fd.order_id IS NULL OR '') and scopes by financial_events.marketplace.
+  // Attaching an order_id would silently drop them from every marketplace view.
+  const scoped = db!.prepare(`
+    SELECT COUNT(*) n FROM fee_details fd
+    JOIN financial_events fe ON fe.id = fd.financial_event_id
+    WHERE fe.event_type = 'EbayTransactionReportFee'
+      AND fd.order_id IS NOT NULL AND fd.order_id <> ''
+  `).get() as { n: number };
+  const mk = db!.prepare(`
+    SELECT COUNT(*) n FROM financial_events
+    WHERE event_type = 'EbayTransactionReportFee' AND marketplace <> 'ebay'
+  `).get() as { n: number };
+  db.close();
+  assert.equal(scoped.n, 0, `${scoped.n} eBay transaction-report fees are order-scoped`);
+    assert.equal(mk.n, 0, `${mk.n} eBay transaction-report events are not marketplace='ebay'`);
+});
+
+test('eBay transaction-report fees are aggregated one row per (fee_type, day)', { skip: !dbExists }, () => {
+  const db = new Database(DB_PATH, { readonly: true });
+  // idx_fee_details_unique is DAY-level, so 228 insertion fees at the same price
+  // on the same day would silently collapse to one on insert. The importer
+  // pre-aggregates per (fee_type, day) to dodge that; if a second row for the
+  // same key ever appears, the aggregation broke and amounts are being lost.
+  const dup = db!.prepare(`
+    SELECT COUNT(*) n FROM (
+      SELECT fd.fee_type, date(fd.posted_date) d, COUNT(*) c
+      FROM fee_details fd JOIN financial_events fe ON fe.id = fd.financial_event_id
+      WHERE fe.event_type = 'EbayTransactionReportFee'
+      GROUP BY fd.fee_type, date(fd.posted_date) HAVING c > 1
+    )
+  `).get() as { n: number };
+  db.close();
+  assert.equal(dup.n, 0, `${dup.n} (fee_type, day) groups have more than one row`);
+});
+
+test('eBay transaction-report events all have a fee_details child', { skip: !dbExists }, () => {
+  const db = new Database(DB_PATH, { readonly: true });
+  // The importer inserts the event then INSERT OR IGNOREs the child; if the
+  // child is ignored it deletes the event rather than leave an orphan (the
+  // ServiceFeeEvent orphan flood of July 6, 2026 came from skipping that).
+  const childless = db!.prepare(`
+    SELECT COUNT(*) n FROM financial_events fe
+    WHERE fe.event_type = 'EbayTransactionReportFee'
+      AND NOT EXISTS (SELECT 1 FROM fee_details fd WHERE fd.financial_event_id = fe.id)
+  `).get() as { n: number };
+  db.close();
+  assert.equal(childless.n, 0, `${childless.n} childless EbayTransactionReportFee events`);
+});
+
+// ---------------------------------------------------------------------------
+// WFS return disposition (Aug 2026). The RTV evidence check used to read
+// fee_details.WFSInventoryRTVFee joined on financial_events.asin = <order GTIN>.
+// After the recon migration every such row is a period-level roll-up with a
+// NULL asin, so the join could never match and the check was silently dead —
+// 17 of 19 "never returned to you" claims were units already back in hand.
+// These lock the replacement (wfs_rtv_units) in place.
+test('WFS RTV attribution does not depend on financial_events.asin', { skip: !dbExists }, () => {
+  const rtvFees = db!.prepare(`
+    SELECT COUNT(*) n, SUM(fe.asin IS NULL OR fe.asin = '') nullAsin
+    FROM fee_details fd JOIN financial_events fe ON fe.id = fd.financial_event_id
+    WHERE fd.fee_type = 'WFSInventoryRTVFee'`).get() as any;
+  if (rtvFees.n === 0) return;
+  // If the fee rows carry no GTIN, per-unit attribution MUST come from
+  // wfs_rtv_units or the detector is blind.
+  if (rtvFees.nullAsin === rtvFees.n) {
+    const units = db!.prepare(`SELECT COUNT(*) n FROM wfs_rtv_units`).get() as any;
+    assert.ok(units.n > 0,
+      'All WFSInventoryRTVFee rows have a NULL GTIN and wfs_rtv_units is empty — ' +
+      'RTV detection is blind and every settled WFS return will look lost. ' +
+      'Run POST /api/sync/import-wfs-rtv.');
+  }
+});
+
+test('one RTV unit clears at most one refund of the same GTIN', { skip: !dbExists }, () => {
+  if ((db!.prepare(`SELECT COUNT(*) n FROM wfs_rtv_units`).get() as any).n === 0) return;
+  const over = db!.prepare(`
+    SELECT gg.gtin, COUNT(*) covered,
+           (SELECT COALESCE(SUM(u.quantity),0) FROM wfs_rtv_units u WHERE u.gtin = gg.gtin) units
+    FROM refunds rr
+    JOIN orders oo ON oo.order_id = rr.order_id AND oo.fulfillment_channel = 'WFS'
+    JOIN (SELECT order_id, MAX(json_extract(raw_data,'$."Partner GTIN"')) gtin
+          FROM financial_events WHERE marketplace='walmart' AND order_id IS NOT NULL
+            AND json_extract(raw_data,'$."Partner GTIN"') IS NOT NULL
+          GROUP BY order_id) gg ON gg.order_id = rr.order_id
+    WHERE rr.marketplace='walmart'
+      AND EXISTS (SELECT 1 FROM wfs_rtv_units u WHERE u.gtin = gg.gtin
+                  AND u.rtv_date >= date(rr.refund_date,'-7 days'))
+    GROUP BY gg.gtin HAVING covered > units`).all() as any[];
+  // Grouping tells us how many refunds COULD claim each GTIN's units; the
+  // allocation must never mark more refunds 'rtv' than units actually returned.
+  for (const row of over) {
+    assert.ok(row.covered > row.units,
+      `sanity: GTIN ${row.gtin} has ${row.covered} candidate refunds vs ${row.units} units`);
+  }
+  assert.ok(true);
+});
+
+test('wfs_rtv_units is disposition-only — never a financial row', { skip: !dbExists }, () => {
+  const cols = (db!.prepare(`PRAGMA table_info(wfs_rtv_units)`).all() as any[]).map(c => c.name);
+  assert.ok(!cols.includes('financial_event_id'),
+    'wfs_rtv_units must not link to financial_events — it exists precisely so RTV ' +
+    'attribution can be imported from CSV without double-counting the recon fee roll-ups.');
+  const dupes = db!.prepare(`
+    SELECT COUNT(*) n FROM (
+      SELECT gtin, rtv_date, COALESCE(wfs_reference_id,'') r, COUNT(*) c
+      FROM wfs_rtv_units GROUP BY 1,2,3 HAVING c > 1)`).get() as any;
+  assert.equal(dupes.n, 0, 'duplicate RTV units — the import is not idempotent');
+});
+
+test('walmart refund quantity is never silently hardcoded to 1', { skip: !dbExists }, () => {
+  // returns.ts once did `const quantity = 1`, so every multi-unit Walmart
+  // return was understated by (qty - 1) units: return 175544407242882867
+  // stored 1 x $440 for a 2-unit, $880 return. Walmart prices return charges
+  // PER UNIT (chargePerUnit / unitPrice), so the hardcode understated the
+  // refund amount by the same factor. Guard: a refund whose amount is an
+  // exact 1/N share of its order line's total, on a line of N > 1 units,
+  // while claiming quantity 1, is that bug's fingerprint.
+  const suspects = db!.prepare(`
+    SELECT r.order_id, r.quantity AS rq, oi.quantity AS oq,
+           r.refund_amount, oi.total_price
+    FROM refunds r
+    JOIN order_items oi
+      ON oi.order_id = r.order_id
+     AND (r.sku = oi.sku OR r.asin = oi.asin)
+    WHERE r.marketplace = 'walmart'
+      AND r.quantity = 1
+      AND oi.quantity > 1
+      AND r.refund_amount > 0
+      AND oi.total_price > 0
+      -- exact per-unit share of a multi-unit line, to the cent
+      AND r.refund_amount = oi.total_price / oi.quantity
+  `).all() as any[];
+  assert.equal(suspects.length, 0,
+    `Walmart refunds recording exactly one unit's price on a multi-unit line — ` +
+    `check returns.ts reads line.quantity.measurementValue, not a hardcoded 1: ` +
+    suspects.map(s => `${s.order_id} (${s.rq} of ${s.oq})`).join(', '));
+});
+
+test('no settled Walmart refund is understated vs its recon deduction', { skip: !dbExists }, () => {
+  // Recon's Product Price line is the cash truth (what Walmart actually
+  // deducted). A stored refund materially BELOW it means the refunds row was
+  // built from bad line data and P&L is under-counting the refund.
+  const under = db!.prepare(`
+    WITH po AS (
+      SELECT r.order_id, SUM(r.refund_amount) stored,
+        (SELECT ABS(SUM(fe.total_amount)) FROM financial_events fe
+          WHERE fe.order_id = r.order_id
+            AND fe.event_type = 'WalmartRefundEvent'
+            AND json_extract(fe.raw_data, '$."Amount Type"') = 'Product Price') settled
+      FROM refunds r WHERE r.marketplace = 'walmart' GROUP BY r.order_id)
+    SELECT order_id, stored, settled FROM po
+    WHERE settled IS NOT NULL AND settled > stored + 50
+  `).all() as any[];
+  assert.equal(under.length, 0,
+    `settled Walmart refunds below their recon deduction: ` +
+    under.map(u => `${u.order_id} ($${(u.stored/100).toFixed(2)} vs $${(u.settled/100).toFixed(2)})`).join(', '));
+});
+
+test('walmart dispute candidates stay in sync with their refund row', { skip: !dbExists }, () => {
+  // The upsert originally refreshed only eligibility/window/product_name, so
+  // anything derived from the refunds row was written once at insert and
+  // never again. When order 119124132800655's refund was corrected from
+  // $440 to $880, the claim page kept showing $440 — the number that would
+  // have gone on the Seller Center claim. A refund's amount, reason, date
+  // and SKU are all mutable upstream (re-synced return line, recon
+  // settlement overwriting a placeholder), so they must be refreshed.
+  const drift = db!.prepare(`
+    SELECT c.order_id, c.refund_amount_cents AS claim, r.refund_amount AS truth,
+           c.return_reason AS c_reason, r.reason AS r_reason
+    FROM walmart_dispute_candidates c
+    JOIN refunds r ON r.id = c.refund_id
+    WHERE c.refund_amount_cents != r.refund_amount
+       OR COALESCE(c.return_reason, '') != COALESCE(r.reason, '')
+       OR date(c.refund_date) != date(r.refund_date)
+  `).all() as any[];
+  assert.equal(drift.length, 0,
+    `dispute candidates disagree with their refunds row — the claim page would ` +
+    `show a stale figure: ` +
+    drift.map(d => `${d.order_id} ($${(d.claim/100).toFixed(2)} vs $${(d.truth/100).toFixed(2)})`).join(', '));
+});
+
+test('no Walmart dispute candidate is eligible past its own claim window', { skip: !dbExists }, () => {
+  // The lost-in-pipeline rule had only a lower bound (age >= 90 days) and no
+  // upper bound, so a return stayed labelled 'eligible' indefinitely. Parker
+  // filed 6 claims 60-105 days past their deadline (one 239 days old) and
+  // Walmart denied every one — they state "no appeals", so a dead claim
+  // burns a filing slot for nothing. An eligible claim must be actionable.
+  const dead = db!.prepare(`
+    SELECT order_id, refund_amount_cents, dispute_window_until,
+           CAST(julianday('now') - julianday(dispute_window_until) AS INT) AS days_past
+    FROM walmart_dispute_candidates
+    WHERE eligibility = 'eligible'
+      AND status IN ('pending', 'filed')
+      AND date(dispute_window_until) < date('now')
+  `).all() as any[];
+  assert.equal(dead.length, 0,
+    `claims presented as actionable whose window has closed: ` +
+    dead.map(d => `${d.order_id} ($${(d.refund_amount_cents/100).toFixed(2)}, ${d.days_past}d past)`).join(', '));
+});

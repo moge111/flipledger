@@ -10,13 +10,12 @@ import Database from 'better-sqlite3';
 import path from 'path';
 import { execSync, } from 'child_process';
 import fs from 'fs';
+import { openDb } from '@/lib/db-conn';
+import { createLogger } from '@/lib/log';
 
-function getDb() {
-  const dbPath = path.join(process.cwd(), 'data', 'flipledger.db');
-  const db = new Database(dbPath);
-  db.pragma('journal_mode = WAL');
-  return db;
-}
+const log = createLogger('walmart-api/recon');
+
+const getDb = () => openDb();
 
 function toCents(amount: number | string | undefined): number {
   if (amount === undefined || amount === null || amount === '') return 0;
@@ -101,6 +100,7 @@ export async function syncReconReport(
     // Parse CSV: row 0 = headers, row 1 = "Number of Lines...", row 2+ = data or PaymentSummary
     const headers = lines[0].split(',').map(h => h.trim());
     const now = new Date().toISOString();
+    const wfsServiceRows: WfsServiceRow[] = [];
 
     for (let i = 1; i < lines.length; i++) {
       const values = parseCSVLine(lines[i]);
@@ -109,6 +109,23 @@ export async function syncReconReport(
       const entry: Record<string, string> = {};
       for (let j = 0; j < headers.length; j++) {
         entry[headers[j]] = (values[j] || '').trim();
+      }
+
+      // WFS service-fee / inventory-adjustment roll-ups have NO Purchase Order #
+      // and would be dropped by the guard below. Collect them for a scoped,
+      // replace-in-place apply after the loop (see applyWfsServiceRows).
+      const wfsDesc = reconCell(entry['Transaction Description']);
+      if (WFS_SERVICE_FEE_MAP[wfsDesc] || WFS_REIMB_MAP[wfsDesc]) {
+        const cents = toCents(reconCell(entry['Amount']));
+        if (cents !== 0) {
+          wfsServiceRows.push({
+            description: wfsDesc,
+            isoDate: reconIsoDate(entry['Transaction Posted Timestamp'], now),
+            cents,
+            raw: entry,
+          });
+        }
+        continue;
       }
 
       // Skip metadata rows
@@ -121,6 +138,13 @@ export async function syncReconReport(
       } catch (err: any) {
         errors.push(`Recon entry: ${err.message}`);
       }
+    }
+
+    // Apply WFS service-fee roll-ups (scoped replace — see applyWfsServiceRows)
+    const wfsApplied = applyWfsServiceRows(db, reportDate, wfsServiceRows, now);
+    recordsFetched += wfsServiceRows.length;
+    if (wfsServiceRows.length) {
+      log.info(`${reportDate}: ${wfsServiceRows.length} WFS service row(s) -> ${wfsApplied.fees} fee, ${wfsApplied.reimbursements} reimb`);
     }
 
     // Cleanup
@@ -159,13 +183,161 @@ export async function syncAllReconReports(
 
     if (reportDate < cutoff) continue;
 
-    console.log(`[Walmart Recon] Processing report ${dateStr}...`);
+    log.info(`Processing report ${dateStr}...`);
     const result = await syncReconReport(credentials, dateStr);
     totalFetched += result.recordsFetched;
     allErrors.push(...result.errors);
   }
 
   return { recordsFetched: totalFetched, errors: allErrors };
+}
+
+/**
+ * WFS service-fee / inventory-adjustment lines carried by the recon report.
+ *
+ * These are PERIOD-LEVEL ROLL-UPS: no Purchase Order #, no Transaction Key, no
+ * GTIN, no quantity — just description + posted timestamp + amount. They were
+ * silently discarded for the life of this integration because the main parse
+ * loop skips any row without a Purchase Order # (they have none), which is why
+ * a May 2026 audit wrongly concluded "recon has zero storage/inbound/RTV".
+ * Verified present in every recon report back to Nov 2024.
+ *
+ * fee_type / fee_category deliberately MATCH the retired Seller-Center CSV
+ * importer so the P&L presentation is unchanged by the source switch.
+ */
+const WFS_SERVICE_FEE_MAP: Record<string, { feeType: string; feeCategory: string }> = {
+  'WFS StorageFee': { feeType: 'WFSStorageFee', feeCategory: 'WFS Storage & Inventory Fees' },
+  'WFS InboundTransportationFee': { feeType: 'WFSInboundTransportationFee', feeCategory: 'WFS Inbound Fees' },
+  'WFS RC_InventoryRTVFee': { feeType: 'WFSInventoryRTVFee', feeCategory: 'WFS Storage & Inventory Fees' },
+  'WFS InventoryRemovalOrder': { feeType: 'WFSRemovalFee', feeCategory: 'WFS Storage & Inventory Fees' },
+};
+/** Positive-amount WFS inventory adjustments = money back to the seller. */
+const WFS_REIMB_MAP: Record<string, string> = {
+  'WFS Refund': 'WFS Refund',
+  'WFS LostInventory': 'WFS Lost Inventory',
+};
+
+export const WFS_SERVICE_EVENT_TYPE = 'WalmartReconServiceFee';
+export const WFS_SERVICE_REIMB_PREFIX = 'WMT-WFSSVC-';
+
+/** Recon rows are plain CSV but tolerate Excel ="..." wrappers defensively. */
+function reconCell(v: string | undefined): string {
+  let x = (v || '').trim();
+  const m = x.match(/^="?(.*?)"?$/);
+  if (m) x = m[1];
+  return x.replace(/^"|"$/g, '').trim();
+}
+
+/** MM/DD/YYYY -> ISO date-at-midnight. Falls back to `fallback`. */
+function reconIsoDate(posted: string, fallback: string): string {
+  const p = reconCell(posted);
+  if (p.includes('/')) {
+    const parts = p.split('/');
+    if (parts.length === 3) {
+      return `${parts[2]}-${parts[0].padStart(2, '0')}-${parts[1].padStart(2, '0')}T00:00:00Z`;
+    }
+  }
+  return fallback;
+}
+
+export interface WfsServiceRow {
+  description: string;
+  isoDate: string;
+  cents: number;
+  raw: Record<string, string>;
+}
+
+/**
+ * Replace this report's WFS service-fee contribution, atomically.
+ *
+ * IDEMPOTENCY: these rows carry no stable per-transaction id, so identity-based
+ * dedup is impossible. Instead every row is tagged with its source reportDate
+ * and a re-sync DELETEs that report's prior rows before inserting — the report
+ * is the unit of replacement. Re-syncing the same report any number of times
+ * converges on the same totals; overlapping reports cannot double-count because
+ * each owns only its own tagged rows.
+ *
+ * Amounts are aggregated per (feeType, posted day) because idx_fee_details_unique
+ * is day-level and would otherwise silently collapse distinct same-day rows.
+ */
+export function applyWfsServiceRows(
+  db: Database.Database,
+  reportDate: string,
+  rows: WfsServiceRow[],
+  now: string,
+): { fees: number; reimbursements: number } {
+  const run = db.transaction(() => {
+    // --- wipe this report's prior contribution (children first) ---
+    db.prepare(`
+      DELETE FROM fee_details WHERE financial_event_id IN (
+        SELECT id FROM financial_events
+        WHERE event_type = ? AND json_extract(raw_data, '$.reportDate') = ?
+      )
+    `).run(WFS_SERVICE_EVENT_TYPE, reportDate);
+    db.prepare(`
+      DELETE FROM financial_events
+      WHERE event_type = ? AND json_extract(raw_data, '$.reportDate') = ?
+    `).run(WFS_SERVICE_EVENT_TYPE, reportDate);
+    db.prepare(`DELETE FROM reimbursements WHERE reimbursement_id LIKE ?`)
+      .run(`${WFS_SERVICE_REIMB_PREFIX}${reportDate}-%`);
+
+    // --- aggregate then insert ---
+    const feeAgg = new Map<string, { feeType: string; feeCategory: string; isoDate: string; cents: number; n: number }>();
+    const reimbAgg = new Map<string, { reason: string; isoDate: string; cents: number; n: number }>();
+
+    for (const r of rows) {
+      const feeMap = WFS_SERVICE_FEE_MAP[r.description];
+      if (feeMap && r.cents < 0) {
+        const k = `${feeMap.feeType}|${r.isoDate}`;
+        const ex = feeAgg.get(k);
+        if (ex) { ex.cents += r.cents; ex.n++; }
+        else feeAgg.set(k, { ...feeMap, isoDate: r.isoDate, cents: r.cents, n: 1 });
+        continue;
+      }
+      const reason = WFS_REIMB_MAP[r.description];
+      if (reason && r.cents > 0) {
+        const k = `${reason}|${r.isoDate}`;
+        const ex = reimbAgg.get(k);
+        if (ex) { ex.cents += r.cents; ex.n++; }
+        else reimbAgg.set(k, { reason, isoDate: r.isoDate, cents: r.cents, n: 1 });
+        continue;
+      }
+      // A positive fee row (credit) or negative reimbursement (clawback) is
+      // rare but real; route on sign so it still lands somewhere correct.
+      if (feeMap) {
+        const k = `${feeMap.feeType}|${r.isoDate}`;
+        const ex = feeAgg.get(k);
+        if (ex) { ex.cents += r.cents; ex.n++; }
+        else feeAgg.set(k, { ...feeMap, isoDate: r.isoDate, cents: r.cents, n: 1 });
+      }
+    }
+
+    let fees = 0, reimbursements = 0;
+    for (const [, f] of feeAgg) {
+      if (f.cents === 0) continue;
+      const raw = JSON.stringify({ reportDate, feeType: f.feeType, lines: f.n, source: 'recon-wfs-service' });
+      const res = db.prepare(`
+        INSERT INTO financial_events (event_type, posted_date, order_id, asin, sku, marketplace, total_amount, raw_data, created_at)
+        VALUES (?, ?, NULL, NULL, NULL, 'walmart', ?, ?, ?)
+      `).run(WFS_SERVICE_EVENT_TYPE, f.isoDate, f.cents, raw, now);
+      db.prepare(`
+        INSERT INTO fee_details (financial_event_id, order_id, asin, fee_type, fee_category, amount, posted_date)
+        VALUES (?, NULL, NULL, ?, ?, ?, ?)
+      `).run(Number(res.lastInsertRowid), f.feeType, f.feeCategory, f.cents, f.isoDate);
+      fees++;
+    }
+    for (const [, r] of reimbAgg) {
+      if (r.cents === 0) continue;
+      db.prepare(`
+        INSERT INTO reimbursements (reimbursement_id, reimbursement_date, asin, sku, reason, amount, quantity, status, marketplace, created_at)
+        VALUES (?, ?, NULL, NULL, ?, ?, 1, 'Approved', 'walmart', ?)
+      `).run(`${WFS_SERVICE_REIMB_PREFIX}${reportDate}-${r.reason.replace(/\s+/g, '')}-${r.isoDate.slice(0, 10)}`,
+        r.isoDate, r.reason, r.cents, now);
+      reimbursements++;
+    }
+    return { fees, reimbursements };
+  });
+  return run();
 }
 
 function processReconEntry(db: Database.Database, entry: Record<string, string>, now: string) {

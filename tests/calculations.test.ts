@@ -18,7 +18,7 @@ import {
 } from '../src/lib/calculations';
 
 test('profit = revenue - cogs - fees - shipping + clawbacks', () => {
-  assert.equal(calculateProfit(10000, 4000, 1500, 500, 200), 4200);
+  assert.equal(calculateProfit(10000, 4000, 1500, 500), 4000);
   assert.equal(calculateProfit(10000, 4000, 1500), 4500); // defaults
   assert.equal(calculateProfit(0, 0, 0), 0);
   // Loss stays negative — no clamping

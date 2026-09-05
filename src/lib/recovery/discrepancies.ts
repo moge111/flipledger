@@ -23,8 +23,7 @@
  *    the ASIN is resolved through order_items by order_id (restricted to
  *    single-ASIN orders when ambiguous).
  */
-import Database from 'better-sqlite3';
-import path from 'path';
+import { openDb } from '@/lib/db-conn';
 
 const RNR_ELIGIBLE_FROM_DAYS = 60;
 const RNR_WINDOW_DAYS = 120;
@@ -38,12 +37,7 @@ const FEE_MIN_RATIO = 1.08;
 const FEE_MIN_ORDERS = 3;
 const FEE_RECENT_DAYS = 90;
 
-function getDb() {
-  const dbPath = path.join(process.cwd(), 'data', 'flipledger.db');
-  const db = new Database(dbPath);
-  db.pragma('journal_mode = WAL');
-  return db;
-}
+const getDb = () => openDb();
 
 export interface RecoveryScanResult {
   refundNoReturn: { scanned: number; eligible: number; waiting: number; expired: number; eligibleValueCents: number };

@@ -3,9 +3,13 @@ import { drizzle } from 'drizzle-orm/better-sqlite3';
 import * as schema from './schema';
 import path from 'path';
 import fs from 'fs';
+import { resolveDbPath } from './db-conn';
+
+export { openDb, resolveDbPath } from './db-conn';
+export type { OpenDbOptions } from './db-conn';
 
 // FLIPLEDGER_DB_PATH is set by the test suite to point at a fixture DB.
-const DB_PATH = process.env.FLIPLEDGER_DB_PATH || path.join(process.cwd(), 'data', 'flipledger.db');
+const DB_PATH = resolveDbPath();
 
 // Ensure the data dir exists before opening the DB. A fresh clone has no data/.
 fs.mkdirSync(path.dirname(DB_PATH), { recursive: true });
@@ -144,8 +148,38 @@ export function initializeDatabase() {
       item_returned INTEGER DEFAULT 0,
       fee_clawback INTEGER DEFAULT 0,
       marketplace TEXT DEFAULT 'amazon',
+      -- Walmart only: the Returns API's returnOrderId IS the RMA number
+      -- (Walmart's own docs say so), and customerOrderId is the number the
+      -- Seller Center order search and support case form key on. Both are
+      -- required to file a WFS reimbursement case; captured so a claim can be
+      -- filed without hunting through Seller Center for the identifiers.
+      return_order_id TEXT,
+      customer_order_id TEXT,
       created_at TEXT NOT NULL
     );
+
+    -- WFS return-to-vendor units, keyed by the GTIN Walmart puts on the fee
+    -- row. Purely a DISPOSITION record — it never touches fee_details or
+    -- financial_events, so it cannot double-count against the recon-sourced
+    -- WFSInventoryRTVFee roll-ups (which carry the money but, being
+    -- period-level, have a NULL GTIN and so can't say WHICH unit came back).
+    -- Sourced from the Seller Center "Services Fees" RC_InventoryRTVFee CSVs,
+    -- the only surface that still carries per-unit attribution.
+    CREATE TABLE IF NOT EXISTS wfs_rtv_units (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      gtin TEXT NOT NULL,
+      rtv_date TEXT NOT NULL,
+      quantity INTEGER NOT NULL DEFAULT 1,
+      net_payable_cents INTEGER DEFAULT 0,
+      wfs_reference_id TEXT,
+      source_file TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    -- COALESCE in the unique index, not a table constraint: SQLite forbids
+    -- expressions there, and NULL != NULL would defeat the dedup anyway.
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_wfs_rtv_unique
+      ON wfs_rtv_units(gtin, rtv_date, COALESCE(wfs_reference_id, ''));
+    CREATE INDEX IF NOT EXISTS idx_wfs_rtv_gtin ON wfs_rtv_units(gtin, rtv_date);
 
     -- Cross-period COGS reversals, managed entirely by the FIFO engine.
     -- When an item sells in one year and is returned (item_returned=1, full
@@ -516,6 +550,26 @@ export function initializeDatabase() {
     CREATE INDEX IF NOT EXISTS idx_sales_tax_state ON sales_tax(state);
     CREATE INDEX IF NOT EXISTS idx_products_asin ON products(asin);
 
+    -- Sync-dedup unique indexes. Every hourly re-sync re-presents the same
+    -- events with drifting timestamps/IDs; these are what make INSERT OR
+    -- IGNORE actually ignore. They existed on the live DB via manual
+    -- migrations since April 2026 but were missing here, so a fresh install
+    -- had NO refund / fee / reimbursement / removal / sales-tax dedup at all
+    -- (found Sept 4, 2026 by the refund-parsing test running on a fresh
+    -- fixture). Shapes match the live DB verbatim — COALESCE is load-bearing,
+    -- SQLite treats NULL != NULL inside a unique index.
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_fee_details_unique ON fee_details(
+      COALESCE(order_id, ''), fee_type, amount, COALESCE(asin, ''), date(posted_date)
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_refunds_unique ON refunds(order_id, COALESCE(asin,''), refund_date);
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_reimbursements_reimb_id ON reimbursements(reimbursement_id);
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_reimbursements_unique ON reimbursements(
+      COALESCE(reimbursement_id, ''), COALESCE(asin, ''), reimbursement_date, amount
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_removals_unique ON removals(removal_order_id, COALESCE(asin, ''), date_requested);
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_sales_tax_unique ON sales_tax(order_id, state, posted_date);
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_products_asin_unique ON products(asin);
+
     -- Listing tool: user-created batches (separate from synced inbound_shipments)
     CREATE TABLE IF NOT EXISTS listing_batches (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -793,6 +847,8 @@ export function initializeDatabase() {
     "ALTER TABLE listing_batch_items ADD COLUMN preflight_detail TEXT",
     "ALTER TABLE listing_batch_items ADD COLUMN preflight_checked_at TEXT",
     "ALTER TABLE listing_batches ADD COLUMN closed_at TEXT",
+    "ALTER TABLE refunds ADD COLUMN return_order_id TEXT",
+    "ALTER TABLE refunds ADD COLUMN customer_order_id TEXT",
     "ALTER TABLE orders ADD COLUMN order_total INTEGER DEFAULT 0",
     "ALTER TABLE orders ADD COLUMN order_total_currency TEXT",
     "ALTER TABLE products ADD COLUMN catalog_last_enriched TEXT",

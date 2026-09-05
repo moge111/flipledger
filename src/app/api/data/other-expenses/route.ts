@@ -1,13 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server';
-import Database from 'better-sqlite3';
-import path from 'path';
+import { marketDaysAgo } from '@/lib/market-day';
+import { openDb } from '@/lib/db-conn';
+import { createLogger } from '@/lib/log';
 
-function getDb() {
-  const dbPath = path.join(process.cwd(), 'data', 'flipledger.db');
-  const db = new Database(dbPath, { readonly: true });
-  db.pragma('journal_mode = WAL');
-  return db;
-}
+const log = createLogger('api/data/other-expenses');
+
+const getDb = () => openDb({ readonly: true });
 
 export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url);
@@ -19,7 +17,7 @@ export async function GET(request: NextRequest) {
 
   // Prefer an explicit range from the page's date picker; fall back to ?days= for
   // callers that still use it.
-  const rangeStart = startDate || new Date(Date.now() - days * 86400000).toISOString().slice(0, 10);
+  const rangeStart = startDate || marketDaysAgo(days);
   // expenses.date is a bare YYYY-MM-DD, so compare on the date portion only —
   // an ISO end bound with a time component would exclude the final day.
   const rangeEnd = endDate ? endDate.slice(0, 10) : '9999-12-31';
@@ -70,7 +68,7 @@ export async function GET(request: NextRequest) {
     });
   } catch (error) {
     db.close();
-    console.error('Other Expenses API error:', error);
+    log.error('Other Expenses API error:', error);
     return NextResponse.json({ error: 'Failed to load expenses data' }, { status: 500 });
   }
 }

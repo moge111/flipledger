@@ -1,11 +1,12 @@
 import { NextResponse } from 'next/server';
 import { spApiRequest } from '@/lib/sp-api/auth';
-import Database from 'better-sqlite3';
-import path from 'path';
+import { openDb } from '@/lib/db-conn';
+import { createLogger } from '@/lib/log';
+
+const log = createLogger('api/sync/storage-fees');
 
 function getCredentials() {
-  const dbPath = path.join(process.cwd(), 'data', 'flipledger.db');
-  const db = new Database(dbPath, { readonly: true });
+  const db = openDb({ readonly: true });
   db.pragma('journal_mode = WAL');
   const rows = db.prepare('SELECT key, value FROM settings').all() as { key: string; value: string }[];
   db.close();
@@ -21,7 +22,6 @@ function getCredentials() {
 
 export async function GET() {
   const credentials = getCredentials();
-  const dbPath = path.join(process.cwd(), 'data', 'flipledger.db');
 
   try {
     // First check if we already have a storage fee report
@@ -36,10 +36,10 @@ export async function GET() {
 
     if (reports.length > 0) {
       reportDocId = reports[0].reportDocumentId;
-      console.log(`[StorageFees] Found existing report: ${reports[0].reportId}`);
+      log.info(`Found existing report: ${reports[0].reportId}`);
     } else {
       // Request a new report
-      console.log('[StorageFees] Requesting new storage fee report...');
+      log.info('Requesting new storage fee report...');
       const createResponse = await spApiRequest(credentials, '/reports/2021-06-30/reports', undefined, 3, false);
       // Need POST — spApiRequest only does GET. Use fetch directly.
       const { getAccessToken, getEndpoint } = await import('@/lib/sp-api/auth');
@@ -65,13 +65,13 @@ export async function GET() {
 
       const createData = await createRes.json();
       const reportId = createData.reportId;
-      console.log(`[StorageFees] Report requested: ${reportId}`);
+      log.info(`Report requested: ${reportId}`);
 
       // Poll for completion
       for (let i = 0; i < 30; i++) {
         await new Promise(resolve => setTimeout(resolve, 10000)); // 10s
         const status = await spApiRequest(credentials, `/reports/2021-06-30/reports/${reportId}`);
-        console.log(`[StorageFees] Status: ${status.processingStatus}`);
+        log.info(`Status: ${status.processingStatus}`);
         if (status.processingStatus === 'DONE') {
           reportDocId = status.reportDocumentId;
           break;
@@ -100,11 +100,11 @@ export async function GET() {
     const feeIdx = headers.findIndex(h => h.includes('estimated_monthly_storage_fee') || h.includes('monthly-storage-fee') || h.includes('est_base_msf'));
     const categoryIdx = headers.indexOf('product_size_tier') !== -1 ? headers.indexOf('product_size_tier') : headers.indexOf('product-size-tier');
 
-    console.log(`[StorageFees] Headers: ${headers.join(', ')}`);
-    console.log(`[StorageFees] Total lines: ${lines.length}`);
+    log.info(`Headers: ${headers.join(', ')}`);
+    log.info(`Total lines: ${lines.length}`);
 
     // Store per-ASIN storage fees
-    const db = new Database(dbPath);
+    const db = openDb();
     db.pragma('journal_mode = WAL');
 
     // Create storage_fees table if not exists

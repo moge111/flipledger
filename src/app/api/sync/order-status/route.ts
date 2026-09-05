@@ -1,11 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { spApiRequest } from '@/lib/sp-api/auth';
-import Database from 'better-sqlite3';
-import path from 'path';
+import { openDb } from '@/lib/db-conn';
 
 function getCredentials() {
-  const dbPath = path.join(process.cwd(), 'data', 'flipledger.db');
-  const db = new Database(dbPath, { readonly: true });
+  const db = openDb({ readonly: true });
   db.pragma('journal_mode = WAL');
   const rows = db.prepare('SELECT key, value FROM settings').all() as { key: string; value: string }[];
   db.close();

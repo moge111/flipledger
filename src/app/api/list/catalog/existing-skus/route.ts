@@ -19,17 +19,15 @@
  */
 import { NextRequest, NextResponse } from 'next/server';
 import Database from 'better-sqlite3';
-import path from 'path';
 import { getSellerId, getListingsForASIN, getListing } from '@/lib/sp-api/listingsItems';
 import { getInventorySummariesForASIN } from '@/lib/sp-api/inventory';
 import type { SPAPICredentials } from '@/lib/sp-api/types';
+import { openDb } from '@/lib/db-conn';
+import { createLogger } from '@/lib/log';
 
-function getDb() {
-  const dbPath = path.join(process.cwd(), 'data', 'flipledger.db');
-  const db = new Database(dbPath);
-  db.pragma('journal_mode = WAL');
-  return db;
-}
+const log = createLogger('api/list/catalog/existing-skus');
+
+const getDb = () => openDb();
 
 function getAmazonCredentials(db: Database.Database): SPAPICredentials | null {
   const rows = db.prepare('SELECT key, value FROM settings').all() as { key: string; value: string }[];
@@ -50,7 +48,7 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: 'Invalid or missing ASIN' }, { status: 400 });
   }
 
-  console.log(`[existing-skus] asin: ${asin}`);
+  log.info(`asin: ${asin}`);
 
   const db = getDb();
   try {
@@ -104,11 +102,11 @@ export async function GET(request: NextRequest) {
 
     if (!creds) {
       // No credentials — return local-only data with a clear warning.
-      console.log(`[existing-skus] amazonInventoryEndpoint: SKIPPED (no credentials)`);
-      console.log(`[existing-skus] amazonRawCount: 0`);
-      console.log(`[existing-skus] amazonSkus: []`);
-      console.log(`[existing-skus] localFallbackCount: ${localRows.length}`);
-      console.log(`[existing-skus] localFallbackSkus: ${JSON.stringify(localRows.map(r => r.sku))}`);
+      log.info(`amazonInventoryEndpoint: SKIPPED (no credentials)`);
+      log.info(`amazonRawCount: 0`);
+      log.info(`amazonSkus: []`);
+      log.info(`localFallbackCount: ${localRows.length}`);
+      log.info(`localFallbackSkus: ${JSON.stringify(localRows.map(r => r.sku))}`);
 
       const fallbackSkus = localRows.map((r) => ({
         sku: r.sku,
@@ -122,7 +120,7 @@ export async function GET(request: NextRequest) {
         source: 'LOCAL_DB' as const,
         lastSynced: r.last_updated,
       }));
-      console.log(`[existing-skus] renderedRowsWithSource: ${JSON.stringify(fallbackSkus.map(s => ({ sku: s.sku, source: s.source, status: s.listingStatus })))}`);
+      log.info(`renderedRowsWithSource: ${JSON.stringify(fallbackSkus.map(s => ({ sku: s.sku, source: s.source, status: s.listingStatus })))}`);
       return NextResponse.json({
         asin,
         skus: fallbackSkus,
@@ -133,16 +131,16 @@ export async function GET(request: NextRequest) {
     // Live data from SP-API Listings Items — source of truth.
     let sellerId: string;
     const endpoint = `/listings/2021-08-01/items/{sellerId}?filterASINs=${asin}`;
-    console.log(`[existing-skus] amazonInventoryEndpoint: ${endpoint}`);
+    log.info(`amazonInventoryEndpoint: ${endpoint}`);
 
     try {
       sellerId = await getSellerId(creds);
     } catch (err) {
       // Can't resolve seller ID — return local data with a clear error, no silent fallback.
-      console.log(`[existing-skus] amazonRawCount: 0 (getSellerId failed: ${err})`);
-      console.log(`[existing-skus] amazonSkus: []`);
-      console.log(`[existing-skus] localFallbackCount: ${localRows.length}`);
-      console.log(`[existing-skus] localFallbackSkus: ${JSON.stringify(localRows.map(r => r.sku))}`);
+      log.info(`amazonRawCount: 0 (getSellerId failed: ${err})`);
+      log.info(`amazonSkus: []`);
+      log.info(`localFallbackCount: ${localRows.length}`);
+      log.info(`localFallbackSkus: ${JSON.stringify(localRows.map(r => r.sku))}`);
 
       const fallbackSkus = localRows.map((r) => ({
         sku: r.sku,
@@ -156,7 +154,7 @@ export async function GET(request: NextRequest) {
         source: 'LOCAL_DB' as const,
         lastSynced: r.last_updated,
       }));
-      console.log(`[existing-skus] renderedRowsWithSource: ${JSON.stringify(fallbackSkus.map(s => ({ sku: s.sku, source: s.source, status: s.listingStatus })))}`);
+      log.info(`renderedRowsWithSource: ${JSON.stringify(fallbackSkus.map(s => ({ sku: s.sku, source: s.source, status: s.listingStatus })))}`);
       return NextResponse.json({
         asin,
         skus: fallbackSkus,
@@ -167,10 +165,10 @@ export async function GET(request: NextRequest) {
 
     const apiListings = await getListingsForASIN(creds, sellerId, asin);
 
-    console.log(`[existing-skus] amazonRawCount: ${apiListings.length}`);
-    console.log(`[existing-skus] amazonSkus: ${JSON.stringify(apiListings.map(l => ({ sku: l.sku, status: l.listingStatus, channel: l.fulfillmentChannel, fnsku: l.fnsku })))}`);
-    console.log(`[existing-skus] localFallbackCount: ${localRows.length}`);
-    console.log(`[existing-skus] localFallbackSkus: ${JSON.stringify(localRows.map(r => r.sku))}`);
+    log.info(`amazonRawCount: ${apiListings.length}`);
+    log.info(`amazonSkus: ${JSON.stringify(apiListings.map(l => ({ sku: l.sku, status: l.listingStatus, channel: l.fulfillmentChannel, fnsku: l.fnsku })))}`);
+    log.info(`localFallbackCount: ${localRows.length}`);
+    log.info(`localFallbackSkus: ${JSON.stringify(localRows.map(r => r.sku))}`);
 
     type SkuRow = {
       sku: string; fnsku: string | null; asin: string; listingStatus: string;
@@ -215,18 +213,18 @@ export async function GET(request: NextRequest) {
         return b.fbaStock - a.fbaStock;
       });
 
-      console.log(`[existing-skus] renderedRowsWithSource: ${JSON.stringify(amazonSkus.map(s => ({ sku: s.sku, source: s.source, status: s.listingStatus, channel: s.fulfillmentChannel })))}`);
+      log.info(`renderedRowsWithSource: ${JSON.stringify(amazonSkus.map(s => ({ sku: s.sku, source: s.source, status: s.listingStatus, channel: s.fulfillmentChannel })))}`);
       return NextResponse.json({ asin, skus: amazonSkus });
     }
 
     // Listings Items filterASINs is unreliable — Amazon often ignores it.
     // Phase A: FBA Inventory Summaries with filterASINs. More reliable for
     // ASIN lookups; includes DISCOVERABLE/OOS items with qty=0.
-    console.log(`[existing-skus] listingsItems filterASINs returned 0 — trying FBA inventory summaries for ${asin}`);
-    let fbaInventorySkus: SkuRow[] = [];
+    log.info(`listingsItems filterASINs returned 0 — trying FBA inventory summaries for ${asin}`);
+    const fbaInventorySkus: SkuRow[] = [];
     try {
       const fbaSummaries = await getInventorySummariesForASIN(creds, asin);
-      console.log(`[existing-skus] fbaInventorySummaries count: ${fbaSummaries.length}, skus: ${JSON.stringify(fbaSummaries.map(s => s.sellerSku))}`);
+      log.info(`fbaInventorySummaries count: ${fbaSummaries.length}, skus: ${JSON.stringify(fbaSummaries.map(s => s.sellerSku))}`);
 
       if (fbaSummaries.length > 0) {
         // For each SKU found via FBA inventory, get full listing status from Listings Items.
@@ -242,7 +240,7 @@ export async function GET(request: NextRequest) {
               : statusArr.includes('INACTIVE') ? 'INACTIVE'
               : statusArr[0] || 'DISCOVERABLE'; // FBA inventory implies at least DISCOVERABLE
             const fnsku = summary.fnSku || inv.fnSku || null;
-            console.log(`[existing-skus] fbaInventory ${inv.sellerSku}: status=${listingStatus} fnsku=${fnsku} fulfillable=${inv.fulfillableQty}`);
+            log.info(`fbaInventory ${inv.sellerSku}: status=${listingStatus} fnsku=${fnsku} fulfillable=${inv.fulfillableQty}`);
             fbaInventorySkus.push({
               sku: inv.sellerSku,
               fnsku,
@@ -257,7 +255,7 @@ export async function GET(request: NextRequest) {
               lastSynced: new Date().toISOString(),
             });
           } catch (err) {
-            console.log(`[existing-skus] getListing for ${inv.sellerSku}: error — ${err}`);
+            log.info(`getListing for ${inv.sellerSku}: error — ${err}`);
             // Include with minimal data from FBA inventory — still AMAZON_INVENTORY.
             fbaInventorySkus.push({
               sku: inv.sellerSku,
@@ -276,23 +274,23 @@ export async function GET(request: NextRequest) {
         }
       }
     } catch (err) {
-      console.log(`[existing-skus] fbaInventorySummaries error: ${err}`);
+      log.info(`fbaInventorySummaries error: ${err}`);
     }
 
     if (fbaInventorySkus.length > 0) {
-      console.log(`[existing-skus] renderedRowsWithSource: ${JSON.stringify(fbaInventorySkus.map(s => ({ sku: s.sku, source: s.source, status: s.listingStatus, channel: s.fulfillmentChannel })))}`);
+      log.info(`renderedRowsWithSource: ${JSON.stringify(fbaInventorySkus.map(s => ({ sku: s.sku, source: s.source, status: s.listingStatus, channel: s.fulfillmentChannel })))}`);
       return NextResponse.json({ asin, skus: fbaInventorySkus });
     }
 
     // Phase B: For local SKUs not found via FBA inventory, look them up
     // individually via Listings Items API — a direct SKU lookup is reliable.
-    console.log(`[existing-skus] fbaInventory returned 0 — attempting direct Listings lookups for ${localRows.length} local SKUs`);
+    log.info(`fbaInventory returned 0 — attempting direct Listings lookups for ${localRows.length} local SKUs`);
     const directLookupResults: SkuRow[] = [];
     for (const r of localRows) {
       try {
         const listing = await getListing(creds, sellerId, r.sku);
         if (!listing) {
-          console.log(`[existing-skus] direct lookup ${r.sku}: 404 — not in Seller Central`);
+          log.info(`direct lookup ${r.sku}: 404 — not in Seller Central`);
           continue;
         }
         const summary = listing.summaries?.[0] || listing.summary || {};
@@ -307,7 +305,7 @@ export async function GET(request: NextRequest) {
         const channelCode: string = availability?.fulfillmentChannelCode || 'DEFAULT';
         const fulfillmentChannel: 'FBA' | 'MFN' = channelCode === 'AMAZON_NA' || channelCode === 'AMAZON' ? 'FBA' : 'MFN';
         const fbaStock = fulfillmentChannel === 'FBA' ? (availability?.quantity ?? r.fulfillable_qty) : 0;
-        console.log(`[existing-skus] direct lookup ${r.sku}: found — status=${listingStatus} channel=${fulfillmentChannel} stock=${fbaStock}`);
+        log.info(`direct lookup ${r.sku}: found — status=${listingStatus} channel=${fulfillmentChannel} stock=${fbaStock}`);
         directLookupResults.push({
           sku: r.sku,
           fnsku: summary.fnSku || null,
@@ -322,12 +320,12 @@ export async function GET(request: NextRequest) {
           lastSynced: new Date().toISOString(),
         });
       } catch (err) {
-        console.log(`[existing-skus] direct lookup ${r.sku}: error — ${err}`);
+        log.info(`direct lookup ${r.sku}: error — ${err}`);
       }
     }
 
     if (directLookupResults.length > 0) {
-      console.log(`[existing-skus] renderedRowsWithSource: ${JSON.stringify(directLookupResults.map(s => ({ sku: s.sku, source: s.source, status: s.listingStatus, channel: s.fulfillmentChannel })))}`);
+      log.info(`renderedRowsWithSource: ${JSON.stringify(directLookupResults.map(s => ({ sku: s.sku, source: s.source, status: s.listingStatus, channel: s.fulfillmentChannel })))}`);
       return NextResponse.json({ asin, skus: directLookupResults });
     }
 
@@ -347,7 +345,7 @@ export async function GET(request: NextRequest) {
       lastSynced: r.last_updated,
     }));
 
-    console.log(`[existing-skus] renderedRowsWithSource: ${JSON.stringify(localFallbackSkus.map(s => ({ sku: s.sku, source: s.source, status: s.listingStatus })))}`);
+    log.info(`renderedRowsWithSource: ${JSON.stringify(localFallbackSkus.map(s => ({ sku: s.sku, source: s.source, status: s.listingStatus })))}`);
 
     if (localFallbackSkus.length > 0) {
       return NextResponse.json({
@@ -361,7 +359,7 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ asin, skus: [] });
   } catch (err) {
     try { db.close(); } catch {}
-    console.error(`[existing-skus] ERROR for asin ${asin}:`, err);
+    log.error(`ERROR for asin ${asin}:`, err);
     return NextResponse.json({ error: String(err) }, { status: 500 });
   }
 }

@@ -22,9 +22,13 @@ import { reconcileStaleSendingBatches } from '../listing-reconcile';
 import { generateRecurringExpenses } from '../recurring-expenses';
 import { recalculateFIFO } from '../fifo';
 import { createBackup } from '../backup';
+import { rotateLogIfLarge } from '../log-rotate';
 import type { SPAPICredentials } from './types';
 import Database from 'better-sqlite3';
-import path from 'path';
+import { openDb } from '@/lib/db-conn';
+import { createLogger } from '@/lib/log';
+
+const log = createLogger('sp-api/auto-sync');
 
 // Scheduler state lives on globalThis, NOT module scope. In Next.js dev mode
 // every recompile creates a fresh module instance — a module-scoped guard
@@ -75,8 +79,7 @@ const FINANCES_V2024_INTERVAL_HOURS = 24;
 
 function getAmazonCredentials(): SPAPICredentials | null {
   try {
-    const dbPath = path.join(process.cwd(), 'data', 'flipledger.db');
-    const db = new Database(dbPath, { readonly: true });
+    const db = openDb({ readonly: true });
     db.pragma('journal_mode = WAL');
     const rows = db.prepare('SELECT key, value FROM settings').all() as { key: string; value: string }[];
     db.close();
@@ -99,8 +102,7 @@ function getAmazonCredentials(): SPAPICredentials | null {
 
 function getLastSyncTime(key: string): number {
   try {
-    const dbPath = path.join(process.cwd(), 'data', 'flipledger.db');
-    const db = new Database(dbPath, { readonly: true });
+    const db = openDb({ readonly: true });
     db.pragma('journal_mode = WAL');
     const row = db.prepare('SELECT value FROM settings WHERE key = ?').get(key) as { value: string } | undefined;
     db.close();
@@ -116,8 +118,7 @@ function hoursSince(timestamp: number): number {
 
 function setLastSyncTime(key: string, value: string) {
   try {
-    const dbPath = path.join(process.cwd(), 'data', 'flipledger.db');
-    const db = new Database(dbPath);
+    const db = openDb();
     db.pragma('journal_mode = WAL');
     db.prepare(`
       INSERT INTO settings (key, value) VALUES (?, ?)
@@ -125,7 +126,7 @@ function setLastSyncTime(key: string, value: string) {
     `).run(key, value);
     db.close();
   } catch (err) {
-    console.error(`[AutoSync] setLastSyncTime(${key}) failed:`, err);
+    log.error(`setLastSyncTime(${key}) failed:`, err);
   }
 }
 
@@ -136,7 +137,7 @@ function setLastSyncTime(key: string, value: string) {
 // instance that a hot reload left behind.
 async function autoSyncTick() {
   if (g.__flAutoSyncTickRunning) {
-    console.log('[AutoSync] Previous tick still running, skipping');
+    log.info('Previous tick still running, skipping');
     return;
   }
   g.__flAutoSyncTickRunning = true;
@@ -154,7 +155,7 @@ async function autoSyncTickInner() {
   const ebayStatus = getEbaySyncStatus();
 
   if (amazonStatus?.running || walmartStatus?.running || ebayStatus?.running) {
-    console.log('[AutoSync] Sync already running, skipping');
+    log.info('Sync already running, skipping');
     return;
   }
 
@@ -165,12 +166,12 @@ async function autoSyncTickInner() {
   if (hoursSince(amazonLastSync) >= SYNC_INTERVAL_HOURS) {
     const amazonCreds = getAmazonCredentials();
     if (amazonCreds) {
-      console.log(`[AutoSync] Starting Amazon sync (last ${LOOKBACK_DAYS} days)`);
+      log.info(`Starting Amazon sync (last ${LOOKBACK_DAYS} days)`);
       try {
         await runFullSync(amazonCreds, LOOKBACK_DAYS);
-        console.log('[AutoSync] Amazon sync complete');
+        log.info('Amazon sync complete');
       } catch (err) {
-        console.error('[AutoSync] Amazon error:', err);
+        log.error('Amazon error:', err);
       }
     }
   }
@@ -183,17 +184,17 @@ async function autoSyncTickInner() {
   if (hoursSince(customerReturnsLastSync) >= CUSTOMER_RETURNS_INTERVAL_HOURS) {
     const amazonCreds = getAmazonCredentials();
     if (amazonCreds) {
-      console.log(`[AutoSync] Starting FBA customer returns sync (last ${CUSTOMER_RETURNS_LOOKBACK_DAYS} days)`);
+      log.info(`Starting FBA customer returns sync (last ${CUSTOMER_RETURNS_LOOKBACK_DAYS} days)`);
       try {
         const end = new Date().toISOString();
         const start = new Date(Date.now() - CUSTOMER_RETURNS_LOOKBACK_DAYS * 86400000).toISOString();
         const result = await syncFbaCustomerReturns(amazonCreds, start, end);
         setLastSyncTime('customer_returns_last_sync', new Date().toISOString());
-        console.log(
+        log.info(
           `[AutoSync] Customer returns: ${result.reportRows} rows, ${result.refundsUpdated} refunds updated, ${result.unmatched} unmatched`
         );
       } catch (err) {
-        console.error('[AutoSync] Customer returns error:', err);
+        log.error('Customer returns error:', err);
       }
     }
   }
@@ -205,16 +206,16 @@ async function autoSyncTickInner() {
   if (hoursSince(financesV2024LastSync) >= FINANCES_V2024_INTERVAL_HOURS) {
     const amazonCreds = getAmazonCredentials();
     if (amazonCreds) {
-      console.log('[AutoSync] Starting v2024 Finances transactions sync (last 30 days)');
+      log.info('Starting v2024 Finances transactions sync (last 30 days)');
       try {
         const result = await syncFinancesV2024Transactions(amazonCreds);
         setLastSyncTime('finances_v2024_last_sync', new Date().toISOString());
-        console.log(
+        log.info(
           `[AutoSync] v2024 Finances: ${result.inserted} inserted, ${result.updated} updated, ${result.pagesFetched} pages` +
             (result.errors.length ? `, errors: ${result.errors.join('; ')}` : '')
         );
       } catch (err) {
-        console.error('[AutoSync] v2024 Finances error:', err);
+        log.error('v2024 Finances error:', err);
       }
     }
   }
@@ -224,10 +225,10 @@ async function autoSyncTickInner() {
   try {
     const result = syncAmazonDisputeCandidates();
     if (result.newEligible > 0 || result.newMaybe > 0) {
-      console.log(`[AutoSync] Amazon disputes: ${result.scanned} refunds scanned, ${result.newEligible} new eligible, ${result.newMaybe} maybe`);
+      log.info(`Amazon disputes: ${result.scanned} refunds scanned, ${result.newEligible} new eligible, ${result.newMaybe} maybe`);
     }
   } catch (err) {
-    console.error('[AutoSync] Amazon disputes error:', err);
+    log.error('Amazon disputes error:', err);
   }
 
   // Recovery Hub discrepancy detectors (refund-without-return, FBA fee
@@ -235,14 +236,15 @@ async function autoSyncTickInner() {
   // Pure SQL, runs in milliseconds.
   try {
     const result = syncRecoveryDiscrepancies();
+    setLastSyncTime('recovery_scan_last_sync', new Date().toISOString());
     if (result.refundNoReturn.eligible > 0 || result.feeOvercharge.flagged > 0) {
-      console.log(
+      log.info(
         `[AutoSync] Recovery scan: ${result.refundNoReturn.eligible} refund-no-return eligible, ` +
           `${result.feeOvercharge.flagged} fee overcharges flagged`
       );
     }
   } catch (err) {
-    console.error('[AutoSync] Recovery scan error:', err);
+    log.error('Recovery scan error:', err);
   }
 
   // Amazon Sales Rank (daily) — snapshots BSR for every active ASIN.
@@ -251,15 +253,15 @@ async function autoSyncTickInner() {
   if (hoursSince(salesRankLastSync) >= SALES_RANK_INTERVAL_HOURS) {
     const amazonCreds = getAmazonCredentials();
     if (amazonCreds) {
-      console.log('[AutoSync] Starting sales rank sync');
+      log.info('Starting sales rank sync');
       try {
         const result = await syncSalesRanks(amazonCreds);
         setLastSyncTime('sales_rank_last_sync', new Date().toISOString());
-        console.log(
+        log.info(
           `[AutoSync] Sales rank: ${result.asinsChecked} ASINs checked, ${result.asinsUpdated} updated, ${result.errors} errors`
         );
       } catch (err) {
-        console.error('[AutoSync] Sales rank error:', err);
+        log.error('Sales rank error:', err);
       }
     }
   }
@@ -272,19 +274,19 @@ async function autoSyncTickInner() {
   if (hoursSince(reimbursementsReportLastSync) >= REIMBURSEMENT_CANDIDATES_INTERVAL_HOURS) {
     const amazonCreds = getAmazonCredentials();
     if (amazonCreds) {
-      console.log('[AutoSync] Starting reimbursements report sync (18-month window)');
+      log.info('Starting reimbursements report sync (18-month window)');
       try {
         const end = new Date().toISOString();
         const start = new Date(Date.now() - 540 * 86400000).toISOString();
         const result = await syncReimbursementsReport(amazonCreds, start, end);
         setLastSyncTime('reimbursements_report_last_sync', new Date().toISOString());
-        console.log(
+        log.info(
           `[AutoSync] Reimbursements report: ${result.reportRows} rows, ${result.inserted} inserted, ${result.updated} updated, $${(result.totalAmountCents / 100).toFixed(2)} total`
         );
         // Sweep any ADJ/SETTLEMENT placeholders the new canonical rows supersede.
         dedupAmazonReimbursements();
       } catch (err) {
-        console.error('[AutoSync] Reimbursements report error:', err);
+        log.error('Reimbursements report error:', err);
       }
     }
   }
@@ -297,17 +299,17 @@ async function autoSyncTickInner() {
   if (hoursSince(reimbursementCandidatesLastSync) >= REIMBURSEMENT_CANDIDATES_INTERVAL_HOURS) {
     const amazonCreds = getAmazonCredentials();
     if (amazonCreds) {
-      console.log(`[AutoSync] Starting reimbursement candidates sync (last ${REIMBURSEMENT_CANDIDATES_LOOKBACK_DAYS} days)`);
+      log.info(`Starting reimbursement candidates sync (last ${REIMBURSEMENT_CANDIDATES_LOOKBACK_DAYS} days)`);
       try {
         const end = new Date().toISOString();
         const start = new Date(Date.now() - REIMBURSEMENT_CANDIDATES_LOOKBACK_DAYS * 86400000).toISOString();
         const result = await syncReimbursementCandidates(amazonCreds, start, end);
         setLastSyncTime('reimbursement_candidates_last_sync', new Date().toISOString());
-        console.log(
+        log.info(
           `[AutoSync] Reimbursement candidates: ${result.reportRows} rows, ${result.reimbursableRows} reimbursable, ${result.newCandidates} new, ${result.alreadyReimbursed} already paid`
         );
       } catch (err) {
-        console.error('[AutoSync] Reimbursement candidates error:', err);
+        log.error('Reimbursement candidates error:', err);
       }
     }
   }
@@ -316,23 +318,23 @@ async function autoSyncTickInner() {
   if (hoursSince(walmartLastSync) >= SYNC_INTERVAL_HOURS) {
     const walmartCreds = getWalmartCredentials();
     if (walmartCreds) {
-      console.log(`[AutoSync] Starting Walmart sync (last ${LOOKBACK_DAYS} days)`);
+      log.info(`Starting Walmart sync (last ${LOOKBACK_DAYS} days)`);
       try {
         await runWalmartSync(walmartCreds, LOOKBACK_DAYS);
-        console.log('[AutoSync] Walmart sync complete');
+        log.info('Walmart sync complete');
       } catch (err) {
-        console.error('[AutoSync] Walmart error:', err);
+        log.error('Walmart error:', err);
       }
 
       // After Walmart returns are refreshed, re-classify dispute candidates.
       // Pure SQL — runs in milliseconds, no API call.
       try {
         const result = syncWalmartDisputeCandidates();
-        console.log(
+        log.info(
           `[AutoSync] Walmart disputes: ${result.scanned} refunds scanned, ${result.newEligible} new eligible, ${result.expired} expired`
         );
       } catch (err) {
-        console.error('[AutoSync] Walmart disputes error:', err);
+        log.error('Walmart disputes error:', err);
       }
     }
   }
@@ -342,12 +344,12 @@ async function autoSyncTickInner() {
   if (hoursSince(ebayLastSync) >= SYNC_INTERVAL_HOURS) {
     const ebayCreds = getEbayCredentials();
     if (ebayCreds) {
-      console.log(`[AutoSync] Starting eBay sync (last ${LOOKBACK_DAYS} days)`);
+      log.info(`Starting eBay sync (last ${LOOKBACK_DAYS} days)`);
       try {
         await runEbaySync(ebayCreds, LOOKBACK_DAYS);
-        console.log('[AutoSync] eBay sync complete');
+        log.info('eBay sync complete');
       } catch (err) {
-        console.error('[AutoSync] eBay error:', err);
+        log.error('eBay error:', err);
       }
     }
   }
@@ -360,48 +362,52 @@ async function autoSyncTickInner() {
   try {
     const sweep = await reconcileStaleSendingBatches();
     if (sweep.checked > 0) {
-      console.log(`[AutoSync] Sending-batch sweep: ${sweep.checked} checked, ${sweep.transitioned} transitioned`);
+      log.info(`Sending-batch sweep: ${sweep.checked} checked, ${sweep.transitioned} transitioned`);
     }
   } catch (err) {
-    console.error('[AutoSync] Sending-batch sweep error:', err);
+    log.error('Sending-batch sweep error:', err);
   }
 
   // Generate any new recurring expenses
   try {
     const result = generateRecurringExpenses();
     if (result.generated > 0) {
-      console.log(`[AutoSync] Generated ${result.generated} recurring expense entries`);
+      log.info(`Generated ${result.generated} recurring expense entries`);
     }
   } catch (err) {
-    console.error('[AutoSync] Recurring expenses error:', err);
+    log.error('Recurring expenses error:', err);
   }
 
   // Recalculate FIFO COGS for any new orders
   try {
     const fifoResult = recalculateFIFO({ recalcAll: true });
     if (fifoResult.itemsUpdated > 0) {
-      console.log(`[AutoSync] FIFO: updated ${fifoResult.itemsUpdated} items across ${fifoResult.skusProcessed} SKUs`);
+      log.info(`FIFO: updated ${fifoResult.itemsUpdated} items across ${fifoResult.skusProcessed} SKUs`);
     }
   } catch (err) {
-    console.error('[AutoSync] FIFO error:', err);
+    log.error('FIFO error:', err);
   }
 
   // Daily database backup — consistent SQLite snapshot, runs last so it
   // captures everything this tick just synced.
   const backupLastRun = getLastSyncTime('backup_last_run');
   if (hoursSince(backupLastRun) >= BACKUP_INTERVAL_HOURS) {
+    // Same daily cadence: keep the launchd log from growing without bound.
+    const rot = rotateLogIfLarge();
+    if (rot.rotated) log.info(`Rotated data/flipledger.log (${(rot.sizeBytes / 1048576).toFixed(1)}MB → .prev tail)`);
+    else if (rot.error) log.error('Log rotation error:', rot.error);
     try {
       const result = await createBackup();
       if (result.success) {
-        console.log(
+        log.info(
           `[AutoSync] Backup created: ${result.file?.name} (${((result.file?.sizeBytes || 0) / 1048576).toFixed(1)}MB)` +
             (result.pruned ? `, pruned ${result.pruned} old` : '')
         );
       } else {
-        console.error('[AutoSync] Backup error:', result.error);
+        log.error('Backup error:', result.error);
       }
     } catch (err) {
-      console.error('[AutoSync] Backup error:', err);
+      log.error('Backup error:', err);
     }
   }
 }
@@ -416,9 +422,9 @@ export function startAutoSync() {
     // is what actually runs — no more full-restart-required after editing
     // sync modules.
     clearInterval(g.__flAutoSyncInterval);
-    console.log('[AutoSync] Re-registering scheduler from a fresh module instance (hot reload)');
+    log.info('Re-registering scheduler from a fresh module instance (hot reload)');
   } else {
-    console.log(`[AutoSync] Starting auto-sync scheduler (every ${SYNC_INTERVAL_HOURS}h, checking every 15min, ${LOOKBACK_DAYS}-day lookback)`);
+    log.info(`Starting auto-sync scheduler (every ${SYNC_INTERVAL_HOURS}h, checking every 15min, ${LOOKBACK_DAYS}-day lookback)`);
     // Run first sync after 10 seconds (give the app time to start).
     // Only on the very first registration — re-registrations after hot
     // reloads shouldn't fire an immediate tick on every page load.
@@ -437,6 +443,6 @@ export function stopAutoSync() {
   if (g.__flAutoSyncInterval) {
     clearInterval(g.__flAutoSyncInterval);
     g.__flAutoSyncInterval = null;
-    console.log('[AutoSync] Stopped');
+    log.info('Stopped');
   }
 }

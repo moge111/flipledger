@@ -1,11 +1,12 @@
 'use client';
 
-import { useEffect, useState, useCallback, useMemo } from 'react';
+import {useMemo } from 'react';
 import { type ColumnDef } from '@tanstack/react-table';
 import StatCard from '@/components/ui/StatCard';
 import PageHeader from '@/components/ui/PageHeader';
-import { type DateRange } from '@/components/ui/DateRangePicker';
+import {type DateRange } from '@/components/ui/DateRangePicker';
 import { useFilters } from '@/lib/useFilters';
+import { useQuery } from '@/lib/useQuery';
 import DataTable from '@/components/tables/DataTable';
 import { formatCurrency, formatPercent, formatDate } from '@/lib/formatters';
 
@@ -26,31 +27,27 @@ interface SaleRow {
 }
 
 export default function FBASalesPage() {
-  const [rows, setRows] = useState<SaleRow[]>([]);
-  const [averages, setAverages] = useState<any>(null);
-  const [loading, setLoading] = useState(true);
   const { dateRange, setDateRange, marketplace, setMarketplace, marketplaceParam } = useFilters();
 
-  const fetchData = useCallback(async () => {
-    setLoading(true);
-    const res = await fetch(`/api/data/fba-sales?startDate=${dateRange.startDate}&endDate=${dateRange.endDate}${marketplaceParam}`);
-    const data = await res.json();
-    setRows(data.items || data.rows || []);
-    setAverages(data.averages || null);
-    setLoading(false);
-  }, [dateRange, marketplace]);
-
-  useEffect(() => { fetchData(); }, [fetchData]);
+  const { data, loading, reload: fetchData } = useQuery<{ averages?: any; items?: SaleRow[]; rows?: SaleRow[] }>(`/api/data/fba-sales?startDate=${dateRange.startDate}&endDate=${dateRange.endDate}${marketplaceParam}`);
+  const rows: SaleRow[] = data?.items || data?.rows || [];
+  const averages: any = data?.averages || null;
 
   const totalRevenue = rows.reduce((s, r) => s + r.salePrice, 0);
   const totalProfit = rows.reduce((s, r) => s + r.profit, 0);
 
   const columns = useMemo<ColumnDef<SaleRow, any>[]>(() => [
-    { id: 'date', header: 'Date', accessorKey: 'date', cell: ({ getValue }) => <span className="font-mono text-sm text-text-secondary">{formatDate(getValue() as string)}</span>, size: 110 },
+    { id: 'date', header: 'Date', accessorKey: 'date', cell: ({ getValue }) => <span className="font-mono text-sm text-text-secondary whitespace-nowrap">{formatDate(getValue() as string)}</span>, size: 110 },
     {
       id: 'status', header: 'Status', accessorKey: 'isEstimated',
-      cell: ({ getValue }) => getValue() ? <span className="text-xs font-medium px-2 py-0.5 rounded bg-warning-muted text-warning">Estimated</span> : <span className="text-xs font-medium px-2 py-0.5 rounded bg-positive-muted text-positive">Reconciled</span>,
-      size: 90,
+      // A $0 FBA order is an Amazon replacement: a second unit shipped free to
+      // the customer. Its COGS is a real cost, but it is not a sale gone wrong.
+      cell: ({ row }) => row.original.salePrice === 0
+        ? <span className="text-xs font-medium px-2 py-0.5 rounded bg-accent/10 text-accent" title="Amazon replacement order — unit shipped free; cost is real, revenue is $0">Replacement</span>
+        : row.original.isEstimated
+          ? <span className="text-xs font-medium px-2 py-0.5 rounded bg-warning-muted text-warning">Estimated</span>
+          : <span className="text-xs font-medium px-2 py-0.5 rounded bg-positive-muted text-positive">Reconciled</span>,
+      size: 100,
     },
     {
       id: 'order', header: 'Order Details', accessorFn: (row) => row.productName || row.orderId,

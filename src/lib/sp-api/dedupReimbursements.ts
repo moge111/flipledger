@@ -15,8 +15,10 @@
  * Idempotent — safe to run after every sync.
  */
 
-import Database from 'better-sqlite3';
-import path from 'path';
+import { openDb } from '@/lib/db-conn';
+import { createLogger } from '@/lib/log';
+
+const log = createLogger('sp-api/dedupReimbursements');
 
 export interface DedupResult {
   rowsRemoved: number;
@@ -24,8 +26,7 @@ export interface DedupResult {
 }
 
 export function dedupAmazonReimbursements(): DedupResult {
-  const dbPath = path.join(process.cwd(), 'data', 'flipledger.db');
-  const db = new Database(dbPath);
+  const db = openDb();
   db.pragma('journal_mode = WAL');
 
   let rowsRemoved = 0;
@@ -68,7 +69,7 @@ export function dedupAmazonReimbursements(): DedupResult {
     tx();
 
     if (rowsRemoved > 0) {
-      console.log(`[dedupAmazonReimbursements] removed ${rowsRemoved} ADJ/SETTLEMENT placeholders covered by canonical numeric rows (${pointersRepointed} candidate FKs repointed)`);
+      log.info(`removed ${rowsRemoved} ADJ/SETTLEMENT placeholders covered by canonical numeric rows (${pointersRepointed} candidate FKs repointed)`);
     }
   } finally {
     db.close();

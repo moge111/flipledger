@@ -4,16 +4,14 @@
  */
 
 import { walmartApiRequest } from './auth';
-import type { WalmartCredentials, WalmartOrder, WalmartCharge } from './types';
+import type {WalmartCredentials, WalmartOrder } from './types';
 import Database from 'better-sqlite3';
-import path from 'path';
+import { openDb } from '@/lib/db-conn';
+import { createLogger } from '@/lib/log';
 
-function getDb() {
-  const dbPath = path.join(process.cwd(), 'data', 'flipledger.db');
-  const db = new Database(dbPath);
-  db.pragma('journal_mode = WAL');
-  return db;
-}
+const log = createLogger('walmart-api/orders');
+
+const getDb = () => openDb();
 
 /** Convert dollar amount to integer cents */
 function toCents(amount: number | string | undefined): number {
@@ -51,12 +49,12 @@ export async function syncWalmartOrders(
     current = chunkEnd;
   }
 
-  console.log(`[Walmart Orders] Splitting into ${chunks.length} chunks of ${CHUNK_DAYS} days`);
+  log.info(`Splitting into ${chunks.length} chunks of ${CHUNK_DAYS} days`);
 
   try {
     for (let ci = 0; ci < chunks.length; ci++) {
       const chunk = chunks[ci];
-      console.log(`[Walmart Orders] Chunk ${ci + 1}/${chunks.length}: ${chunk.start.split('T')[0]} → ${chunk.end.split('T')[0]}`);
+      log.info(`Chunk ${ci + 1}/${chunks.length}: ${chunk.start.split('T')[0]} → ${chunk.end.split('T')[0]}`);
 
       // Must sync both Seller Fulfilled and WFS orders separately
       for (const shipNodeType of ['SellerFulfilled', 'WFSFulfilled']) {
@@ -102,7 +100,7 @@ export async function syncWalmartOrders(
           const newCursor = response?.list?.meta?.nextCursor || response?.meta?.nextCursor;
           // Detect cursor loop — if same cursor comes back, bail
           if (newCursor && newCursor === nextCursor) {
-            console.warn(`[Walmart Orders] Cursor loop detected for ${shipNodeType} chunk ${ci + 1}, breaking`);
+            log.warn(`Cursor loop detected for ${shipNodeType} chunk ${ci + 1}, breaking`);
             break;
           }
           nextCursor = newCursor;
@@ -219,7 +217,7 @@ export function processWalmartOrder(db: Database.Database, order: WalmartOrder) 
       db.prepare('DELETE FROM order_items WHERE order_id = ?').run(orderId);
       db.prepare(`DELETE FROM sales_tax WHERE order_id = ? AND marketplace = 'walmart'`).run(orderId);
       db.prepare(`UPDATE orders SET status = 'Cancelled' WHERE order_id = ?`).run(orderId);
-      console.log(`[Walmart] Order ${orderId} cancelled after sync — revenue records reversed`);
+      log.info(`Order ${orderId} cancelled after sync — revenue records reversed`);
     }
     // Recon-sourced rows (fee_details, WalmartRefundEvent, incentives) are real
     // settlement data and are deliberately NOT deleted — with the ShipmentEvent

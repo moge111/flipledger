@@ -1,16 +1,13 @@
 import { NextRequest, NextResponse } from 'next/server';
-import Database from 'better-sqlite3';
-import path from 'path';
+import { openDb } from '@/lib/db-conn';
+import { createLogger } from '@/lib/log';
+
+const log = createLogger('api/data/merchant-inventory/activation-preview');
 
 // Update to match the exact shipping template name in Seller Central.
 const DEFAULT_MFN_SHIPPING_TEMPLATE = 'DEFAULT MFN USE THIS ONE';
 
-function getDb() {
-  const dbPath = path.join(process.cwd(), 'data', 'flipledger.db');
-  const db = new Database(dbPath, { readonly: true });
-  db.pragma('journal_mode = WAL');
-  return db;
-}
+const getDb = () => openDb({ readonly: true });
 
 // POST /api/data/merchant-inventory/activation-preview
 //
@@ -222,7 +219,7 @@ export async function POST(request: NextRequest) {
       timestamp: new Date().toISOString(),
     });
   } catch (error) {
-    console.error('[activation-preview] error:', error);
+    log.error('error:', error);
     return NextResponse.json({ error: 'Preview failed' }, { status: 500 });
   } finally {
     db.close();

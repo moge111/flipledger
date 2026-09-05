@@ -1,10 +1,11 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import {useMemo, useState } from 'react';
 import {
   ComposedChart, Bar, Line, XAxis, YAxis, CartesianGrid, Tooltip, ReferenceLine, ResponsiveContainer,
 } from 'recharts';
 import { Banknote, Download, Info, PiggyBank, TimerReset } from 'lucide-react';
+import { useQuery } from '@/lib/useQuery';
 
 interface MonthRow {
   month: string;
@@ -58,29 +59,15 @@ function monthLabel(m: string): string {
 }
 
 export default function CashFlowPage() {
-  const [months, setMonths] = useState<MonthRow[]>([]);
-  const [summary, setSummary] = useState<Summary | null>(null);
-  const [loading, setLoading] = useState(true);
   const [windowMonths, setWindowMonths] = useState(12);
-  const [cashInput, setCashInput] = useState('');
+  // Cash-on-hand field: user edits win until a save; otherwise mirror the server value.
+  const [cashEdit, setCashEdit] = useState<string | null>(null);
   const [savingCash, setSavingCash] = useState(false);
 
-  async function load(w = windowMonths) {
-    setLoading(true);
-    try {
-      const res = await fetch(`/api/data/cashflow?months=${w}`);
-      const data = await res.json();
-      setMonths(data.months || []);
-      setSummary(data.summary || null);
-      if (data.summary?.cashOnHand != null) {
-        setCashInput((data.summary.cashOnHand / 100).toFixed(2));
-      }
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  useEffect(() => { load(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [windowMonths]);
+  const { data, loading, reload: load } = useQuery<{ months?: MonthRow[]; summary?: Summary | null }>(`/api/data/cashflow?months=${windowMonths}`);
+  const months: MonthRow[] = useMemo(() => data?.months || [], [data]);
+  const summary: Summary | null = data?.summary || null;
+  const cashInput = cashEdit ?? (summary?.cashOnHand != null ? (summary.cashOnHand / 100).toFixed(2) : '');
 
   async function saveCash() {
     const dollars = parseFloat(cashInput);
@@ -92,7 +79,8 @@ export default function CashFlowPage() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ cashOnHandCents: Math.round(dollars * 100) }),
       });
-      await load();
+      setCashEdit(null);
+      load();
     } finally {
       setSavingCash(false);
     }
@@ -255,7 +243,7 @@ export default function CashFlowPage() {
                 <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-sm text-text-tertiary">$</span>
                 <input
                   value={cashInput}
-                  onChange={(e) => setCashInput(e.target.value)}
+                  onChange={(e) => setCashEdit(e.target.value)}
                   onKeyDown={(e) => e.key === 'Enter' && saveCash()}
                   placeholder="0.00"
                   inputMode="decimal"

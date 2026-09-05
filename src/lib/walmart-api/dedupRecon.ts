@@ -15,12 +15,13 @@
  * Idempotent.
  */
 
-import Database from 'better-sqlite3';
-import path from 'path';
+import { openDb } from '@/lib/db-conn';
+import { createLogger } from '@/lib/log';
+
+const log = createLogger('walmart-api/dedupRecon');
 
 export function dedupWalmartReconEvents(): { rowsRemoved: number } {
-  const dbPath = path.join(process.cwd(), 'data', 'flipledger.db');
-  const db = new Database(dbPath);
+  const db = openDb();
   db.pragma('journal_mode = WAL');
 
   let removed = 0;
@@ -44,7 +45,7 @@ export function dedupWalmartReconEvents(): { rowsRemoved: number } {
     tx();
 
     if (removed > 0) {
-      console.log(`[dedupWalmartReconEvents] removed ${removed} stale WalmartReconEvent rows that should be Refund/DisputeSettlement events`);
+      log.info(`removed ${removed} stale WalmartReconEvent rows that should be Refund/DisputeSettlement events`);
     }
   } finally {
     db.close();

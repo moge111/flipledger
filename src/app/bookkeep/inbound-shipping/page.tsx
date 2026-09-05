@@ -1,13 +1,14 @@
 'use client';
 
-import { useEffect, useState, useCallback, useMemo } from 'react';
+import {useMemo } from 'react';
 import { type ColumnDef } from '@tanstack/react-table';
 import StatCard from '@/components/ui/StatCard';
 import PageHeader from '@/components/ui/PageHeader';
-import { type DateRange } from '@/components/ui/DateRangePicker';
+import {type DateRange } from '@/components/ui/DateRangePicker';
 import { useFilters } from '@/lib/useFilters';
+import { useQuery } from '@/lib/useQuery';
 import DataTable from '@/components/tables/DataTable';
-import { formatCurrency, formatDate, formatNumber } from '@/lib/formatters';
+import {formatDate, formatNumber } from '@/lib/formatters';
 
 interface ShipmentRow {
   shipmentId: string;
@@ -22,21 +23,11 @@ interface ShipmentRow {
 }
 
 export default function InboundShippingPage() {
-  const [rows, setRows] = useState<ShipmentRow[]>([]);
-  const [totals, setTotals] = useState<any>(null);
-  const [loading, setLoading] = useState(true);
   const { dateRange, setDateRange, marketplace, setMarketplace, marketplaceParam } = useFilters();
 
-  const fetchData = useCallback(async () => {
-    setLoading(true);
-    const res = await fetch(`/api/data/inbound-shipping?startDate=${dateRange.startDate}&endDate=${dateRange.endDate}${marketplaceParam}`);
-    const data = await res.json();
-    setRows(data.items || data.rows || []);
-    setTotals(data.totals || null);
-    setLoading(false);
-  }, [dateRange, marketplace]);
-
-  useEffect(() => { fetchData(); }, [fetchData]);
+  const { data, loading, reload: fetchData } = useQuery<{ items?: ShipmentRow[]; rows?: ShipmentRow[]; totals?: any }>(`/api/data/inbound-shipping?startDate=${dateRange.startDate}&endDate=${dateRange.endDate}${marketplaceParam}`);
+  const rows: ShipmentRow[] = data?.items || data?.rows || [];
+  const totals: any = data?.totals || null;
 
   const columns = useMemo<ColumnDef<ShipmentRow, any>[]>(() => [
     { id: 'dateShipped', header: 'Date', accessorKey: 'dateShipped', cell: ({ getValue }) => <span className="font-mono text-sm text-text-secondary">{formatDate(getValue() as string)}</span>, size: 110 },

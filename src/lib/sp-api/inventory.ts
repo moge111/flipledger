@@ -8,15 +8,12 @@
 
 import { spApiRequest } from './auth';
 import type { SPAPICredentials } from './types';
-import Database from 'better-sqlite3';
-import path from 'path';
+import { openDb } from '@/lib/db-conn';
+import { createLogger } from '@/lib/log';
 
-function getDb() {
-  const dbPath = path.join(process.cwd(), 'data', 'flipledger.db');
-  const db = new Database(dbPath);
-  db.pragma('journal_mode = WAL');
-  return db;
-}
+const log = createLogger('sp-api/inventory');
+
+const getDb = () => openDb();
 
 export async function syncFBAInventory(
   credentials: SPAPICredentials
@@ -166,7 +163,7 @@ export async function syncFBAInventory(
           const newQty = Math.max(0, row.fulfillable_qty - sold);
           db.prepare('UPDATE live_inventory SET fulfillable_qty = ?, last_updated = ? WHERE id = ?')
             .run(newQty, now, row.id);
-          console.log(`[FBA Inventory] MFN stock ${row.sku}: ${row.fulfillable_qty} → ${newQty} (${sold} sold since ${row.last_updated.slice(0, 10)})`);
+          log.info(`MFN stock ${row.sku}: ${row.fulfillable_qty} → ${newQty} (${sold} sold since ${row.last_updated.slice(0, 10)})`);
         }
       }
     }

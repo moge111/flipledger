@@ -15,9 +15,9 @@
  * ItemSalesReport (unrelated). Idempotent: deletes prior import then re-inserts.
  */
 import { NextResponse } from 'next/server';
-import Database from 'better-sqlite3';
 import path from 'path';
 import fs from 'fs';
+import { openDb } from '@/lib/db-conn';
 
 const DIR = path.join(process.cwd(), 'data', 'walmart-service-fees');
 
@@ -76,12 +76,36 @@ function pick(row: Record<string, string>, ...keys: string[]): string {
   return '';
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// RETIRED (August 23, 2026). The reconciliation report has carried these WFS
+// service-fee and inventory-adjustment lines since Nov 2024 — `recon.ts` was
+// discarding them because they have no Purchase Order #. They are now captured
+// automatically (event_type WalmartReconServiceFee / reimbursement prefix
+// WMT-WFSSVC-), so this manual CSV path is redundant AND would DOUBLE-COUNT:
+// it writes a different event_type, so nothing dedups the two against
+// each other. Left in place, disabled, for reference only.
+//
+// Recon is strictly more complete than these exports were: for 2026 recon
+// carries $1,393.60 of fees vs $1,282.92 the CSVs captured. The one thing the
+// CSVs had that recon does not is per-GTIN attribution on storage fees; recon
+// reports them as period-level roll-ups.
+// ─────────────────────────────────────────────────────────────────────────────
 export async function POST() {
+  return NextResponse.json({
+    error: 'Retired: Walmart WFS service fees now sync automatically from the reconciliation report.',
+    detail:
+      'The recon feed has always contained these rows; the parser was dropping them. ' +
+      'Running this importer would double-count, because it writes a separate event_type ' +
+      'that nothing reconciles against the recon-sourced rows. No manual export is needed.',
+  }, { status: 410 });
+}
+
+async function RETIRED_POST() {
   if (!fs.existsSync(DIR)) {
     return NextResponse.json({ error: `Directory not found: ${DIR}` }, { status: 400 });
   }
   const files = fs.readdirSync(DIR).filter((f) => f.toLowerCase().endsWith('.csv'));
-  const db = new Database(path.join(process.cwd(), 'data', 'flipledger.db'));
+  const db = openDb();
   db.pragma('journal_mode = WAL');
 
   // Aggregate costs by (transactionType, day, key) so per-line storage accruals
@@ -89,7 +113,8 @@ export async function POST() {
   const costAgg = new Map<string, { type: string; day: string; gtin: string; name: string; cents: number }>();
   const reimbRows: { id: string; date: string; gtin: string; name: string; reason: string; cents: number; qty: number }[] = [];
   const stats: Record<string, { rows: number; cents: number }> = {};
-  let filesParsed = 0, skipped: string[] = [];
+  let filesParsed = 0;
+  const skipped: string[] = [];
 
   for (const file of files) {
     const text = fs.readFileSync(path.join(DIR, file), 'utf8');

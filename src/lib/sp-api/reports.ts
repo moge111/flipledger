@@ -6,15 +6,12 @@
 
 import { spApiRequest } from './auth';
 import type { SPAPICredentials } from './types';
-import Database from 'better-sqlite3';
-import path from 'path';
+import { openDb } from '@/lib/db-conn';
+import { createLogger } from '@/lib/log';
 
-function getDb() {
-  const dbPath = path.join(process.cwd(), 'data', 'flipledger.db');
-  const db = new Database(dbPath);
-  db.pragma('journal_mode = WAL');
-  return db;
-}
+const log = createLogger('sp-api/reports');
+
+const getDb = () => openDb();
 
 /**
  * List available settlement reports.
@@ -80,7 +77,7 @@ export async function syncSettlementReports(
 
   try {
     const reports = await getSettlementReports(credentials, startDate);
-    console.log(`[Sync] Found ${reports.length} settlement reports`);
+    log.info(`Found ${reports.length} settlement reports`);
 
     for (const report of reports) {
       try {

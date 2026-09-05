@@ -1,11 +1,12 @@
 'use client';
 
-import { useEffect, useState, useCallback, useMemo } from 'react';
+import { useState, useMemo } from 'react';
 import { type ColumnDef } from '@tanstack/react-table';
 import StatCard from '@/components/ui/StatCard';
 import PageHeader from '@/components/ui/PageHeader';
-import { type DateRange } from '@/components/ui/DateRangePicker';
+import {type DateRange } from '@/components/ui/DateRangePicker';
 import { useFilters } from '@/lib/useFilters';
+import { useQuery } from '@/lib/useQuery';
 import DataTable from '@/components/tables/DataTable';
 import { formatCurrency, formatDate } from '@/lib/formatters';
 import { Plus } from 'lucide-react';
@@ -13,23 +14,13 @@ import { Plus } from 'lucide-react';
 interface ExpenseRow { id: number; date: string; category: string; amount: number; description: string; recurring: string; }
 
 export default function OtherExpensesPage() {
-  const [rows, setRows] = useState<ExpenseRow[]>([]);
-  const [totals, setTotals] = useState<any>(null);
-  const [loading, setLoading] = useState(true);
   const { dateRange, setDateRange, marketplace, setMarketplace, marketplaceParam } = useFilters();
   const [showAddForm, setShowAddForm] = useState(false);
   const [newExpense, setNewExpense] = useState({ date: new Date().toISOString().split('T')[0], category: 'Supplies', amount: '', description: '', recurring: 'one-time' });
 
-  const fetchData = useCallback(async () => {
-    setLoading(true);
-    const res = await fetch(`/api/data/other-expenses?startDate=${dateRange.startDate}&endDate=${dateRange.endDate}${marketplaceParam}`);
-    const data = await res.json();
-    setRows(data.items || data.rows || []);
-    setTotals(data.totals || null);
-    setLoading(false);
-  }, [dateRange, marketplace]);
-
-  useEffect(() => { fetchData(); }, [fetchData]);
+  const { data, loading, reload: fetchData } = useQuery<{ items?: ExpenseRow[]; rows?: ExpenseRow[]; totals?: any }>(`/api/data/other-expenses?startDate=${dateRange.startDate}&endDate=${dateRange.endDate}${marketplaceParam}`);
+  const rows: ExpenseRow[] = data?.items || data?.rows || [];
+  const totals: any = data?.totals || null;
 
   async function handleAddExpense() {
     if (!newExpense.amount) return;
@@ -46,7 +37,7 @@ export default function OtherExpensesPage() {
   const categories = ['Supplies', 'Mileage', 'Subscriptions', 'Storage', 'Packaging', 'Labels', 'Equipment', 'Insurance', 'Other'];
 
   const columns = useMemo<ColumnDef<ExpenseRow, any>[]>(() => [
-    { id: 'date', header: 'Date', accessorKey: 'date', cell: ({ getValue }) => <span className="font-mono text-sm text-text-secondary">{formatDate(getValue() as string)}</span>, size: 120 },
+    { id: 'date', header: 'Date', accessorKey: 'date', cell: ({ getValue }) => <span className="font-mono text-sm text-text-secondary whitespace-nowrap">{formatDate(getValue() as string)}</span>, size: 120 },
     {
       id: 'category', header: 'Category', accessorKey: 'category',
       cell: ({ getValue }) => <span className="text-sm font-medium text-text-primary">{getValue() as string}</span>, size: 130,

@@ -11,8 +11,10 @@
  */
 import { spApiRequest } from './auth';
 import type { SPAPICredentials } from './types';
-import Database from 'better-sqlite3';
-import path from 'path';
+import { openDb } from '@/lib/db-conn';
+import { createLogger } from '@/lib/log';
+
+const log = createLogger('sp-api/salesRank');
 
 const SLEEP_MS_BETWEEN_CALLS = 600;
 const ACTIVE_LOOKBACK_DAYS = 90;
@@ -26,12 +28,7 @@ interface CatalogSalesRanksResponse {
   }>;
 }
 
-function getDb() {
-  const dbPath = path.join(process.cwd(), 'data', 'flipledger.db');
-  const db = new Database(dbPath);
-  db.pragma('journal_mode = WAL');
-  return db;
-}
+const getDb = () => openDb();
 
 function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -72,7 +69,7 @@ export async function fetchSalesRank(
     return { rank: null, category: null };
   } catch (err) {
     // ASIN not found, suppressed, etc. — skip silently
-    console.warn(`[salesRank] ${asin} fetch failed: ${err}`);
+    log.warn(`${asin} fetch failed: ${err}`);
     return { rank: null, category: null };
   }
 }
@@ -130,7 +127,7 @@ export async function syncSalesRanks(credentials: SPAPICredentials): Promise<{
       }
     } catch (err) {
       errors++;
-      console.warn(`[salesRank] ${asin} failed: ${err}`);
+      log.warn(`${asin} failed: ${err}`);
     }
     await sleep(SLEEP_MS_BETWEEN_CALLS);
   }

@@ -12,15 +12,9 @@
  * captured via the SP-API fees estimate, so this helper is only useful for
  * MFN / merchant-fulfilled channel.
  */
-import Database from 'better-sqlite3';
-import path from 'path';
+import { openDb } from '@/lib/db-conn';
 
-function getDb() {
-  const dbPath = path.join(process.cwd(), 'data', 'flipledger.db');
-  const db = new Database(dbPath, { readonly: true });
-  db.pragma('journal_mode = WAL');
-  return db;
-}
+const getDb = () => openDb({ readonly: true });
 
 export interface ShippingEstimate {
   costCents: number;

@@ -34,17 +34,10 @@
  * it flows into P&L's fee hierarchy under whatever category you pass.
  */
 import { NextRequest, NextResponse } from 'next/server';
-import Database from 'better-sqlite3';
-import path from 'path';
 import { recalculateFIFO } from '@/lib/fifo';
+import { openDb } from '@/lib/db-conn';
 
-function getDb() {
-  const dbPath = path.join(process.cwd(), 'data', 'flipledger.db');
-  const db = new Database(dbPath);
-  db.pragma('journal_mode = WAL');
-  db.pragma('foreign_keys = ON');
-  return db;
-}
+const getDb = () => openDb({ foreignKeys: true });
 
 function generateOrderId(dateIso: string): string {
   // PP-YYYYMMDD-XXXXX  where XXXXX is a random 5-digit suffix

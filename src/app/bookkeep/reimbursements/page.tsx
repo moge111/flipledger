@@ -1,13 +1,14 @@
 'use client';
 
-import { useEffect, useState, useCallback, useMemo } from 'react';
+import {useMemo } from 'react';
 import { type ColumnDef } from '@tanstack/react-table';
 import StatCard from '@/components/ui/StatCard';
 import PageHeader from '@/components/ui/PageHeader';
-import { type DateRange } from '@/components/ui/DateRangePicker';
+import {type DateRange } from '@/components/ui/DateRangePicker';
 import { useFilters } from '@/lib/useFilters';
+import { useQuery } from '@/lib/useQuery';
 import DataTable from '@/components/tables/DataTable';
-import { formatCurrency, formatDate, formatNumber } from '@/lib/formatters';
+import {formatCurrency, formatDate } from '@/lib/formatters';
 
 interface ReimbRow {
   reimbursementDate: string;
@@ -25,24 +26,14 @@ interface ReimbRow {
 }
 
 export default function ReimbursementsPage() {
-  const [rows, setRows] = useState<ReimbRow[]>([]);
-  const [totals, setTotals] = useState<any>(null);
-  const [loading, setLoading] = useState(true);
   const { dateRange, setDateRange, marketplace, setMarketplace, marketplaceParam } = useFilters();
 
-  const fetchData = useCallback(async () => {
-    setLoading(true);
-    const res = await fetch(`/api/data/reimbursements?startDate=${dateRange.startDate}&endDate=${dateRange.endDate}${marketplaceParam}`);
-    const data = await res.json();
-    setRows(data.items || data.rows || []);
-    setTotals(data.totals || null);
-    setLoading(false);
-  }, [dateRange, marketplace]);
-
-  useEffect(() => { fetchData(); }, [fetchData]);
+  const { data, loading, reload: fetchData } = useQuery<{ items?: ReimbRow[]; rows?: ReimbRow[]; totals?: any }>(`/api/data/reimbursements?startDate=${dateRange.startDate}&endDate=${dateRange.endDate}${marketplaceParam}`);
+  const rows: ReimbRow[] = data?.items || data?.rows || [];
+  const totals: any = data?.totals || null;
 
   const columns = useMemo<ColumnDef<ReimbRow, any>[]>(() => [
-    { id: 'date', header: 'Date', accessorKey: 'date', cell: ({ getValue }) => { const v = getValue() as string; return <span className="font-mono text-sm text-text-secondary">{v ? formatDate(v) : '—'}</span>; }, size: 110 },
+    { id: 'date', header: 'Date', accessorKey: 'date', cell: ({ getValue }) => { const v = getValue() as string; return <span className="font-mono text-sm text-text-secondary whitespace-nowrap">{v ? formatDate(v) : '—'}</span>; }, size: 110 },
     {
       id: 'marketplace', header: '', accessorKey: 'marketplace',
       cell: ({ getValue }) => {

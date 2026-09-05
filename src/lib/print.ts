@@ -22,6 +22,9 @@ import { promisify } from 'node:util';
 import os from 'node:os';
 import path from 'node:path';
 import fs from 'node:fs/promises';
+import { createLogger } from '@/lib/log';
+
+const log = createLogger('print');
 
 const execFileAsync = promisify(execFile);
 
@@ -86,9 +89,9 @@ export async function printPdfBuffer(
   if (status.exists && status.disabled) {
     try {
       await execFileAsync('cupsenable', [printerName]);
-      console.log(`[print] Queue ${printerName} was disabled — re-enabled via cupsenable`);
+      log.info(`Queue ${printerName} was disabled — re-enabled via cupsenable`);
     } catch (err) {
-      console.warn(`[print] cupsenable ${printerName} failed:`, err);
+      log.warn(`cupsenable ${printerName} failed:`, err);
     }
     const recheck = await getPrinterQueueStatus(printerName);
     if (recheck.disabled) {
@@ -120,7 +123,7 @@ export async function printPdfBuffer(
 
     // lpr is silent on success; any output to stderr is usually a warning
     if (stderr && stderr.trim()) {
-      console.warn('[print] lpr stderr:', stderr.trim());
+      log.warn('lpr stderr:', stderr.trim());
     }
 
     // Try to read job id back from `lpq` (best-effort)

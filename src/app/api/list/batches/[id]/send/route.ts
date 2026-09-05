@@ -18,7 +18,6 @@
  */
 import { NextRequest, NextResponse } from 'next/server';
 import Database from 'better-sqlite3';
-import path from 'path';
 import { clearTokenCache, isTransientNetworkError } from '@/lib/sp-api/auth';
 import {
   getSellerId,
@@ -29,13 +28,12 @@ import {
 import { createInboundPlan, setPrepDetails, getPrepDetails, getInboundOperation, type SourceAddress, type InboundPlanItem } from '@/lib/sp-api/inboundPlansV2';
 import { fnskuMaxAttempts, isPropagationError, parsePrepOwnerFlips } from '@/lib/listing-send-policy';
 import type { SPAPICredentials } from '@/lib/sp-api/types';
+import { openDb } from '@/lib/db-conn';
+import { createLogger } from '@/lib/log';
 
-function getDb() {
-  const dbPath = path.join(process.cwd(), 'data', 'flipledger.db');
-  const db = new Database(dbPath);
-  db.pragma('journal_mode = WAL');
-  return db;
-}
+const log = createLogger('api/list/batches/[id]/send');
+
+const getDb = () => openDb();
 
 function getAmazonCredentials(db: Database.Database): SPAPICredentials | null {
   const rows = db.prepare('SELECT key, value FROM settings').all() as { key: string; value: string }[];
@@ -207,7 +205,7 @@ export async function POST(
           if (existingFnsku) {
             listingResults.push({ itemId: item.id, sku: item.sku, status: 'ACTIVE', submissionId: null, error: null });
             saveListingState(batchId, item.id, { listing_status: 'ACTIVE', listing_submission_id: null, listing_error: null });
-            console.log(`[send] ${item.sku} already inbound-ready (FNSKU ${existingFnsku}) — skipping re-PUT`);
+            log.info(`${item.sku} already inbound-ready (FNSKU ${existingFnsku}) — skipping re-PUT`);
             continue itemLoop;
           }
 
@@ -268,7 +266,7 @@ export async function POST(
         } catch (err) {
           if (isTransientNetworkError(err) && itemTry < ITEM_TRIES - 1) {
             const waitSec = 8 * (itemTry + 1); // 8s, 16s
-            console.warn(`[send] Network error verifying ${item.sku}, retrying item in ${waitSec}s (attempt ${itemTry + 1}/${ITEM_TRIES}):`, String(err));
+            log.warn(`Network error verifying ${item.sku}, retrying item in ${waitSec}s (attempt ${itemTry + 1}/${ITEM_TRIES}):`, String(err));
             await new Promise((r) => setTimeout(r, waitSec * 1000));
             continue;
           }
@@ -318,7 +316,7 @@ export async function POST(
           listing_error: `Excluded from shipment (user-approved) — ${f.error}`,
         });
       }
-      console.warn(`[send] ${failedListings.length} listing(s) failed at creation, user approved partial send: ${failedListings.map((f) => f.sku).join(', ')}. Proceeding with ${sendableItems.length}/${items.length}.`);
+      log.warn(`${failedListings.length} listing(s) failed at creation, user approved partial send: ${failedListings.map((f) => f.sku).join(', ')}. Proceeding with ${sendableItems.length}/${items.length}.`);
     }
 
     // 9. If FBA, create the inbound plan now that listings are in-flight.
@@ -380,7 +378,7 @@ export async function POST(
       // the full 10 min before excluding it — this caps the repeat cost.)
       const FNSKU_MAX_ATTEMPTS = fnskuMaxAttempts(allowPartial);
       const skusNeedingFnsku = sendableItems.map((i) => i.sku);
-      console.log(`[send] Waiting for FNSKUs on ${skusNeedingFnsku.length} MSKU(s)…`);
+      log.info(`Waiting for FNSKUs on ${skusNeedingFnsku.length} MSKU(s)…`);
       // Track which MSKUs have an FNSKU (the "FBA-registered / inbound-ready"
       // signal). Once ready, a SKU stays ready across polls. Any SKU still
       // missing its FNSKU at the end is NOT available for inbound — including
@@ -412,7 +410,7 @@ export async function POST(
           } catch { /* keep polling */ }
         }
         if (inboundReadySkus.size === skusNeedingFnsku.length) {
-          console.log(`[send] All ${inboundReadySkus.size}/${skusNeedingFnsku.length} FNSKUs ready after ${(attempt + 1) * FNSKU_POLL_MS / 1000}s`);
+          log.info(`All ${inboundReadySkus.size}/${skusNeedingFnsku.length} FNSKUs ready after ${(attempt + 1) * FNSKU_POLL_MS / 1000}s`);
           break;
         }
         // After ~3 polls (1 min) with stragglers, re-affirm their listings once.
@@ -421,21 +419,21 @@ export async function POST(
           for (const item of sendableItems) {
             if (inboundReadySkus.has(item.sku)) continue;
             try {
-              console.warn(`[send] Re-PUTting stuck listing (no FNSKU yet): ${item.sku}`);
+              log.warn(`Re-PUTting stuck listing (no FNSKU yet): ${item.sku}`);
               await createOrUpdateListing(creds, sellerId, {
                 sku: item.sku, asin: item.asin, condition: item.condition,
                 quantity: item.quantity, listPriceCents: item.listPriceCents,
                 channel: batch.channel, productType: await getProductType(creds, item.asin),
               });
-            } catch (e) { console.warn(`[send] Re-PUT failed for ${item.sku}:`, e); }
+            } catch (e) { log.warn(`Re-PUT failed for ${item.sku}:`, e); }
           }
         }
         if (attempt === FNSKU_MAX_ATTEMPTS - 1) {
           const stuck = skusNeedingFnsku.filter((s) => !inboundReadySkus.has(s));
-          console.warn(`[send] FNSKU wait timeout — ${inboundReadySkus.size}/${skusNeedingFnsku.length} ready after ${FNSKU_MAX_ATTEMPTS * FNSKU_POLL_MS / 1000}s. Not inbound-ready (will be EXCLUDED from this shipment): ${stuck.join(', ')}`);
+          log.warn(`FNSKU wait timeout — ${inboundReadySkus.size}/${skusNeedingFnsku.length} ready after ${FNSKU_MAX_ATTEMPTS * FNSKU_POLL_MS / 1000}s. Not inbound-ready (will be EXCLUDED from this shipment): ${stuck.join(', ')}`);
           break;
         }
-        console.log(`[send] FNSKU wait: ${inboundReadySkus.size}/${skusNeedingFnsku.length} ready (attempt ${attempt + 1}/${FNSKU_MAX_ATTEMPTS}), waiting ${FNSKU_POLL_MS / 1000}s…`);
+        log.info(`FNSKU wait: ${inboundReadySkus.size}/${skusNeedingFnsku.length} ready (attempt ${attempt + 1}/${FNSKU_MAX_ATTEMPTS}), waiting ${FNSKU_POLL_MS / 1000}s…`);
         await new Promise((r) => setTimeout(r, FNSKU_POLL_MS));
       }
 
@@ -468,7 +466,7 @@ export async function POST(
             listing_error: 'Excluded from shipment (user-approved): Amazon never assigned an FNSKU (offer/FBA channel did not attach). Re-send once it registers, or re-add under a fresh MSKU.',
           });
         }
-        console.warn(`[send] Proceeding with ${readyItems.length}/${sendableItems.length} inbound-ready MSKU(s), user approved partial send. Excluded: ${stuckSkus.join(', ')}`);
+        log.warn(`Proceeding with ${readyItems.length}/${sendableItems.length} inbound-ready MSKU(s), user approved partial send. Excluded: ${stuckSkus.join(', ')}`);
       }
 
       // Step 2: classify prep details for each MSKU at the account level —
@@ -493,13 +491,13 @@ export async function POST(
         );
         prepItemsToSet = readyItems.filter((i) => !classified.has(i.sku));
         if (prepItemsToSet.length === 0) {
-          console.log(`[send] Prep already classified for all ${readyItems.length} MSKU(s) (front-loaded at add time) — skipping prep set + propagation wait`);
+          log.info(`Prep already classified for all ${readyItems.length} MSKU(s) (front-loaded at add time) — skipping prep set + propagation wait`);
         }
       } catch (err) {
-        console.warn('[send] getPrepDetails pre-check failed — setting prep for all items:', String(err));
+        log.warn('getPrepDetails pre-check failed — setting prep for all items:', String(err));
       }
 
-      console.log('[send] Setting prep classification for', prepItemsToSet.length, 'MSKU(s)…');
+      log.info('Setting prep classification for', prepItemsToSet.length, 'MSKU(s)…');
       try {
         const prepResult = prepItemsToSet.length === 0
           ? { operationId: '', skipped: [] as string[] }
@@ -513,7 +511,7 @@ export async function POST(
         // be AMAZON (Amazon provides the prep), not SELLER.
         if (prepResult.skipped.length > 0) {
           fcProvidedSkus = prepResult.skipped;
-          console.log(`[send] ${prepResult.skipped.length} MSKU(s) already Amazon-classified (prepOwner→AMAZON): ${prepResult.skipped.join(', ')}`);
+          log.info(`${prepResult.skipped.length} MSKU(s) already Amazon-classified (prepOwner→AMAZON): ${prepResult.skipped.join(', ')}`);
         }
 
         // Poll until the prep operation finishes (usually 3-10 seconds).
@@ -528,17 +526,17 @@ export async function POST(
           if (op.operationStatus === 'SUCCESS') {
             prepDone = true;
             prepProblems = op.operationProblems || [];
-            console.log(`[send] Prep classification SUCCESS after ${(attempt + 1) * PREP_POLL_MS / 1000}s` +
+            log.info(`Prep classification SUCCESS after ${(attempt + 1) * PREP_POLL_MS / 1000}s` +
               (prepProblems.length > 0 ? ` (with ${prepProblems.length} per-MSKU problem(s): ${JSON.stringify(prepProblems)})` : ''));
             break;
           }
           if (op.operationStatus === 'FAILED') {
-            console.warn('[send] Prep classification FAILED:', JSON.stringify(op.operationProblems));
+            log.warn('Prep classification FAILED:', JSON.stringify(op.operationProblems));
             break;
           }
         }
         if (!prepDone) {
-          console.warn('[send] Prep classification did not finish within timeout — proceeding anyway');
+          log.warn('Prep classification did not finish within timeout — proceeding anyway');
         }
 
         // CRITICAL: even after operationStatus=SUCCESS, the prep classification
@@ -553,7 +551,7 @@ export async function POST(
         // propagated, so the wait would be pure dead time.
         if (prepDone && prepItemsToSet.length > 0) {
           const PREP_PROPAGATION_WAIT_MS = 90_000;
-          console.log(`[send] Waiting ${PREP_PROPAGATION_WAIT_MS / 1000}s for prep classification to propagate to Inbound Plans service…`);
+          log.info(`Waiting ${PREP_PROPAGATION_WAIT_MS / 1000}s for prep classification to propagate to Inbound Plans service…`);
           await new Promise((r) => setTimeout(r, PREP_PROPAGATION_WAIT_MS));
         }
 
@@ -570,10 +568,10 @@ export async function POST(
           try { prep = await getPrepDetails(creds, readySkus); } catch { break; }
           const unknown = prep.filter((p) => (p.prepCategory || 'UNKNOWN') === 'UNKNOWN').map((p) => p.msku);
           if (unknown.length === 0) {
-            console.log(`[send] Prep verified (NONE) for all ${readySkus.length} MSKU(s)`);
+            log.info(`Prep verified (NONE) for all ${readySkus.length} MSKU(s)`);
             break;
           }
-          console.warn(`[send] Prep still UNKNOWN for ${unknown.length} MSKU(s): ${unknown.join(', ')} — re-setting (round ${v + 1}/4)`);
+          log.warn(`Prep still UNKNOWN for ${unknown.length} MSKU(s): ${unknown.join(', ')} — re-setting (round ${v + 1}/4)`);
           try {
             const reop = await setPrepDetails(creds, unknown.map((m) => ({ msku: m, prepCategory: 'NONE', prepTypes: ['ITEM_NO_PREP'] })));
             for (let i = 0; reop.operationId && i < 20; i++) {
@@ -581,11 +579,11 @@ export async function POST(
               const o = await getInboundOperation(creds, reop.operationId);
               if (o.operationStatus === 'SUCCESS' || o.operationStatus === 'FAILED') break;
             }
-          } catch (e) { console.warn('[send] prep re-set failed:', e); }
+          } catch (e) { log.warn('prep re-set failed:', e); }
           await new Promise((r) => setTimeout(r, 15_000));
         }
       } catch (err) {
-        console.warn('[send] setPrepDetails failed (non-fatal, continuing):', err);
+        log.warn('setPrepDetails failed (non-fatal, continuing):', err);
       }
 
       let planResult;
@@ -632,10 +630,10 @@ export async function POST(
 
           if (needsPrep.length > 0 || trueDoesntNeed.length > 0) {
             if (needsPrep.length > 0) {
-              console.log(`[send] Inbound plan: flipping to SELLER prep: ${needsPrep.join(', ')}`);
+              log.info(`Inbound plan: flipping to SELLER prep: ${needsPrep.join(', ')}`);
             }
             if (trueDoesntNeed.length > 0) {
-              console.log(`[send] Inbound plan: flipping to NONE prep: ${trueDoesntNeed.join(', ')}`);
+              log.info(`Inbound plan: flipping to NONE prep: ${trueDoesntNeed.join(', ')}`);
             }
             for (const it of itemsForPlan) {
               if (needsPrep.includes(it.msku)) it.prepOwner = 'SELLER';
@@ -649,7 +647,7 @@ export async function POST(
             return failBatch(batchId, `Inbound plan creation failed: ${err}`);
           }
           if (attempt === MAX_RETRIES - 1) break;
-          console.log(`[send] Inbound plan: MSKUs still propagating (attempt ${attempt + 1}/${MAX_RETRIES}), waiting ${RETRY_DELAY_MS / 1000}s…`);
+          log.info(`Inbound plan: MSKUs still propagating (attempt ${attempt + 1}/${MAX_RETRIES}), waiting ${RETRY_DELAY_MS / 1000}s…`);
           await new Promise((r) => setTimeout(r, RETRY_DELAY_MS));
         }
       }
@@ -702,7 +700,7 @@ export async function POST(
 
         // Re-affirm prep classification, wait for it to propagate (escalating),
         // then create a FRESH inbound plan and re-verify next loop.
-        console.log(`[send] Plan operation failed on prep (round ${round + 1}/${PLAN_OP_ROUNDS}) — re-affirming prep + retrying with a fresh plan…`);
+        log.info(`Plan operation failed on prep (round ${round + 1}/${PLAN_OP_ROUNDS}) — re-affirming prep + retrying with a fresh plan…`);
         try {
           const pr = await setPrepDetails(creds, readyItems.map((i) => ({ msku: i.sku, prepCategory: 'NONE', prepTypes: ['ITEM_NO_PREP'] })));
           for (let a = 0; pr.operationId && a < 20; a++) {
@@ -711,10 +709,10 @@ export async function POST(
             if (op.operationStatus === 'SUCCESS' || op.operationStatus === 'FAILED') break;
           }
         } catch (e) {
-          console.warn('[send] re-affirm prep failed (non-fatal):', e);
+          log.warn('re-affirm prep failed (non-fatal):', e);
         }
         const waitMs = 120_000 + round * 60_000; // 2min, 3min, 4min…
-        console.log(`[send] Waiting ${waitMs / 1000}s for prep to propagate before re-creating the plan…`);
+        log.info(`Waiting ${waitMs / 1000}s for prep to propagate before re-creating the plan…`);
         await new Promise((r) => setTimeout(r, waitMs));
 
         try {
@@ -889,7 +887,7 @@ function blockSend(batchId: number, blockedItems: { sku: string; reason: string 
   } finally {
     db.close();
   }
-  console.warn(`[send] Blocked pending user decision — ${blockedItems.length} item(s) not shippable: ${blockedItems.map((b) => b.sku).join(', ')}`);
+  log.warn(`Blocked pending user decision — ${blockedItems.length} item(s) not shippable: ${blockedItems.map((b) => b.sku).join(', ')}`);
   return NextResponse.json({
     error: `${blockedItems.length} item(s) can't ship yet`,
     blockedItems,

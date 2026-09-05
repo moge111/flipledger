@@ -5,15 +5,13 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-import Database from 'better-sqlite3';
-import path from 'path';
+import { openDb } from '@/lib/db-conn';
 
 export async function GET(_request: NextRequest, context: { params: Promise<{ id: string }> }) {
   const { id: rawId } = await context.params;
   const orderId = decodeURIComponent(rawId);
 
-  const dbPath = path.join(process.cwd(), 'data', 'flipledger.db');
-  const db = new Database(dbPath, { readonly: true });
+  const db = openDb({ readonly: true });
 
   try {
     const order = db.prepare(`

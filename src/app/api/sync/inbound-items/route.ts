@@ -1,11 +1,12 @@
 import { NextResponse } from 'next/server';
 import { spApiRequest } from '@/lib/sp-api/auth';
-import Database from 'better-sqlite3';
-import path from 'path';
+import { openDb } from '@/lib/db-conn';
+import { createLogger } from '@/lib/log';
+
+const log = createLogger('api/sync/inbound-items');
 
 function getCredentials() {
-  const dbPath = path.join(process.cwd(), 'data', 'flipledger.db');
-  const db = new Database(dbPath, { readonly: true });
+  const db = openDb({ readonly: true });
   db.pragma('journal_mode = WAL');
   const rows = db.prepare('SELECT key, value FROM settings').all() as { key: string; value: string }[];
   db.close();
@@ -21,8 +22,7 @@ function getCredentials() {
 
 export async function GET() {
   const credentials = getCredentials();
-  const dbPath = path.join(process.cwd(), 'data', 'flipledger.db');
-  const db = new Database(dbPath);
+  const db = openDb();
   db.pragma('journal_mode = WAL');
 
   try {
@@ -38,7 +38,7 @@ export async function GET() {
       GROUP BY json_extract(raw_data, '$.AmazonOrderId')
     `).all() as { shipment_id: string; cost: number }[];
 
-    console.log(`[InboundItems] Found ${shipments.length} shipments to look up`);
+    log.info(`Found ${shipments.length} shipments to look up`);
 
     // Create table for per-SKU inbound costs
     db.exec(`

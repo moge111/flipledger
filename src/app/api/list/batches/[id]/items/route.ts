@@ -6,16 +6,10 @@
  *   - Auto-triggers FIFO recalculation for the affected SKU/ASIN.
  */
 import { NextRequest, NextResponse } from 'next/server';
-import Database from 'better-sqlite3';
-import path from 'path';
 import { recalculateFIFO } from '@/lib/fifo';
+import { openDb } from '@/lib/db-conn';
 
-function getDb() {
-  const dbPath = path.join(process.cwd(), 'data', 'flipledger.db');
-  const db = new Database(dbPath);
-  db.pragma('journal_mode = WAL');
-  return db;
-}
+const getDb = () => openDb();
 
 export async function POST(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;

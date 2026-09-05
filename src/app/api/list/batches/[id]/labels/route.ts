@@ -21,7 +21,6 @@
  */
 import { NextRequest, NextResponse } from 'next/server';
 import Database from 'better-sqlite3';
-import path from 'path';
 import { clearTokenCache } from '@/lib/sp-api/auth';
 import {
   getShipmentLabels,
@@ -30,14 +29,11 @@ import {
   type LabelType,
 } from '@/lib/sp-api/inboundPlansV2';
 import { printPdfBuffer, listAvailablePrinters } from '@/lib/print';
+import { fitLabelsTo4x6 } from '@/lib/pdf-fit';
 import type { SPAPICredentials } from '@/lib/sp-api/types';
+import { openDb } from '@/lib/db-conn';
 
-function getDb() {
-  const dbPath = path.join(process.cwd(), 'data', 'flipledger.db');
-  const db = new Database(dbPath);
-  db.pragma('journal_mode = WAL');
-  return db;
-}
+const getDb = () => openDb();
 
 function getAmazonCredentials(db: Database.Database): SPAPICredentials | null {
   const rows = db.prepare('SELECT key, value FROM settings').all() as { key: string; value: string }[];
@@ -210,10 +206,16 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
     return NextResponse.json({ error: `Failed to download label PDF: ${err}` }, { status: 500 });
   }
 
-  // Shipping labels (PackageLabel_Thermal) come back print-ready — upright
-  // 4.25×6 thermal pages, FBA box ID and UPS label on separate pages. Serve
-  // them as-is; no crop/rotate/stretch (that was only needed for the old
-  // Thermal_Unified sideways layout).
+  // Shipping labels (PackageLabel_Thermal) come back upright and correct, but
+  // on 4.25×6 pages with the UPS label drawn at only 84.7% (244×366 pt on a
+  // 306×432 page). Fit-to-page on a 4" Rollo compounds that to ~80%, which is
+  // why these printed small. fitLabelsTo4x6 re-lays each page onto true 4×6
+  // media with a single uniform scale — see src/lib/pdf-fit.ts. This is NOT
+  // the old Thermal_Unified crop/rotate/stretch hack: nothing is cropped or
+  // rotated, and any page it doesn't positively recognize is left alone.
+  if (type === 'shipping') {
+    pdfBuffer = await fitLabelsTo4x6(pdfBuffer);
+  }
 
   // ─── Action: download ─── return the PDF directly to the browser ───────
   if (action === 'download') {
@@ -238,7 +240,7 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
   const printResult = await printPdfBuffer(
     pdfBuffer,
     printerName,
-    `FlipLedger ${type === 'fnsku' ? 'FNSKU' : 'Box ID'} ${shipmentId}`
+    `FlipLedger ${type === 'fnsku' ? 'FNSKU' : type === 'shipping' ? 'Shipping' : 'Box ID'} ${shipmentId}`
   );
 
   if (!printResult.success) {

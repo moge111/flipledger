@@ -6,14 +6,12 @@
  * the UI. Rate-limited to ~150 ASINs/min by the Catalog API.
  */
 import { NextResponse } from 'next/server';
-import Database from 'better-sqlite3';
-import path from 'path';
 import { syncSalesRanks } from '@/lib/sp-api/salesRank';
 import type { SPAPICredentials } from '@/lib/sp-api/types';
+import { openDb } from '@/lib/db-conn';
 
 function getCredentials(): SPAPICredentials | null {
-  const dbPath = path.join(process.cwd(), 'data', 'flipledger.db');
-  const db = new Database(dbPath, { readonly: true });
+  const db = openDb({ readonly: true });
   db.pragma('journal_mode = WAL');
   const rows = db.prepare('SELECT key, value FROM settings').all() as { key: string; value: string }[];
   db.close();
@@ -35,8 +33,7 @@ export async function POST() {
   const result = await syncSalesRanks(creds);
 
   // Update last-sync marker so auto-sync doesn't re-run immediately
-  const dbPath = path.join(process.cwd(), 'data', 'flipledger.db');
-  const db = new Database(dbPath);
+  const db = openDb();
   db.pragma('journal_mode = WAL');
   db.prepare(`
     INSERT INTO settings (key, value) VALUES ('sales_rank_last_sync', ?)

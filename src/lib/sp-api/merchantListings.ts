@@ -13,18 +13,15 @@
  */
 import { getAccessToken, getEndpoint } from './auth';
 import { downloadReport } from './reports';
-import Database from 'better-sqlite3';
-import path from 'path';
 import type { SPAPICredentials } from './types';
+import { openDb } from '@/lib/db-conn';
+import { createLogger } from '@/lib/log';
+
+const log = createLogger('sp-api/merchantListings');
 
 const REPORT_TYPE = 'GET_MERCHANT_LISTINGS_ALL_DATA';
 
-function getDb() {
-  const dbPath = path.join(process.cwd(), 'data', 'flipledger.db');
-  const db = new Database(dbPath);
-  db.pragma('journal_mode = WAL');
-  return db;
-}
+const getDb = () => openDb();
 
 function unquote(s: string): string {
   if (!s) return '';
@@ -130,7 +127,7 @@ export function parseMerchantListingsReport(tsv: string): MerchantListingRow[] {
   const iOpenDate          = idx('open-date');
 
   if (iSku < 0 || iAsin < 0) {
-    console.warn('[merchantListings] parseMerchantListingsReport: missing seller-sku or asin1 column — got headers:', headers.join(', '));
+    log.warn('parseMerchantListingsReport: missing seller-sku or asin1 column — got headers:', headers.join(', '));
     return [];
   }
 
@@ -162,17 +159,17 @@ export async function syncMerchantListings(
   credentials: SPAPICredentials
 ): Promise<{ reportId: string; reportRows: number; inserted: number; updated: number }> {
   const { reportId } = await createMerchantListingsReport(credentials);
-  console.log(`[merchantListings] Report created: ${reportId}`);
+  log.info(`Report created: ${reportId}`);
 
   const { reportDocumentId } = await waitForMerchantListingsReport(credentials, reportId);
-  console.log(`[merchantListings] Report ready: doc=${reportDocumentId}`);
+  log.info(`Report ready: doc=${reportDocumentId}`);
 
   const tsv = await downloadReport(credentials, reportDocumentId);
   const rows = parseMerchantListingsReport(tsv);
-  console.log(`[merchantListings] Parsed ${rows.length} listing rows`);
+  log.info(`Parsed ${rows.length} listing rows`);
 
   if (rows.length === 0) {
-    console.warn('[merchantListings] Report returned 0 rows — no listings found or wrong report format');
+    log.warn('Report returned 0 rows — no listings found or wrong report format');
     return { reportId, reportRows: 0, inserted: 0, updated: 0 };
   }
 

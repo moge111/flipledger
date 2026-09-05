@@ -6,16 +6,14 @@
 import { ebayApiRequest } from './auth';
 import type { EbayCredentials, EbayOrder } from './types';
 import Database from 'better-sqlite3';
-import path from 'path';
+import { openDb } from '@/lib/db-conn';
+import { createLogger } from '@/lib/log';
+
+const log = createLogger('ebay-api/orders');
 
 const FULFILLMENT_API = 'https://api.ebay.com/sell/fulfillment/v1';
 
-function getDb() {
-  const dbPath = path.join(process.cwd(), 'data', 'flipledger.db');
-  const db = new Database(dbPath);
-  db.pragma('journal_mode = WAL');
-  return db;
-}
+const getDb = () => openDb();
 
 function toCents(amount: number | string | undefined): number {
   if (amount === undefined || amount === null || amount === '') return 0;
@@ -106,7 +104,7 @@ function processEbayOrder(db: Database.Database, order: EbayOrder) {
       db.prepare("DELETE FROM sales_tax WHERE order_id = ? AND marketplace = 'ebay'").run(orderId);
       db.prepare("DELETE FROM refunds WHERE order_id = ? AND marketplace = 'ebay'").run(orderId);
       db.prepare("UPDATE orders SET status = 'Cancelled' WHERE order_id = ?").run(orderId);
-      console.log(`[eBay] Order ${orderId} cancelled after sync — revenue/fee records reversed`);
+      log.info(`Order ${orderId} cancelled after sync — revenue/fee records reversed`);
     }
     return;
   }

@@ -25,17 +25,10 @@
 //
 // Critical: no INSERT OR IGNORE without a matching UNIQUE index. No floats.
 import { NextRequest, NextResponse } from 'next/server';
-import Database from 'better-sqlite3';
-import path from 'path';
 import { parseFbmCsv } from '@/lib/imports/inventorylab-fbm';
+import { openDb } from '@/lib/db-conn';
 
-function getDb() {
-  const dbPath = path.join(process.cwd(), 'data', 'flipledger.db');
-  const db = new Database(dbPath);
-  db.pragma('journal_mode = WAL');
-  db.pragma('foreign_keys = ON');
-  return db;
-}
+const getDb = () => openDb({ foreignKeys: true });
 
 function formatBatchName(now: Date): string {
   // Local-time, human-readable. Example: "InventoryLab FBM Import · May 25, 2026 3:42 PM"

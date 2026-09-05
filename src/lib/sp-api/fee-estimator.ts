@@ -11,14 +11,9 @@
  */
 
 import Database from 'better-sqlite3';
-import path from 'path';
+import { openDb } from '@/lib/db-conn';
 
-function getDb() {
-  const dbPath = path.join(process.cwd(), 'data', 'flipledger.db');
-  const db = new Database(dbPath);
-  db.pragma('journal_mode = WAL');
-  return db;
-}
+const getDb = () => openDb();
 
 interface FeeEstimate {
   commissionRate: number;  // 0-1 (e.g., 0.15 = 15%)
@@ -81,7 +76,7 @@ function getSkuFeeEstimate(db: Database.Database, sku: string, asin: string): Fe
 export function estimateAndBackfillFees(): { estimated: number; skipped: number } {
   const db = getDb();
   let estimated = 0;
-  let skipped = 0;
+  const skipped = 0;
 
   try {
     // Find orders missing ANY fee data

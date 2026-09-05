@@ -10,17 +10,14 @@
  * hammering the API on restock scans. On cache hit, fees are scaled linearly
  * to the requested list price.
  */
-import Database from 'better-sqlite3';
-import path from 'path';
 import { getAccessToken, getEndpoint, fetchWithRetry } from './auth';
 import type { SPAPICredentials } from './types';
+import { openDb } from '@/lib/db-conn';
+import { createLogger } from '@/lib/log';
 
-function getDb() {
-  const dbPath = path.join(process.cwd(), 'data', 'flipledger.db');
-  const db = new Database(dbPath);
-  db.pragma('journal_mode = WAL');
-  return db;
-}
+const log = createLogger('sp-api/feesEstimate');
+
+const getDb = () => openDb();
 
 const CACHE_TTL_MS = 24 * 60 * 60 * 1000; // 24h
 
@@ -274,7 +271,7 @@ export async function getFeesEstimate(
     }
   } catch (err) {
     // Log and fall through to the category fallback
-    console.warn(`[feesEstimate] SP-API failed for ${asin}:`, err);
+    log.warn(`SP-API failed for ${asin}:`, err);
   }
 
   // 3. Category fallback

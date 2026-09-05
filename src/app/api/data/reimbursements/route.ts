@@ -1,13 +1,13 @@
 import { NextRequest, NextResponse } from 'next/server';
-import Database from 'better-sqlite3';
+import { MKT_DATE, marketToday, marketDaysAgo, addDays } from '@/lib/market-day';
 import path from 'path';
+import { openDb } from '@/lib/db-conn';
+import { marketplaceParam } from '@/lib/request-params';
+import { createLogger } from '@/lib/log';
 
-function getDb() {
-  const dbPath = path.join(process.cwd(), 'data', 'flipledger.db');
-  const db = new Database(dbPath, { readonly: true });
-  db.pragma('journal_mode = WAL');
-  return db;
-}
+const log = createLogger('api/data/reimbursements');
+
+const getDb = () => openDb({ readonly: true });
 
 export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url);
@@ -17,14 +17,14 @@ export async function GET(request: NextRequest) {
   let endDate = searchParams.get('endDate');
   if (!startDate) {
     const days = parseInt(searchParams.get('days') || '30');
-    startDate = new Date(Date.now() - days * 86400000).toISOString().split('T')[0];
+    startDate = marketDaysAgo(days);
   }
   if (!endDate) {
-    endDate = new Date().toISOString().split('T')[0];
+    endDate = marketToday();
   }
-  const endDateNext = new Date(new Date(endDate).getTime() + 86400000).toISOString().split('T')[0];
+  const endDateNext = addDays(endDate, 1);
 
-  const marketplace = searchParams.get('marketplace');
+  const marketplace = marketplaceParam(searchParams);
   // Qualify with `r.` — the products table also has a `marketplace` column,
   // so an unqualified reference raises "ambiguous column name" in SQLite and
   // silently returned 0 rows in the API path.
@@ -49,7 +49,7 @@ export async function GET(request: NextRequest) {
       FROM reimbursements r
       LEFT JOIN products p ON r.asin = p.asin
       LEFT JOIN products p2 ON r.sku = p2.sku
-      WHERE r.reimbursement_date >= ? AND r.reimbursement_date < ? ${MF_R}
+      WHERE ${MKT_DATE('r.reimbursement_date')} >= ? AND ${MKT_DATE('r.reimbursement_date')} < ? ${MF_R}
       ORDER BY r.reimbursement_date DESC
     `).all(startDate, endDateNext) as any[];
 
@@ -76,7 +76,7 @@ export async function GET(request: NextRequest) {
         LEFT JOIN products p ON fe.sku = p.asin
         WHERE fe.marketplace = 'walmart'
           AND fd.amount > 0
-          AND fe.posted_date >= ? AND fe.posted_date < ?
+          AND ${MKT_DATE('fe.posted_date')} >= ? AND ${MKT_DATE('fe.posted_date')} < ?
           -- Exclude refund commission clawbacks. They neutralize the original
           -- referral fee charged on the sale (already netted in P&L), not a
           -- separate income event. Walmart Seller Center treats sale + clawback
@@ -184,7 +184,7 @@ export async function GET(request: NextRequest) {
     });
   } catch (error) {
     db.close();
-    console.error('Reimbursements API error:', error);
+    log.error('Reimbursements API error:', error);
     return NextResponse.json({ error: 'Failed to load reimbursements data' }, { status: 500 });
   }
 }

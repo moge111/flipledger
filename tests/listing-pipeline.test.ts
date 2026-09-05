@@ -379,3 +379,159 @@ test('reconcile: batch fails only when NOTHING shippable remains', async () => {
   const batch = db.prepare('SELECT send_error as e FROM listing_batches WHERE id = ?').get(batchId) as any;
   assert.match(batch.e, /failed or was excluded/);
 });
+
+// ─── Label geometry (pdf-fit) ──────────────────────────────────────────────
+//
+// Aug 31, 2026: Partnered UPS shipping labels printed ~20% too small. Amazon
+// returns a 1200×1800 px (4×6 @300dpi) UPS bitmap drawn at only 244×366 pt on
+// a 306×432 (4.25×6) page — a uniform 84.7% shrink — and fit-to-page on a 4"
+// Rollo compounded it. fitLabelsTo4x6 re-lays pages onto true 4×6 media.
+// These lock BOTH halves: it must scale the label up, and it must refuse to
+// touch pages it doesn't positively recognize as a lone 4×6 image.
+
+/**
+ * Build a page that mimics Amazon's PackageLabel_Thermal UPS page.
+ *
+ * The content stream is hand-authored because it must reproduce Amazon's
+ * EXACT operator form, copied verbatim from a real Partnered UPS label:
+ *
+ *     q 244 0 0 366 31 61 cm /img2 Do Q
+ *
+ * pdf-lib's own drawImage() emits a chain of `cm` ops instead
+ * (`1 0 0 1 31 61 cm` / `244 0 0 366 0 0 cm` / `1 0 0 1 0 0 cm` / `Do`), which
+ * pdf-fit deliberately does NOT recognize — it only ever touches the single
+ * axis-aligned placement it can reason about exactly, and anything else falls
+ * back to a safe whole-page fit.
+ */
+async function makeThermalPdf(opts: {
+  imgW: number; imgH: number; imgX: number; imgY: number;
+  pageW?: number; pageH?: number; extraVectorContent?: boolean;
+}): Promise<Buffer> {
+  const { PDFDocument, PDFName } = await import('pdf-lib');
+  const doc = await PDFDocument.create();
+  const page = doc.addPage([opts.pageW ?? 306, opts.pageH ?? 432]);
+  // 1×1 black PNG — enough to be a real image XObject.
+  const png = await doc.embedPng(Buffer.from(
+    'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==',
+    'base64',
+  ));
+  page.node.setXObject(PDFName.of('img2'), (png as unknown as { ref: unknown }).ref as never);
+
+  const vector = opts.extraVectorContent ? '0 0 0 rg\n10 400 100 6 re\nf\n' : '';
+  const content =
+    `q\nBT\n0 432 Td\nET\nQ\nq\n${vector}Q\nq\n2 J\n0 G\nQ\n` +
+    `q ${opts.imgW} 0 0 ${opts.imgH} ${opts.imgX} ${opts.imgY} cm /img2 Do Q\n`;
+  const stream = doc.context.stream(content);
+  page.node.set(PDFName.of('Contents'), doc.context.register(stream));
+
+  return Buffer.from(await doc.save());
+}
+
+/** Read the /BBox [x0 y0 x1 y1] of the embedded source page in the output. */
+function embeddedBBox(pdf: Buffer): { x0: number; y0: number; x1: number; y1: number } | null {
+  const m = Buffer.from(pdf).toString('latin1')
+    .match(/\/BBox\s*\[\s*(-?[\d.]+)\s+(-?[\d.]+)\s+(-?[\d.]+)\s+(-?[\d.]+)/);
+  if (!m) return null;
+  return { x0: +m[1], y0: +m[2], x1: +m[3], y1: +m[4] };
+}
+
+/**
+ * Compose every `a 0 0 d e f cm` scale factor on an output page. This reads
+ * what pdf-fit ACTUALLY drew, not what the BBox implies — the difference
+ * matters: a "stretch to fill" bug is invisible on a perfectly 2:3 rect and
+ * only shows up on the fallback path.
+ */
+async function drawnScale(pdf: Buffer, pageIndex = 0): Promise<{ sx: number; sy: number }> {
+  const { PDFDocument, PDFRawStream, PDFArray, decodePDFRawStream } = await import('pdf-lib');
+  const doc = await PDFDocument.load(pdf);
+  const page = doc.getPages()[pageIndex];
+  const chunks: string[] = [];
+  const collect = (v: unknown) => {
+    const r = doc.context.lookup(v as never);
+    if (r instanceof PDFRawStream) chunks.push(Buffer.from(decodePDFRawStream(r).decode()).toString('latin1'));
+    else if (r instanceof PDFArray) r.asArray().forEach(collect);
+  };
+  collect(page.node.Contents());
+  let sx = 1, sy = 1;
+  for (const m of chunks.join('\n').matchAll(/(-?[\d.]+)\s+0\s+0\s+(-?[\d.]+)\s+(-?[\d.]+)\s+(-?[\d.]+)\s+cm/g)) {
+    sx *= parseFloat(m[1]);
+    sy *= parseFloat(m[2]);
+  }
+  return { sx, sy };
+}
+
+async function pageSizes(pdf: Buffer): Promise<{ width: number; height: number }[]> {
+  const { PDFDocument } = await import('pdf-lib');
+  const doc = await PDFDocument.load(pdf);
+  return doc.getPages().map((p) => p.getSize());
+}
+
+test('pdf-fit: 84.7%-scaled UPS label is scaled up to fill a true 4×6 page', async () => {
+  const { fitLabelsTo4x6, LABEL_4X6 } = await import('../src/lib/pdf-fit');
+  // Exactly Amazon's real numbers: `q 244 0 0 366 31 61 cm /img2 Do Q` on 306×432.
+  const before = await makeThermalPdf({ imgW: 244, imgH: 366, imgX: 31, imgY: 61 });
+  const after = await fitLabelsTo4x6(before);
+
+  const sizes = await pageSizes(after);
+  assert.equal(sizes.length, 1);
+  assert.equal(sizes[0].width, LABEL_4X6.width);   // 288 pt = 4"
+  assert.equal(sizes[0].height, LABEL_4X6.height); // 432 pt = 6"
+
+  // The embedded form must be clipped to the image rect (244×366 at 31,61) and
+  // drawn at full page size — i.e. scaled by exactly 288/244, no distortion.
+  const { PDFDocument } = await import('pdf-lib');
+  const doc = await PDFDocument.load(after);
+  const box = embeddedBBox(after);
+  assert.ok(box, 'embedded page form should declare a BBox');
+  assert.ok(Math.abs(box!.x0 - 31) < 0.01 && Math.abs(box!.y0 - 61) < 0.01,
+    `BBox should start at the image origin (31,61), got (${box!.x0},${box!.y0})`);
+  const bw = box!.x1 - box!.x0;
+  const bh = box!.y1 - box!.y0;
+  assert.ok(Math.abs(bw - 244) < 0.01 && Math.abs(bh - 366) < 0.01,
+    `BBox should be the 244×366 image rect, got ${bw}×${bh}`);
+  // Read the scale actually applied, not one re-derived from the BBox.
+  const { sx, sy } = await drawnScale(after);
+  assert.ok(Math.abs(sx - sy) < 1e-6, `non-uniform scale would distort: ${sx} vs ${sy}`);
+  assert.ok(Math.abs(sx - LABEL_4X6.width / 244) < 1e-6,
+    `expected exactly 288/244 = 1.1803× scale-up, got ${sx}`);
+  assert.equal(doc.getPages().length, 1);
+});
+
+test('pdf-fit: pages that are NOT a lone 4×6 image are fit whole, never cropped', async () => {
+  const { fitLabelsTo4x6 } = await import('../src/lib/pdf-fit');
+  // The FBA carton-ID page shape: vector content + an image on one page.
+  const before = await makeThermalPdf({
+    imgW: 244, imgH: 366, imgX: 31, imgY: 61, extraVectorContent: true,
+  });
+  const after = await fitLabelsTo4x6(before);
+  const box = embeddedBBox(after);
+  assert.ok(box);
+  // Must fall back to the WHOLE 306×432 page, so no vector content is clipped.
+  assert.ok(Math.abs(box!.x1 - box!.x0 - 306) < 0.01, 'should keep full page width');
+  assert.ok(Math.abs(box!.y1 - box!.y0 - 432) < 0.01, 'should keep full page height');
+  const sizes = await pageSizes(after);
+  assert.equal(sizes[0].width, 288);
+  assert.equal(sizes[0].height, 432);
+  // 306×432 into 288×432 must scale UNIFORMLY (0.941 both axes). Stretching
+  // the height to fill would distort every barcode on the carton label.
+  const { sx, sy } = await drawnScale(after);
+  assert.ok(Math.abs(sx - sy) < 1e-6, `carton page must not be stretched: ${sx} vs ${sy}`);
+  assert.ok(Math.abs(sx - 288 / 306) < 1e-6, `expected 288/306 = 0.941×, got ${sx}`);
+});
+
+test('pdf-fit: an image with the wrong aspect is not mistaken for a 4×6 label', async () => {
+  const { fitLabelsTo4x6 } = await import('../src/lib/pdf-fit');
+  // A wide banner (2:1), not 2:3 — must NOT be blown up to fill the label.
+  const before = await makeThermalPdf({ imgW: 200, imgH: 100, imgX: 50, imgY: 300 });
+  const after = await fitLabelsTo4x6(before);
+  const box = embeddedBBox(after);
+  assert.ok(box);
+  assert.ok(Math.abs(box!.x1 - box!.x0 - 306) < 0.01, 'wrong-aspect image must fall back to full page');
+});
+
+test('pdf-fit: an unparseable PDF is returned untouched rather than throwing', async () => {
+  const { fitLabelsTo4x6 } = await import('../src/lib/pdf-fit');
+  const garbage = Buffer.from('not a pdf at all');
+  const out = await fitLabelsTo4x6(garbage);
+  assert.equal(out.toString(), 'not a pdf at all');
+});

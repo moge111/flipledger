@@ -9,8 +9,6 @@
  * Tries the local DB first for known ASINs (fast path), falls back to SP-API.
  */
 import { NextRequest, NextResponse } from 'next/server';
-import Database from 'better-sqlite3';
-import path from 'path';
 import {
   isAsin,
   isBarcode,
@@ -22,10 +20,13 @@ import {
 import { getFeesEstimate, type FeesEstimate } from '@/lib/sp-api/feesEstimate';
 import { estimateShippingCost, type ShippingEstimate } from '@/lib/shipping-estimate';
 import type { SPAPICredentials } from '@/lib/sp-api/types';
+import { openDb } from '@/lib/db-conn';
+import { createLogger } from '@/lib/log';
+
+const log = createLogger('api/list/catalog/search');
 
 function getAmazonCredentials(): SPAPICredentials | null {
-  const dbPath = path.join(process.cwd(), 'data', 'flipledger.db');
-  const db = new Database(dbPath, { readonly: true });
+  const db = openDb({ readonly: true });
   db.pragma('journal_mode = WAL');
   try {
     const rows = db.prepare('SELECT key, value FROM settings').all() as { key: string; value: string }[];
@@ -76,8 +77,7 @@ function enrichWithHistory(item: CatalogItem, wantChannel: 'FBA' | 'MFN' = 'FBA'
   lastBuyPrice?: number;
   existingMskus?: ExistingMsku[];
 } {
-  const dbPath = path.join(process.cwd(), 'data', 'flipledger.db');
-  const db = new Database(dbPath, { readonly: true });
+  const db = openDb({ readonly: true });
   db.pragma('journal_mode = WAL');
 
   try {
@@ -332,7 +332,7 @@ export async function GET(request: NextRequest) {
       items: enrichedWithFees,
     });
   } catch (err) {
-    console.error('Catalog search error:', err);
+    log.error('Catalog search error:', err);
     return NextResponse.json({ error: String(err) }, { status: 500 });
   }
 }

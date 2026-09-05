@@ -9,14 +9,15 @@
  * Body: { batchId: number, limit?: number }  — limit defaults to 100.
  */
 import { NextRequest, NextResponse } from 'next/server';
-import Database from 'better-sqlite3';
-import path from 'path';
 import { backfillBatchImages } from '@/lib/sp-api/catalog';
 import type { SPAPICredentials } from '@/lib/sp-api/types';
+import { openDb } from '@/lib/db-conn';
+import { createLogger } from '@/lib/log';
+
+const log = createLogger('api/data/mfn-batch-items/backfill-images');
 
 function getAmazonCredentials(): SPAPICredentials | null {
-  const dbPath = path.join(process.cwd(), 'data', 'flipledger.db');
-  const db = new Database(dbPath, { readonly: true });
+  const db = openDb({ readonly: true });
   db.pragma('journal_mode = WAL');
   try {
     const rows = db.prepare('SELECT key, value FROM settings').all() as { key: string; value: string }[];
@@ -49,7 +50,7 @@ export async function POST(request: NextRequest) {
     const result = await backfillBatchImages(creds, batchId, limit);
     return NextResponse.json(result);
   } catch (err) {
-    console.error('Batch backfill images error:', err);
+    log.error('Batch backfill images error:', err);
     return NextResponse.json({ error: String(err) }, { status: 500 });
   }
 }

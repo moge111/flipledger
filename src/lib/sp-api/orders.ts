@@ -6,15 +6,12 @@
 
 import { spApiRequest } from './auth';
 import type { SPAPICredentials } from './types';
-import Database from 'better-sqlite3';
-import path from 'path';
+import { openDb } from '@/lib/db-conn';
+import { createLogger } from '@/lib/log';
 
-function getDb() {
-  const dbPath = path.join(process.cwd(), 'data', 'flipledger.db');
-  const db = new Database(dbPath);
-  db.pragma('journal_mode = WAL');
-  return db;
-}
+const log = createLogger('sp-api/orders');
+
+const getDb = () => openDb();
 
 /**
  * Sync orders from SP-API.
@@ -73,7 +70,7 @@ export async function syncOrders(
             const removed = db.prepare('DELETE FROM order_items WHERE order_id = ?').run(orderId);
             db.prepare('DELETE FROM sales_tax WHERE order_id = ?').run(orderId);
             if (removed.changes > 0) {
-              console.log(`[Orders] ${orderId} canceled after sync — ${removed.changes} line item(s) reversed`);
+              log.info(`${orderId} canceled after sync — ${removed.changes} line item(s) reversed`);
             }
             ordersProcessed++;
             continue;
@@ -149,7 +146,7 @@ export async function syncOrders(
       AND o.status != 'Pending'
     `).all(...orderIdsToFetchItems) as { order_id: string; status: string }[];
 
-    console.log(`[Sync] Fetching items for ${missingItems.length} orders missing price data (of ${orderIdsToFetchItems.length} total)`);
+    log.info(`Fetching items for ${missingItems.length} orders missing price data (of ${orderIdsToFetchItems.length} total)`);
 
     for (const { order_id: oid } of missingItems) {
       try {

@@ -1,20 +1,19 @@
 import { NextRequest, NextResponse } from 'next/server';
-import Database from 'better-sqlite3';
-import path from 'path';
+import { MKT_DATE, marketToday, marketDaysAgo, addDays } from '@/lib/market-day';
+import { openDb } from '@/lib/db-conn';
+import { marketplaceParam } from '@/lib/request-params';
+import { createLogger } from '@/lib/log';
 
-function getDb() {
-  const dbPath = path.join(process.cwd(), 'data', 'flipledger.db');
-  const db = new Database(dbPath, { readonly: true });
-  db.pragma('journal_mode = WAL');
-  return db;
-}
+const log = createLogger('api/data/refunds');
+
+const getDb = () => openDb({ readonly: true });
 
 export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url);
   const days = parseInt(searchParams.get('days') || '30');
 
   const db = getDb();
-  const marketplace = searchParams.get('marketplace');
+  const marketplace = marketplaceParam(searchParams);
   // refunds.marketplace can be NULL for old Amazon rows — treat NULL as amazon.
   const MF_R = marketplace ? `AND COALESCE(r.marketplace, 'amazon') = '${marketplace}'` : '';
 
@@ -22,10 +21,9 @@ export async function GET(request: NextRequest) {
   // Fall back to the legacy ?days= window when absent.
   const startParam = searchParams.get('startDate');
   const endParam = searchParams.get('endDate');
-  const cutoff = startParam || new Date(Date.now() - days * 86400000).toISOString();
-  const cutoffEnd = endParam
-    ? new Date(new Date(endParam + 'T00:00:00Z').getTime() + 86400000).toISOString()
-    : new Date(Date.now() + 86400000).toISOString();
+  // Both bounds are marketplace-calendar date strings, matching MKT_DATE().
+  const cutoff = startParam || marketDaysAgo(days);
+  const cutoffEnd = addDays(endParam || marketToday(), 1);
 
   try {
     // Pull refunds + the matching v2024 Shipment transaction (if any) so we
@@ -47,6 +45,24 @@ export async function GET(request: NextRequest) {
         r.refund_amount as refundAmount,
         r.reason,
         r.item_returned as itemReturned,
+        r.id as refundId,
+        -- Claim lifecycle lives in walmart_dispute_candidates (refund_id FK) so
+        -- this page and the Walmart Disputes page can never disagree about
+        -- what's been filed. Every claim-due refund has a candidate row.
+        (SELECT c.id FROM walmart_dispute_candidates c WHERE c.refund_id = r.id) as claimId,
+        (SELECT c.status FROM walmart_dispute_candidates c WHERE c.refund_id = r.id) as claimStatus,
+        (SELECT c.filed_at FROM walmart_dispute_candidates c WHERE c.refund_id = r.id) as claimFiledAt,
+        r.return_order_id as returnOrderId,
+        r.customer_order_id as customerOrderId,
+        -- Walmart's Item ID for the support case form's "Item ID" field. NOT
+        -- our SKU, and NOT recon's "Partner Item Id" (which is the seller SKU).
+        -- live_inventory is the better source; products is the fallback.
+        COALESCE(
+          (SELECT MAX(li2.walmart_item_id) FROM live_inventory li2
+            WHERE li2.sku = r.sku AND li2.marketplace = 'walmart' AND li2.walmart_item_id IS NOT NULL),
+          (SELECT MAX(p3.walmart_item_id) FROM products p3
+            WHERE p3.sku = r.sku AND p3.walmart_item_id IS NOT NULL)
+        ) as walmartItemId,
         COALESCE(r.fee_clawback, 0) as feeClawback,
         r.marketplace,
         ftv2.transaction_status as shipmentStatus,
@@ -60,15 +76,40 @@ export async function GET(request: NextRequest) {
                  AND json_extract(fe2.raw_data, '$."Amount Type"') = 'Product Price'
              ) THEN 1 ELSE 0 END as settled,
         CASE
+          -- RTV = Walmart shipped the unit back to the seller, so nothing is
+          -- owed. Sourced from wfs_rtv_units (per-GTIN, from the Services Fees
+          -- CSVs). It deliberately does NOT read WFSInventoryRTVFee any more:
+          -- since the Aug 2026 recon migration those rows are period-level
+          -- roll-ups with a NULL GTIN, so fe3.asin = og.gtin could never
+          -- match and this branch was silently dead — every settled return
+          -- fell through to 'claim-due'.
+          -- rtvCover allocates each returned unit to at most one refund, so
+          -- two refunds of the same GTIN with only one RTV clear exactly one.
           WHEN COALESCE(r.marketplace, 'amazon') = 'walmart' AND o.fulfillment_channel = 'WFS'
-               AND og.gtin IS NOT NULL
+               AND rtvc.covered = 1 THEN 'rtv'
+          -- Walmart already paid for the loss (lost-return adjustment, WFS
+          -- lost-inventory, dispute settlement) — claiming again would be a
+          -- duplicate. Previously unchecked, even though the UI told the user
+          -- "no reimbursement".
+          WHEN COALESCE(r.marketplace, 'amazon') = 'walmart' AND o.fulfillment_channel = 'WFS'
                AND EXISTS (
-                 SELECT 1 FROM fee_details fd2
-                 JOIN financial_events fe3 ON fe3.id = fd2.financial_event_id
-                 WHERE fd2.fee_type = 'WFSInventoryRTVFee'
-                   AND fe3.asin = og.gtin
-                   AND date(fe3.posted_date) >= date(r.refund_date, '-14 days')
-               ) THEN 'rtv'
+                 SELECT 1 FROM reimbursements rb
+                 WHERE rb.marketplace = 'walmart'
+                   -- LOSS reimbursements only. Commission/funded incentives are
+                   -- ordinary income and must never clear a lost-unit claim.
+                   AND rb.reason IN ('WFS Refund', 'WFS Lost Inventory',
+                                     'LostReturnAdjustment', 'Dispute: Customer Return Reversal')
+                   AND date(rb.reimbursement_date)
+                       BETWEEN date(r.refund_date, '-3 days') AND date(r.refund_date, '+150 days')
+                   AND (
+                     rb.reimbursement_id LIKE '%' || r.order_id || '%'
+                     OR (rb.sku IS NOT NULL AND rb.sku <> '' AND rb.sku = r.sku COLLATE NOCASE)
+                   )
+                 -- KNOWN LIMIT: recon-sourced WFS Refund / WFS Lost Inventory
+                 -- rows are period roll-ups carrying no SKU or order id, so
+                 -- they cannot be attributed and will not clear a claim here.
+                 -- Same attribution gap as the RTV fee roll-ups.
+               ) THEN 'reimbursed'
           -- RESTOCKED requires evidence the unit is actually back: the SKU has
           -- sellable stock right now, or it sold again after the refund. A bare
           -- "settled + no RTV fee" claim overcounts (in-store returns spend
@@ -101,6 +142,30 @@ export async function GET(request: NextRequest) {
           AND order_id IS NOT NULL
         GROUP BY order_id
       ) og ON og.order_id = r.order_id
+      -- Allocate RTV'd units to refunds of the same GTIN, oldest refund first.
+      -- A refund is covered when its rank among same-GTIN settled WFS refunds
+      -- is <= the number of units Walmart shipped back for that GTIN on/after
+      -- (refund date - 7d). Without the rank an EXISTS would let one returned
+      -- unit clear every refund of that item.
+      LEFT JOIN (
+        SELECT rr.id AS refund_id,
+               CASE WHEN ROW_NUMBER() OVER (PARTITION BY gg.gtin ORDER BY rr.refund_date)
+                         <= (SELECT COALESCE(SUM(u.quantity), 0) FROM wfs_rtv_units u
+                             WHERE u.gtin = gg.gtin)
+                    THEN 1 ELSE 0 END AS covered
+        FROM refunds rr
+        JOIN orders oo ON oo.order_id = rr.order_id AND oo.fulfillment_channel = 'WFS'
+        JOIN (
+          SELECT order_id, MAX(json_extract(raw_data, '$."Partner GTIN"')) AS gtin
+          FROM financial_events
+          WHERE marketplace = 'walmart' AND order_id IS NOT NULL
+            AND json_extract(raw_data, '$."Partner GTIN"') IS NOT NULL
+          GROUP BY order_id
+        ) gg ON gg.order_id = rr.order_id
+        WHERE rr.marketplace = 'walmart'
+          AND EXISTS (SELECT 1 FROM wfs_rtv_units u2
+                      WHERE u2.gtin = gg.gtin AND u2.rtv_date >= date(rr.refund_date, '-7 days'))
+      ) rtvc ON rtvc.refund_id = r.id
       LEFT JOIN products p ON r.asin = p.asin
       LEFT JOIN order_items oi ON r.order_id = oi.order_id
       LEFT JOIN products p2 ON oi.asin = p2.asin
@@ -114,7 +179,7 @@ export async function GET(request: NextRequest) {
         WHERE transaction_type = 'Shipment' AND order_id IS NOT NULL
         GROUP BY order_id
       ) ftv2 ON ftv2.order_id = r.order_id
-      WHERE r.refund_date >= ? AND r.refund_date < ? ${MF_R}
+      WHERE ${MKT_DATE('r.refund_date')} >= ? AND ${MKT_DATE('r.refund_date')} < ? ${MF_R}
       GROUP BY r.id
       ORDER BY r.refund_date DESC
     `).all(cutoff, cutoffEnd) as any[];
@@ -150,6 +215,15 @@ export async function GET(request: NextRequest) {
         refundAmount: row.refundAmount,
         reason: row.reason,
         itemReturned: !!row.itemReturned,
+        // Walmart only. returnOrderId IS the RMA; customerOrderId is the
+        // number Seller Center searches on. Both go in a reimbursement case.
+        refundId: row.refundId,
+        claimId: row.claimId ?? null,
+        claimStatus: row.claimStatus || null,
+        claimFiledAt: row.claimFiledAt || null,
+        returnOrderId: row.returnOrderId || null,
+        customerOrderId: row.customerOrderId || null,
+        walmartItemId: row.walmartItemId || null,
         feeClawback: row.feeClawback,
         netImpact: row.refundAmount - row.feeClawback,
         marketplace: row.marketplace || 'amazon',
@@ -209,7 +283,7 @@ export async function GET(request: NextRequest) {
     });
   } catch (error) {
     db.close();
-    console.error('Refunds API error:', error);
+    log.error('Refunds API error:', error);
     return NextResponse.json({ error: 'Failed to load refunds data' }, { status: 500 });
   }
 }

@@ -1,6 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server';
-import Database from 'better-sqlite3';
-import path from 'path';
+import { MKT_DATE, MKT_MONTH, marketToday } from '@/lib/market-day';
+import { openDb } from '@/lib/db-conn';
+import { ORDER_POSTED_DATE, walmartSettledRefund, chargedBackShippingInner, mfnShippingCreditExpr, mfnShippingCostExpr, ORDER_FEE_ROWS, SERVICE_FEE_ROWS, SIGNED_FEE_TOTAL } from '@/lib/accounting-sql';
+import { createLogger } from '@/lib/log';
+
+const log = createLogger('api/data/cashflow');
 
 /**
  * GET /api/data/cashflow — monthly operating cash flow + runway inputs.
@@ -20,30 +24,11 @@ import path from 'path';
  * - Cash on hand has no bank feed — it's a user-entered figure persisted in
  *   settings (POST below).
  */
-function getDb(readonly = true) {
-  const dbPath = process.env.FLIPLEDGER_DB_PATH || path.join(process.cwd(), 'data', 'flipledger.db');
-  const db = new Database(dbPath, { readonly });
-  db.pragma('journal_mode = WAL');
-  return db;
-}
-
-const ORDER_POSTED_DATE = `(
-  SELECT order_id, MIN(posted_date) as posted_date
-  FROM financial_events WHERE event_type = 'ShipmentEvent' AND order_id IS NOT NULL
-  GROUP BY order_id
-)`;
+const getDb = (readonly = true) => openDb({ readonly });
 
 // Same gate as the P&L: Walmart refunds only count once the seller debit
 // settled in recon (WalmartRefundEvent / Product Price).
-const WALMART_SETTLED = `(
-  r.marketplace != 'walmart'
-  OR EXISTS (
-    SELECT 1 FROM financial_events fe
-    WHERE fe.event_type = 'WalmartRefundEvent'
-      AND fe.order_id = r.order_id
-      AND json_extract(fe.raw_data, '$."Amount Type"') = 'Product Price'
-  )
-)`;
+const WALMART_SETTLED = walmartSettledRefund('r');
 
 interface MonthRow {
   month: string;
@@ -69,19 +54,22 @@ export async function GET(request: NextRequest) {
   const db = getDb();
 
   try {
-    const now = new Date();
-    const currentMonth = now.toISOString().slice(0, 7);
-    const start = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - (monthsBack - 1), 1));
+    // "Now" on the marketplace calendar — the UTC month flips ~6 PM Mountain
+    // on the last day of a month, which marked the old month complete and the
+    // new one partial hours early.
+    const currentMonth = marketToday().slice(0, 7);
+    const [curY, curM] = currentMonth.split('-').map(Number);
+    const start = new Date(Date.UTC(curY, curM - 1 - (monthsBack - 1), 1));
     const startDate = start.toISOString().slice(0, 10);
 
     const byMonth = <T extends { m: string }>(rows: T[]) => new Map(rows.map(r => [r.m, r]));
 
     const sales = byMonth(db.prepare(`
-      SELECT strftime('%Y-%m', fe.posted_date) as m,
+      SELECT ${MKT_MONTH('fe.posted_date')} as m,
         COALESCE(SUM(oi.total_price), 0) as sales,
-        COALESCE(SUM(CASE WHEN o.fulfillment_channel IN ('MFN', 'Seller') THEN COALESCE(oi.shipping_charged, 0) ELSE 0 END), 0) as mfnShip,
+        COALESCE(SUM(${mfnShippingCreditExpr()}), 0) as mfnShip,
         COALESCE(SUM(oi.cogs_per_unit * oi.quantity), 0) as cogs,
-        COALESCE(SUM(CASE WHEN o.fulfillment_channel = 'MFN' THEN COALESCE(oi.shipping_cost, 0) ELSE 0 END), 0) as shipCost
+        COALESCE(SUM(${mfnShippingCostExpr()}), 0) as shipCost
       FROM order_items oi
       JOIN ${ORDER_POSTED_DATE} fe ON oi.order_id = fe.order_id
       JOIN orders o ON oi.order_id = o.order_id
@@ -94,47 +82,36 @@ export async function GET(request: NextRequest) {
     // — see the note in src/app/api/data/profitloss/route.ts.
     const cbShip = byMonth(db.prepare(`
       SELECT x.m, COALESCE(SUM(MIN(x.sc, x.cb)), 0) as cbShip
-      FROM (
-        SELECT strftime('%Y-%m', fe.posted_date) as m, oi.order_id,
-               SUM(oi.shipping_charged) as sc,
-               COALESCE((SELECT -SUM(fd.amount) FROM fee_details fd
-                         WHERE fd.order_id = oi.order_id
-                           AND fd.fee_type = 'ShippingChargeback'), 0) as cb
-        FROM order_items oi
-        JOIN ${ORDER_POSTED_DATE} fe ON oi.order_id = fe.order_id
-        JOIN orders o ON oi.order_id = o.order_id
-        WHERE fe.posted_date >= ? AND o.fulfillment_channel NOT IN ('MFN', 'Seller')
-        GROUP BY m, oi.order_id
-      ) x
+      FROM (${chargedBackShippingInner(ORDER_POSTED_DATE, 'fe.posted_date >= ?', `${MKT_MONTH('fe.posted_date')} as m, `)}) x
       WHERE x.sc > 0 AND x.cb > 0
       GROUP BY x.m
     `).all(startDate) as { m: string; cbShip: number }[]);
 
     const orderFees = byMonth(db.prepare(`
-      SELECT strftime('%Y-%m', fe.posted_date) as m, COALESCE(-SUM(fd.amount), 0) as fees
+      SELECT ${MKT_MONTH('fe.posted_date')} as m, ${SIGNED_FEE_TOTAL} as fees
       FROM fee_details fd
       JOIN ${ORDER_POSTED_DATE} fe ON fd.order_id = fe.order_id
-      WHERE fd.order_id IS NOT NULL AND fd.order_id != '' AND fe.posted_date >= ?
+      WHERE ${ORDER_FEE_ROWS} AND fe.posted_date >= ?
       GROUP BY m
     `).all(startDate) as { m: string; fees: number }[]);
 
     const serviceFees = byMonth(db.prepare(`
-      SELECT strftime('%Y-%m', fd.posted_date) as m, COALESCE(-SUM(fd.amount), 0) as fees
+      SELECT ${MKT_MONTH('fd.posted_date')} as m, ${SIGNED_FEE_TOTAL} as fees
       FROM fee_details fd
       JOIN financial_events fe ON fd.financial_event_id = fe.id
-      WHERE (fd.order_id IS NULL OR fd.order_id = '') AND date(fd.posted_date) >= ?
+      WHERE ${SERVICE_FEE_ROWS} AND ${MKT_DATE('fd.posted_date')} >= ?
       GROUP BY m
     `).all(startDate) as { m: string; fees: number }[]);
 
     const refunds = byMonth(db.prepare(`
-      SELECT strftime('%Y-%m', r.refund_date) as m, COALESCE(SUM(r.refund_amount), 0) as total
+      SELECT ${MKT_MONTH('r.refund_date')} as m, COALESCE(SUM(r.refund_amount), 0) as total
       FROM refunds r
       WHERE r.refund_date >= ? AND ${WALMART_SETTLED}
       GROUP BY m
     `).all(startDate) as { m: string; total: number }[]);
 
     const reimb = byMonth(db.prepare(`
-      SELECT strftime('%Y-%m', reimbursement_date) as m, COALESCE(SUM(amount), 0) as total
+      SELECT ${MKT_MONTH('reimbursement_date')} as m, COALESCE(SUM(amount), 0) as total
       FROM reimbursements WHERE reimbursement_date >= ? GROUP BY m
     `).all(startDate) as { m: string; total: number }[]);
 
@@ -151,7 +128,7 @@ export async function GET(request: NextRequest) {
     // Cross-year return relief (cogs_reversals) credits COGS in the refund's
     // month — same rule as the P&L, keeping month net = P&L netProfit.
     const cogsRev = byMonth(db.prepare(`
-      SELECT strftime('%Y-%m', refund_date) as m, COALESCE(SUM(amount), 0) as total
+      SELECT ${MKT_MONTH('refund_date')} as m, COALESCE(SUM(amount), 0) as total
       FROM cogs_reversals WHERE refund_date >= ? GROUP BY m
     `).all(startDate) as { m: string; total: number }[]);
 
@@ -305,7 +282,7 @@ export async function GET(request: NextRequest) {
     });
   } catch (error) {
     db.close();
-    console.error('Cash flow API error:', error);
+    log.error('Cash flow API error:', error);
     return NextResponse.json({ error: 'Failed to load cash flow data' }, { status: 500 });
   }
 }
@@ -337,7 +314,7 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ success: true, cashOnHand: cents });
   } catch (error) {
     db.close();
-    console.error('Cash flow POST error:', error);
+    log.error('Cash flow POST error:', error);
     return NextResponse.json({ error: 'Failed to save cash position' }, { status: 500 });
   }
 }

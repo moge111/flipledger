@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Search, RefreshCw, Package, ExternalLink, ImageOff, Copy, X } from 'lucide-react';
 import StatusBadge from '@/components/ui/StatusBadge';
+import { useQuery } from '@/lib/useQuery';
 
 interface MfnOrderRow {
   orderId: string;
@@ -107,9 +108,6 @@ function withinDateFilter(dateStr: string, filter: DateFilter): boolean {
 }
 
 export default function MfnOrdersPage() {
-  const [orders, setOrders] = useState<MfnOrderRow[]>([]);
-  const [counts, setCounts] = useState<Counts>({ all: 0, amazon: 0, walmart: 0, ebay: 0 });
-  const [loading, setLoading] = useState(true);
   const [status, setStatus] = useState<StatusFilter>('awaiting');
   const [store, setStore] = useState<StoreFilter>('all');
   const [search, setSearch] = useState('');
@@ -122,19 +120,9 @@ export default function MfnOrdersPage() {
     return () => window.removeEventListener('keydown', onKey);
   }, []);
 
-  async function load() {
-    setLoading(true);
-    try {
-      const res = await fetch(`/api/data/mfn-orders?status=${status}`);
-      const data = await res.json();
-      setOrders(data.orders || []);
-      setCounts(data.counts || { all: 0, amazon: 0, walmart: 0, ebay: 0 });
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  useEffect(() => { load(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [status]);
+  const { data, loading, reload: load } = useQuery<{ orders?: MfnOrderRow[]; counts?: Counts }>(`/api/data/mfn-orders?status=${status}`);
+  const orders: MfnOrderRow[] = useMemo(() => data?.orders || [], [data]);
+  const counts: Counts = data?.counts || { all: 0, amazon: 0, walmart: 0, ebay: 0 };
 
   const visible = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -188,7 +176,7 @@ export default function MfnOrdersPage() {
             <p className="text-sm text-text-tertiary">Merchant-fulfilled orders awaiting shipment</p>
           </div>
           <button
-            onClick={load}
+            onClick={() => load()}
             className="flex items-center gap-2 rounded-md border border-border-default bg-bg-surface px-3 py-1.5 text-sm text-text-secondary hover:bg-bg-elevated"
           >
             <RefreshCw size={14} className={loading ? 'animate-spin' : ''} />

@@ -16,16 +16,13 @@
  */
 import { getAccessToken, getEndpoint, fetchWithRetry } from './auth';
 import { downloadReport } from './reports';
-import Database from 'better-sqlite3';
-import path from 'path';
 import type { SPAPICredentials } from './types';
+import { openDb } from '@/lib/db-conn';
+import { createLogger } from '@/lib/log';
 
-function getDb() {
-  const dbPath = path.join(process.cwd(), 'data', 'flipledger.db');
-  const db = new Database(dbPath);
-  db.pragma('journal_mode = WAL');
-  return db;
-}
+const log = createLogger('sp-api/reimbursementsReport');
+
+const getDb = () => openDb();
 
 function unquote(s: string): string {
   if (!s) return '';
@@ -260,7 +257,7 @@ export async function syncReimbursementsReport(
   });
   tx();
   if (dupsRemoved > 0) {
-    console.log(`[reimbursementsReport] swept ${dupsRemoved} ADJ/SETTLEMENT placeholders superseded by canonical rows`);
+    log.info(`swept ${dupsRemoved} ADJ/SETTLEMENT placeholders superseded by canonical rows`);
   }
 
   db.close();

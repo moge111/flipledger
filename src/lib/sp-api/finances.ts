@@ -7,7 +7,7 @@
 import { spApiRequest } from './auth';
 import type { SPAPICredentials } from './types';
 import Database from 'better-sqlite3';
-import path from 'path';
+import { openDb } from '@/lib/db-conn';
 
 interface FinancialEventGroup {
   ShipmentEventList?: any[];
@@ -217,12 +217,7 @@ export async function syncFinancialEvents(
   return { eventsProcessed, errors };
 }
 
-function getDb() {
-  const dbPath = path.join(process.cwd(), 'data', 'flipledger.db');
-  const db = new Database(dbPath);
-  db.pragma('journal_mode = WAL');
-  return db;
-}
+const getDb = () => openDb();
 
 /** Convert SP-API CurrencyAmount to integer cents */
 function toCents(amount: { CurrencyAmount?: number; CurrencyCode?: string } | undefined): number {
@@ -362,7 +357,7 @@ function processShipmentEvent(db: Database.Database, event: any) {
   }
 }
 
-function processRefundEvent(db: Database.Database, event: any) {
+export function processRefundEvent(db: Database.Database, event: any) {
   const orderId = event.AmazonOrderId;
   const postedDate = event.PostedDate;
   if (!orderId || !postedDate) return;
@@ -386,17 +381,26 @@ function processRefundEvent(db: Database.Database, event: any) {
     let refundAmount = 0;
     let feeClawback = 0;
 
-    // Charges being refunded to customer.
+    // Charges being refunded to customer — summed SIGNED, then negated.
+    // Amazon posts the money leaving the seller as NEGATIVE lines (Principal,
+    // ShippingCharge) and money the buyer forfeits as POSITIVE lines
+    // (ReturnShipping, RestockingFee — withheld from the buyer's refund, so
+    // they REDUCE the seller's refund cost). Taking Math.abs of every line
+    // added those offsets on top of the principal, overstating the refund by
+    // twice the offset (Sept 4, 2026 fix; e.g. Principal −$92 +
+    // ReturnShipping $9.52 was stored as $101.52 instead of $82.48).
     // Sales tax is EXCLUDED — Amazon collects & remits it as marketplace
     // facilitator, so it was never the seller's income and is not the
     // seller's refund expense. Excluding it keeps refund_amount on the same
     // basis as order_items.total_price (Principal only), so a full refund
     // correctly nets the sale to zero in the P&L.
     const charges = item.ItemChargeAdjustmentList || [];
+    let signedCharges = 0;
     for (const charge of charges) {
       if (typeof charge.ChargeType === 'string' && charge.ChargeType.includes('Tax')) continue;
-      refundAmount += Math.abs(toCents(charge.ChargeAmount));
+      signedCharges += toCents(charge.ChargeAmount);
     }
+    refundAmount = -signedCharges;
 
     // Fees being returned to seller
     const fees = item.ItemFeeAdjustmentList || [];

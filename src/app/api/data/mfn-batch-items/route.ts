@@ -13,15 +13,9 @@
  * Read-only. No writes. No FIFO. No SP-API calls.
  */
 import { NextRequest, NextResponse } from 'next/server';
-import Database from 'better-sqlite3';
-import path from 'path';
+import { openDb } from '@/lib/db-conn';
 
-function getDb() {
-  const dbPath = path.join(process.cwd(), 'data', 'flipledger.db');
-  const db = new Database(dbPath, { readonly: true });
-  db.pragma('journal_mode = WAL');
-  return db;
-}
+const getDb = () => openDb({ readonly: true });
 
 export async function GET(request: NextRequest) {
   const raw = request.nextUrl.searchParams.get('batchId');

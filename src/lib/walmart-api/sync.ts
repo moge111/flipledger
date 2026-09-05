@@ -9,8 +9,10 @@ import { syncAllReconReports } from './recon';
 import { dedupWalmartReconEvents } from './dedupRecon';
 import { syncWalmartInventory } from './inventory';
 import type { WalmartCredentials, SyncResult } from './types';
-import Database from 'better-sqlite3';
-import path from 'path';
+import { openDb } from '@/lib/db-conn';
+import { createLogger } from '@/lib/log';
+
+const log = createLogger('walmart-api/sync');
 
 interface WalmartSyncStatus {
   running: boolean;
@@ -53,7 +55,7 @@ export async function runWalmartSync(
 
   try {
     // Step 1: Sync Orders
-    console.log('[Walmart] Syncing orders...');
+    log.info('Syncing orders...');
     const orderStart = Date.now();
     const orderResult = await syncWalmartOrders(credentials, startDate, endDate);
     currentSync.results.push({
@@ -63,10 +65,10 @@ export async function runWalmartSync(
       duration: Date.now() - orderStart,
     });
     currentSync.totalErrors.push(...orderResult.errors);
-    console.log(`[Walmart] Orders: ${orderResult.recordsFetched} fetched, ${orderResult.errors.length} errors`);
+    log.info(`Orders: ${orderResult.recordsFetched} fetched, ${orderResult.errors.length} errors`);
 
     // Step 2: Sync Returns
-    console.log('[Walmart] Syncing returns...');
+    log.info('Syncing returns...');
     const returnStart = Date.now();
     const returnResult = await syncWalmartReturns(credentials, startDate, endDate);
     currentSync.results.push({
@@ -76,10 +78,10 @@ export async function runWalmartSync(
       duration: Date.now() - returnStart,
     });
     currentSync.totalErrors.push(...returnResult.errors);
-    console.log(`[Walmart] Returns: ${returnResult.recordsFetched} fetched, ${returnResult.errors.length} errors`);
+    log.info(`Returns: ${returnResult.recordsFetched} fetched, ${returnResult.errors.length} errors`);
 
     // Step 3: Sync Inventory
-    console.log('[Walmart] Syncing inventory...');
+    log.info('Syncing inventory...');
     const invStart = Date.now();
     const invResult = await syncWalmartInventory(credentials);
     currentSync.results.push({
@@ -89,10 +91,10 @@ export async function runWalmartSync(
       duration: Date.now() - invStart,
     });
     currentSync.totalErrors.push(...invResult.errors);
-    console.log(`[Walmart] Inventory: ${invResult.itemsProcessed} items, ${invResult.errors.length} errors`);
+    log.info(`Inventory: ${invResult.itemsProcessed} items, ${invResult.errors.length} errors`);
 
     // Step 4: Sync Reconciliation Reports (fees)
-    console.log('[Walmart] Syncing recon reports...');
+    log.info('Syncing recon reports...');
     const reconStart = Date.now();
     // Calculate sinceDays from startDate for recon reports
     const reconSinceDays = Math.ceil((Date.now() - new Date(startDate).getTime()) / 86400000);
@@ -104,7 +106,7 @@ export async function runWalmartSync(
       duration: Date.now() - reconStart,
     });
     currentSync.totalErrors.push(...reconResult.errors);
-    console.log(`[Walmart] Recon: ${reconResult.recordsFetched} entries, ${reconResult.errors.length} errors`);
+    log.info(`Recon: ${reconResult.recordsFetched} entries, ${reconResult.errors.length} errors`);
 
     // Self-healing: purge any stale WalmartReconEvent rows whose raw_data
     // shows a Refund or Dispute Settlement transaction (those should be
@@ -112,8 +114,7 @@ export async function runWalmartSync(
     dedupWalmartReconEvents();
 
     // Update last sync timestamp
-    const dbPath = path.join(process.cwd(), 'data', 'flipledger.db');
-    const db = new Database(dbPath);
+    const db = openDb();
     db.pragma('journal_mode = WAL');
     db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES ('walmart_last_sync', ?)").run(new Date().toISOString());
 
@@ -133,7 +134,7 @@ export async function runWalmartSync(
 
   } catch (err: any) {
     currentSync.totalErrors.push(`Walmart sync failed: ${err.message}`);
-    console.error('[Walmart] Sync failed:', err);
+    log.error('Sync failed:', err);
   } finally {
     currentSync.running = false;
     currentSync.completedAt = new Date().toISOString();

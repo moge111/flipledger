@@ -1,13 +1,14 @@
 'use client';
 
-import { useEffect, useState, useCallback, useMemo } from 'react';
+import {useMemo } from 'react';
 import { type ColumnDef } from '@tanstack/react-table';
 import StatCard from '@/components/ui/StatCard';
 import PageHeader from '@/components/ui/PageHeader';
-import { type DateRange } from '@/components/ui/DateRangePicker';
+import {type DateRange } from '@/components/ui/DateRangePicker';
 import { useFilters } from '@/lib/useFilters';
+import { useQuery } from '@/lib/useQuery';
 import DataTable from '@/components/tables/DataTable';
-import { formatCurrency, formatNumber } from '@/lib/formatters';
+import {formatCurrency } from '@/lib/formatters';
 
 interface TaxRow {
   state: string;
@@ -17,21 +18,11 @@ interface TaxRow {
 }
 
 export default function SalesTaxPage() {
-  const [rows, setRows] = useState<TaxRow[]>([]);
-  const [totals, setTotals] = useState<{ totalCollected: number; totalFacilitator: number } | null>(null);
-  const [loading, setLoading] = useState(true);
   const { dateRange, setDateRange, marketplace, setMarketplace, marketplaceParam } = useFilters();
 
-  const fetchData = useCallback(async () => {
-    setLoading(true);
-    const res = await fetch(`/api/data/salestax?startDate=${dateRange.startDate}&endDate=${dateRange.endDate}${marketplaceParam}`);
-    const data = await res.json();
-    setRows(data.rows || []);
-    setTotals(data.totals || null);
-    setLoading(false);
-  }, [dateRange, marketplace]);
-
-  useEffect(() => { fetchData(); }, [fetchData]);
+  const { data, loading, reload: fetchData } = useQuery<{ rows?: TaxRow[]; totals?: { totalCollected: number; totalFacilitator: number } }>(`/api/data/salestax?startDate=${dateRange.startDate}&endDate=${dateRange.endDate}${marketplaceParam}`);
+  const rows: TaxRow[] = data?.rows || [];
+  const totals: { totalCollected: number; totalFacilitator: number } | null = data?.totals || null;
 
   const columns = useMemo<ColumnDef<TaxRow, any>[]>(() => [
     { id: 'state', header: 'State', accessorKey: 'state', cell: ({ getValue }) => <span className="text-text-primary font-medium">{getValue() as string}</span>, size: 100 },

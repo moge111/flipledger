@@ -1,9 +1,10 @@
 'use client';
 
-import { useEffect, useState, useCallback } from 'react';
+import { useState } from 'react';
 import { formatCurrency, formatDate, formatNumber } from '@/lib/formatters';
 import { ExternalLink, RefreshCw, Loader2, CheckCircle2, XCircle, Inbox, Copy, Check, X as XClose, AlertTriangle } from 'lucide-react';
 import CopyableText from '@/components/ui/CopyableText';
+import { useQuery } from '@/lib/useQuery';
 
 interface Candidate {
   id: number;
@@ -40,27 +41,16 @@ const TABS: Array<{ key: 'pending' | 'filed' | 'received' | 'dismissed' | 'all';
 const filingUrl = 'https://sellercentral.amazon.com/cu/contact-us';
 
 export default function ReimbursementReevaluationsPage() {
-  const [candidates, setCandidates] = useState<Candidate[]>([]);
-  const [totals, setTotals] = useState<Totals | null>(null);
-  const [lastSync, setLastSync] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
   const [syncing, setSyncing] = useState(false);
   const [tab, setTab] = useState<'pending' | 'filed' | 'received' | 'dismissed' | 'all'>('pending');
   const [openCandidate, setOpenCandidate] = useState<Candidate | null>(null);
   const [editedBody, setEditedBody] = useState('');
   const [copied, setCopied] = useState(false);
 
-  const fetchData = useCallback(async () => {
-    setLoading(true);
-    const res = await fetch(`/api/data/amazon-reevaluations?status=${tab}`);
-    const data = await res.json();
-    setCandidates(data.candidates || []);
-    setTotals(data.totals || null);
-    setLastSync(data.lastSync || null);
-    setLoading(false);
-  }, [tab]);
-
-  useEffect(() => { fetchData(); }, [fetchData]);
+  const { data, loading, reload: fetchData } = useQuery<{ candidates?: Candidate[]; totals?: Totals | null; lastSync?: string | null }>(`/api/data/amazon-reevaluations?status=${tab}`);
+  const candidates: Candidate[] = data?.candidates || [];
+  const totals: Totals | null = data?.totals || null;
+  const lastSync: string | null = data?.lastSync || null;
 
   async function runSync() {
     setSyncing(true);
@@ -123,7 +113,7 @@ Thank you,`;
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">Reimbursement Re-Evaluations</h1>
           <p className="text-sm text-text-tertiary mt-0.5">
-            Reimbursements where Amazon paid less than your 18-month average sale price. File via Help → Get Support → "Submit a reimbursement claim dispute".
+            Reimbursements where Amazon paid less than your 18-month average sale price. File via Help → Get Support → &quot;Submit a reimbursement claim dispute&quot;.
             {lastSync && (
               <span className="ml-2 text-text-tertiary">· Last synced {formatDate(lastSync)}</span>
             )}
@@ -330,9 +320,9 @@ Thank you,`;
               <div className="bg-accent/5 border border-accent/20 rounded p-3 text-xs text-text-secondary">
                 <div className="font-medium text-text-primary mb-1.5">How to file</div>
                 <ol className="space-y-1">
-                  <li className="flex gap-2"><span className="text-accent font-mono">1.</span><span>Click <strong>"Open Get Support & mark filed"</strong> below.</span></li>
+                  <li className="flex gap-2"><span className="text-accent font-mono">1.</span><span>Click <strong>&quot;Open Get Support & mark filed&quot;</strong> below.</span></li>
                   <li className="flex gap-2"><span className="text-accent font-mono">2.</span><span>Choose <strong>Selling on Amazon</strong> → <strong>Fulfillment by Amazon</strong>.</span></li>
-                  <li className="flex gap-2"><span className="text-accent font-mono">3.</span><span>Click <strong>"Submit a reimbursement claim dispute"</strong>.</span></li>
+                  <li className="flex gap-2"><span className="text-accent font-mono">3.</span><span>Click <strong>&quot;Submit a reimbursement claim dispute&quot;</strong>.</span></li>
                   <li className="flex gap-2"><span className="text-accent font-mono">4.</span><span>Enter the Reimbursement ID: <code className="font-mono bg-bg-elevated px-1 rounded">{openCandidate.reimbursementId}</code></span></li>
                   <li className="flex gap-2"><span className="text-accent font-mono">5.</span><span>Upload an invoice (optional but helps — supplier receipt or sourcing email).</span></li>
                   <li className="flex gap-2"><span className="text-accent font-mono">6.</span><span>Paste the request above as the case description. Submit.</span></li>

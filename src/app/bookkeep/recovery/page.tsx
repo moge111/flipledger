@@ -1,12 +1,13 @@
 'use client';
 
-import { useEffect, useState, useCallback } from 'react';
+import { useState, } from 'react';
 import { formatCurrency, formatDate, formatNumber } from '@/lib/formatters';
 import {
   ExternalLink, RefreshCw, AlertCircle, Loader2, CheckCircle2, XCircle,
   Inbox, Copy, Check, X as XClose, ChevronRight,
 } from 'lucide-react';
 import CopyableText from '@/components/ui/CopyableText';
+import { useQuery } from '@/lib/useQuery';
 
 type Source = 'discrepancy' | 'claims' | 'reevals' | 'amz' | 'wmt';
 
@@ -74,29 +75,19 @@ const SOURCE_CHIP: Record<Source, string> = {
 };
 
 export default function RecoveryHubPage() {
-  const [queue, setQueue] = useState<QueueItem[]>([]);
-  const [sources, setSources] = useState<SourceSummary[]>([]);
-  const [grand, setGrand] = useState<GrandTotals | null>(null);
-  const [lastSync, setLastSync] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
+  // Snapshot of "now" for deadline math — render must stay pure (react-hooks/purity).
+  const [nowMs] = useState(() => Date.now());
   const [syncing, setSyncing] = useState(false);
   const [tab, setTab] = useState<'tofile' | 'waiting' | 'filed' | 'closed' | 'all'>('tofile');
   const [openItem, setOpenItem] = useState<QueueItem | null>(null);
   const [editedBody, setEditedBody] = useState('');
   const [copied, setCopied] = useState(false);
 
-  const fetchData = useCallback(async () => {
-    setLoading(true);
-    const res = await fetch(`/api/data/recovery?tab=${tab}`);
-    const data = await res.json();
-    setQueue(data.queue || []);
-    setSources(data.sources || []);
-    setGrand(data.grand || null);
-    setLastSync(data.lastSync || null);
-    setLoading(false);
-  }, [tab]);
-
-  useEffect(() => { fetchData(); }, [fetchData]);
+  const { data, loading, reload: fetchData } = useQuery<{ grand?: GrandTotals | null; lastSync?: string | null; queue?: QueueItem[]; sources?: SourceSummary[] }>(`/api/data/recovery?tab=${tab}`);
+  const queue: QueueItem[] = data?.queue || [];
+  const sources: SourceSummary[] = data?.sources || [];
+  const grand: GrandTotals | null = data?.grand || null;
+  const lastSync: string | null = data?.lastSync || null;
 
   async function runScan() {
     setSyncing(true);
@@ -238,7 +229,7 @@ export default function RecoveryHubPage() {
             <tbody>
               {queue.map((c) => {
                 const days = c.windowUntil
-                  ? Math.ceil((new Date(c.windowUntil).getTime() - Date.now()) / 86400000)
+                  ? Math.ceil((new Date(c.windowUntil).getTime() - nowMs) / 86400000)
                   : null;
                 const urgent = days !== null && days <= 14 && c.status === 'pending' && c.eligibility !== 'waiting';
                 const clickable = c.status === 'pending' && c.eligibility !== 'waiting';

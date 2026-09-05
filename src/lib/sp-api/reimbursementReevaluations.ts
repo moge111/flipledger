@@ -10,8 +10,7 @@
  * that have one (skips synthetic SETTLEMENT-* and ADJ-* derived IDs
  * that Amazon's UI won't accept).
  */
-import Database from 'better-sqlite3';
-import path from 'path';
+import { openDb } from '@/lib/db-conn';
 
 const UNDERPAID_THRESHOLD_PCT = 0.15; // gap must be at least 15% of expected
 const MIN_GAP_CENTS = 1000;            // at least $10 gap to surface
@@ -21,12 +20,7 @@ const MIN_GAP_CENTS = 1000;            // at least $10 gap to surface
 // 365-day assumption produced claims Amazon auto-denied as out-of-window.
 const REIMBURSEMENT_DISPUTE_WINDOW_DAYS = 60;
 
-function getDb() {
-  const dbPath = path.join(process.cwd(), 'data', 'flipledger.db');
-  const db = new Database(dbPath);
-  db.pragma('journal_mode = WAL');
-  return db;
-}
+const getDb = () => openDb();
 
 export interface ReevaluationSyncResult {
   scanned: number;

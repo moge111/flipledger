@@ -5,8 +5,10 @@
 
 import { syncEbayOrders } from './orders';
 import type { EbayCredentials, EbaySyncStatus, SyncResult } from './types';
-import Database from 'better-sqlite3';
-import path from 'path';
+import { openDb } from '@/lib/db-conn';
+import { createLogger } from '@/lib/log';
+
+const log = createLogger('ebay-api/sync');
 
 let currentSync: EbaySyncStatus = {
   running: false,
@@ -41,7 +43,7 @@ export async function runEbaySync(
 
   try {
     // Step 1: Sync Orders
-    console.log('[eBay] Syncing orders...');
+    log.info('Syncing orders...');
     const orderStart = Date.now();
     const orderResult = await syncEbayOrders(credentials, startDate, endDate);
     const orderSync: SyncResult = {
@@ -52,14 +54,13 @@ export async function runEbaySync(
     };
     currentSync.results.push(orderSync);
     currentSync.totalErrors.push(...orderResult.errors);
-    console.log(`[eBay] Orders: ${orderResult.recordsFetched} fetched, ${orderResult.errors.length} errors`);
+    log.info(`Orders: ${orderResult.recordsFetched} fetched, ${orderResult.errors.length} errors`);
 
     // Fees are extracted directly from order data (totalMarketplaceFee field)
     // No separate Finances API call needed — eBay Fulfillment API includes fee breakdown per order
 
     // Update last sync timestamp
-    const dbPath = path.join(process.cwd(), 'data', 'flipledger.db');
-    const db = new Database(dbPath);
+    const db = openDb();
     db.pragma('journal_mode = WAL');
     db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES ('ebay_last_sync', ?)").run(new Date().toISOString());
 
@@ -79,7 +80,7 @@ export async function runEbaySync(
 
   } catch (err: any) {
     currentSync.totalErrors.push(`eBay sync failed: ${err.message}`);
-    console.error('[eBay] Sync failed:', err);
+    log.error('Sync failed:', err);
   } finally {
     currentSync.running = false;
     currentSync.completedAt = new Date().toISOString();

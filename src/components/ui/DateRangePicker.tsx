@@ -2,6 +2,7 @@
 
 import { useState, useRef, useEffect } from 'react';
 import { Calendar, ChevronDown } from 'lucide-react';
+import { marketToday, addDays } from '@/lib/market-day';
 
 export interface DateRange {
   preset: string;
@@ -15,44 +16,45 @@ interface DateRangePickerProps {
 }
 
 function getPresetDates(preset: string): { startDate: string; endDate: string } {
-  const now = new Date();
-  const end = now.toISOString().split('T')[0];
-  let start: Date;
+  // All presets resolve on the MARKETPLACE calendar (Pacific), because that is
+  // the day Amazon and Walmart close their books on — midnight Pacific = 1 AM
+  // Mountain. Resolving these against the browser's local date (or worse, the
+  // UTC date, which is what this used to do) puts "Today" on the wrong day for
+  // the entire evening. See src/lib/market-day.ts.
+  const today = marketToday();               // YYYY-MM-DD, Pacific
+  const [y, m] = today.split('-').map(Number);
+  const pad = (n: number) => String(n).padStart(2, '0');
 
   switch (preset) {
     case 'today':
-      start = new Date(now); start.setHours(0, 0, 0, 0);
-      return { startDate: start.toISOString().split('T')[0], endDate: end };
+      return { startDate: today, endDate: today };
     case '7d':
-      start = new Date(now.getTime() - 7 * 86400000);
-      return { startDate: start.toISOString().split('T')[0], endDate: end };
+      return { startDate: addDays(today, -7), endDate: today };
     case '30d':
-      start = new Date(now.getTime() - 30 * 86400000);
-      return { startDate: start.toISOString().split('T')[0], endDate: end };
+      return { startDate: addDays(today, -30), endDate: today };
     case 'this-month':
-      return { startDate: `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-01`, endDate: end };
+      return { startDate: `${y}-${pad(m)}-01`, endDate: today };
     case 'last-month': {
-      const lm = new Date(now.getFullYear(), now.getMonth() - 1, 1);
-      const lmEnd = new Date(now.getFullYear(), now.getMonth(), 0);
-      return { startDate: lm.toISOString().split('T')[0], endDate: lmEnd.toISOString().split('T')[0] };
+      const ly = m === 1 ? y - 1 : y;
+      const lm = m === 1 ? 12 : m - 1;
+      return { startDate: `${ly}-${pad(lm)}-01`, endDate: addDays(`${y}-${pad(m)}-01`, -1) };
     }
     case 'this-quarter': {
-      const q = Math.floor(now.getMonth() / 3) * 3;
-      return { startDate: `${now.getFullYear()}-${String(q + 1).padStart(2, '0')}-01`, endDate: end };
+      const q = Math.floor((m - 1) / 3) * 3 + 1;
+      return { startDate: `${y}-${pad(q)}-01`, endDate: today };
     }
     case 'last-quarter': {
-      const cq = Math.floor(now.getMonth() / 3);
-      const lqStart = new Date(now.getFullYear(), (cq - 1) * 3, 1);
-      const lqEnd = new Date(now.getFullYear(), cq * 3, 0);
-      return { startDate: lqStart.toISOString().split('T')[0], endDate: lqEnd.toISOString().split('T')[0] };
+      const cq = Math.floor((m - 1) / 3);
+      const ly = cq === 0 ? y - 1 : y;
+      const lq = cq === 0 ? 10 : (cq - 1) * 3 + 1;
+      return { startDate: `${ly}-${pad(lq)}-01`, endDate: addDays(`${y}-${pad(cq * 3 + 1)}-01`, -1) };
     }
     case 'ytd':
-      return { startDate: `${now.getFullYear()}-01-01`, endDate: end };
+      return { startDate: `${y}-01-01`, endDate: today };
     case 'last-year':
-      return { startDate: `${now.getFullYear() - 1}-01-01`, endDate: `${now.getFullYear() - 1}-12-31` };
+      return { startDate: `${y - 1}-01-01`, endDate: `${y - 1}-12-31` };
     default:
-      start = new Date(now.getTime() - 30 * 86400000);
-      return { startDate: start.toISOString().split('T')[0], endDate: end };
+      return { startDate: addDays(today, -30), endDate: today };
   }
 }
 

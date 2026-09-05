@@ -1,13 +1,10 @@
 import { NextResponse } from 'next/server';
-import Database from 'better-sqlite3';
-import path from 'path';
+import { openDb } from '@/lib/db-conn';
+import { createLogger } from '@/lib/log';
 
-function getDb() {
-  const dbPath = path.join(process.cwd(), 'data', 'flipledger.db');
-  const db = new Database(dbPath, { readonly: true });
-  db.pragma('journal_mode = WAL');
-  return db;
-}
+const log = createLogger('api/data/merchant-inventory');
+
+const getDb = () => openDb({ readonly: true });
 
 // ---------------------------------------------------------------------------
 // SKU parser — read-only, no DB writes
@@ -218,7 +215,7 @@ export async function GET() {
       lastSynced: syncRow?.value ?? null,
     });
   } catch (error) {
-    console.error('Merchant inventory error:', error);
+    log.error('Merchant inventory error:', error);
     return NextResponse.json({ error: 'Failed to load inventory' }, { status: 500 });
   } finally {
     db.close();

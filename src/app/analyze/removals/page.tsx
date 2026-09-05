@@ -1,13 +1,14 @@
 'use client';
 
-import { useEffect, useState, useCallback, useMemo } from 'react';
+import {useMemo } from 'react';
 import { type ColumnDef } from '@tanstack/react-table';
 import StatCard from '@/components/ui/StatCard';
 import PageHeader from '@/components/ui/PageHeader';
-import { type DateRange } from '@/components/ui/DateRangePicker';
+import {type DateRange } from '@/components/ui/DateRangePicker';
 import { useFilters } from '@/lib/useFilters';
+import { useQuery } from '@/lib/useQuery';
 import DataTable from '@/components/tables/DataTable';
-import { formatCurrency, formatDate, formatNumber } from '@/lib/formatters';
+import {formatCurrency, formatDate } from '@/lib/formatters';
 
 interface RemovalRow {
   removalOrderId: string;
@@ -24,21 +25,11 @@ interface RemovalRow {
 }
 
 export default function RemovalsPage() {
-  const [rows, setRows] = useState<RemovalRow[]>([]);
-  const [totals, setTotals] = useState<{ totalRemovals: number; totalFee: number; totalQuantity: number } | null>(null);
-  const [loading, setLoading] = useState(true);
   const { dateRange, setDateRange, marketplace, setMarketplace, marketplaceParam } = useFilters();
 
-  const fetchData = useCallback(async () => {
-    setLoading(true);
-    const res = await fetch(`/api/data/removals?startDate=${dateRange.startDate}&endDate=${dateRange.endDate}${marketplaceParam}`);
-    const data = await res.json();
-    setRows(data.items || data.rows || []);
-    setTotals(data.totals || null);
-    setLoading(false);
-  }, [dateRange, marketplace]);
-
-  useEffect(() => { fetchData(); }, [fetchData]);
+  const { data, loading, reload: fetchData } = useQuery<{ items?: RemovalRow[]; rows?: RemovalRow[]; totals?: { totalRemovals: number; totalFee: number; totalQuantity: number } }>(`/api/data/removals?startDate=${dateRange.startDate}&endDate=${dateRange.endDate}${marketplaceParam}`);
+  const rows: RemovalRow[] = data?.items || data?.rows || [];
+  const totals: { totalRemovals: number; totalFee: number; totalQuantity: number } | null = data?.totals || null;
 
   const columns = useMemo<ColumnDef<RemovalRow, any>[]>(() => [
     { id: 'dateRequested', header: 'Date', accessorKey: 'dateRequested', cell: ({ getValue }) => <span className="font-mono text-sm text-text-secondary">{formatDate(getValue() as string)}</span>, size: 120 },

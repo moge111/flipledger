@@ -111,6 +111,31 @@ test('Jan All (cash): salesDetail has no fan-out — 3 rows summing to total sal
 
 // ─────────────────────────── February, cash basis ──────────────────────────
 
+test('Feb Amazon (cash): salesDetail row carries the MFN shipping credit as revenue', async () => {
+  // Regression for the Aug 29 2026 bug: the row set revenue = total_price only,
+  // yet still subtracted the shipping label AND the ShippingHB referral fee
+  // levied on the shipping income. An expedited-shipping order (buyer paid
+  // $45.45 shipping, $37.70 label) read as −$25.08 when it earned +$20.37.
+  const d = await pnl({ ...FEB, marketplace: 'amazon' });
+  const a2 = d.salesDetail.find((r: { order_id: string }) => r.order_id === 'GOLD-AMZ-A2');
+  assert.ok(a2, 'A2 must appear in Feb salesDetail');
+  assert.equal(a2.product_revenue, 8000);
+  assert.equal(a2.shippingCredit, 500);   // MFN — buyer-paid shipping is income
+  assert.equal(a2.revenue, 8500);
+  assert.equal(a2.cogs, 3000);
+  assert.equal(a2.fees, -1200);
+  assert.equal(a2.shippingCost, 842);
+  // 8000 + 500 − 3000 − 1200 − 842
+  assert.equal(a2.net_profit, 3458);
+});
+
+test('Feb Amazon (cash): salesDetail rows reconcile to the header income lines', async () => {
+  const d = await pnl({ ...FEB, marketplace: 'amazon' });
+  const sum = (k: string) => d.salesDetail.reduce((s: number, r: Record<string, number>) => s + r[k], 0);
+  assert.equal(sum('product_revenue'), d.income.sales);
+  assert.equal(sum('shippingCredit'), d.income.shippingCredits);
+});
+
 test('Feb Amazon (cash): cross-month order lands here; clawback not double-counted', async () => {
   const d = await pnl({ ...FEB, marketplace: 'amazon' });
   assert.equal(d.income.sales, 8000); // A2 posted Feb 2
@@ -192,4 +217,43 @@ test('Dashboard golden spot-checks (units, inventory value)', async () => {
   assert.equal(d.stats.totalOrders, 3);
   assert.equal(d.inventoryValue.totalValue, 5000); // 5 fulfillable × $10.00 buy price
   assert.equal(d.inventoryValue.totalUnits, 7); // fulfillable 5 + inbound 2
+});
+
+test('Dashboard shipping cost is MFN-only, mirroring the P&L (non-MFN label costs live in fee_details)', async () => {
+  // Plant a label cost on the Walmart WFS order. Walmart label charges are
+  // already captured through recon → fee_details, so neither surface may also
+  // subtract order_items.shipping_cost for a non-MFN order. Before the fix the
+  // Dashboard summed shipping_cost on every channel and parity silently held
+  // only because no such row existed yet.
+  const Database = (await import('better-sqlite3')).default;
+  const db = new Database(golden.dbPath);
+  db.prepare("UPDATE order_items SET shipping_cost = 999 WHERE order_id = 'GOLD-WMT-W1'").run();
+  db.close();
+  const p = await pnl({ ...JAN, marketplace: 'walmart' });
+  assert.equal(p.expenses.shippingCosts, 0, 'P&L ignores non-MFN shipping_cost');
+  const d = await dashboard({ ...JAN, marketplace: 'walmart' });
+  assert.equal(d.stats.totalProfit, p.netProfit, 'Dashboard profit parity with a non-MFN label cost present');
+  const all = await pnl(JAN);
+  const dAll = await dashboard(JAN);
+  assert.equal(dAll.stats.totalProfit, all.netProfit);
+});
+
+test('Tax Report deducts ONLY shipping-offset promos; product discounts are already in total_price', async () => {
+  const Database = (await import('better-sqlite3')).default;
+  const db = new Database(golden.dbPath);
+  // A1 (FBA): an Amazon Global export-style order — $3.00 shipping credit fully
+  // offset by a −$3.00 promotional rebate. Gross receipts count the credit, so
+  // the rebate must be deducted (the matched pair).
+  db.prepare("UPDATE order_items SET shipping_charged = 300, promotional_rebate = -300 WHERE order_id = 'GOLD-AMZ-A1'").run();
+  // A2 (MFN): an ordinary −$2.00 product coupon. total_price is already the
+  // post-coupon price, so deducting it again would double-count.
+  db.prepare("UPDATE order_items SET promotional_rebate = -200 WHERE order_id = 'GOLD-AMZ-A2'").run();
+  db.close();
+  const taxGET = (await import('../src/app/api/data/tax-report/route')).GET;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const res: Response = await taxGET(new Request('http://test.local/api/data/tax-report?year=2026') as any);
+  assert.equal(res.status, 200);
+  const t = await res.json();
+  assert.equal(t.scheduleC.deductions.promotionalRebates, 300, 'only the shipping-offset rebate is deducted');
+  assert.equal(t.perMarketplace.find((m: { marketplace: string }) => m.marketplace === 'amazon').shippingIncome, 300 + 500, 'A1 offset credit + A2 MFN credit');
 });

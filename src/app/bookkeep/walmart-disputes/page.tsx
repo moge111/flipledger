@@ -1,10 +1,11 @@
 'use client';
 
-import { useEffect, useState, useCallback } from 'react';
+import { useState, } from 'react';
 import { formatCurrency, formatDate, formatNumber } from '@/lib/formatters';
 import { ExternalLink, RefreshCw, AlertCircle, Loader2, CheckCircle2, XCircle, Inbox, Copy, Check, FileText, X as XClose } from 'lucide-react';
-import { getTemplateForCandidate, renderTemplate, type DisputeTemplate } from '@/lib/walmart-disputes/templates';
+import {getTemplateForCandidate, renderTemplate, type DisputeTemplate } from '@/lib/walmart-disputes/templates';
 import CopyableText from '@/components/ui/CopyableText';
+import { useQuery } from '@/lib/useQuery';
 
 interface Candidate {
   id: number;
@@ -45,27 +46,18 @@ const TABS: Array<{ key: 'eligible' | 'maybe' | 'filed' | 'not_eligible' | 'all'
 ];
 
 export default function WalmartDisputesPage() {
-  const [candidates, setCandidates] = useState<Candidate[]>([]);
-  const [totals, setTotals] = useState<Totals | null>(null);
-  const [lastSync, setLastSync] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
+  // Snapshot of "now" for deadline math — render must stay pure (react-hooks/purity).
+  const [nowMs] = useState(() => Date.now());
   const [syncing, setSyncing] = useState(false);
   const [tab, setTab] = useState<'eligible' | 'maybe' | 'filed' | 'not_eligible' | 'all'>('eligible');
   const [openCandidate, setOpenCandidate] = useState<Candidate | null>(null);
   const [editedBody, setEditedBody] = useState('');
   const [copied, setCopied] = useState(false);
 
-  const fetchData = useCallback(async () => {
-    setLoading(true);
-    const res = await fetch(`/api/data/walmart-dispute-candidates?tab=${tab}`);
-    const data = await res.json();
-    setCandidates(data.candidates || []);
-    setTotals(data.totals || null);
-    setLastSync(data.lastSync || null);
-    setLoading(false);
-  }, [tab]);
-
-  useEffect(() => { fetchData(); }, [fetchData]);
+  const { data, loading, reload: fetchData } = useQuery<{ candidates?: Candidate[]; lastSync?: string | null; totals?: Totals | null }>(`/api/data/walmart-dispute-candidates?tab=${tab}`);
+  const candidates: Candidate[] = data?.candidates || [];
+  const totals: Totals | null = data?.totals || null;
+  const lastSync: string | null = data?.lastSync || null;
 
   async function runSync() {
     setSyncing(true);
@@ -219,7 +211,7 @@ export default function WalmartDisputesPage() {
             <tbody>
               {candidates.map((c) => {
                 const days = c.disputeWindowUntil
-                  ? Math.ceil((new Date(c.disputeWindowUntil).getTime() - Date.now()) / 86400000)
+                  ? Math.ceil((new Date(c.disputeWindowUntil).getTime() - nowMs) / 86400000)
                   : null;
                 const urgent = days !== null && days <= 7 && c.status === 'pending' && c.eligibility !== 'not_eligible';
                 return (

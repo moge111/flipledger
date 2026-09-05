@@ -9,6 +9,9 @@
 import { getAccessToken, getEndpoint, spApiRequest, fetchWithRetry } from './auth';
 import { sanitizePlanName } from '@/lib/listing-send-policy';
 import type { SPAPICredentials } from './types';
+import { createLogger } from '@/lib/log';
+
+const log = createLogger('sp-api/inboundPlansV2');
 
 export interface SourceAddress {
   name: string;
@@ -213,7 +216,7 @@ export async function setPrepDetails(
       // Couldn't match the named msku to our list — avoid an infinite loop.
       throw new Error(`SP-API setPrepDetails ${response.status} (unresolved): ${errorBody}`);
     }
-    console.warn(`[setPrepDetails] dropped already-classified msku(s): ${bad.join(', ')} — retrying with ${working.length} item(s)`);
+    log.warn(`dropped already-classified msku(s): ${bad.join(', ')} — retrying with ${working.length} item(s)`);
   }
   return { operationId: '', skipped };
 }
@@ -484,7 +487,7 @@ export async function setPackingInformation(
     })),
   };
 
-  console.log('[setPackingInformation] request body:', JSON.stringify(body, null, 2));
+  log.info('request body:', JSON.stringify(body, null, 2));
   // Persist the body so we can inspect it server-side after a failure.
   // (The error message dialog truncates; the file gives us the full body.)
   try {

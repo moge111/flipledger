@@ -1,13 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server';
-import Database from 'better-sqlite3';
-import path from 'path';
+import { MKT_DATE, marketToday, marketDaysAgo, addDays } from '@/lib/market-day';
+import { openDb } from '@/lib/db-conn';
+import { marketplaceParam } from '@/lib/request-params';
+import { createLogger } from '@/lib/log';
 
-function getDb() {
-  const dbPath = process.env.FLIPLEDGER_DB_PATH || path.join(process.cwd(), 'data', 'flipledger.db');
-  const db = new Database(dbPath, { readonly: true });
-  db.pragma('journal_mode = WAL');
-  return db;
-}
+const log = createLogger('api/data/profitability');
+
+const getDb = () => openDb({ readonly: true });
 
 export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url);
@@ -19,18 +18,16 @@ export async function GET(request: NextRequest) {
   let endDate = searchParams.get('endDate');
   if (!startDate) {
     const days = parseInt(searchParams.get('days') || '30');
-    startDate = new Date(Date.now() - days * 86400000).toISOString().split('T')[0];
+    startDate = marketDaysAgo(days);
   }
   if (!endDate) {
-    endDate = new Date().toISOString().split('T')[0];
+    endDate = marketToday();
   }
-  const cutoff = startDate + 'T00:00:00Z';
-  const marketplace = searchParams.get('marketplace');
+  const marketplace = marketplaceParam(searchParams);
   const MF = marketplace ? `AND o.marketplace = '${marketplace}'` : '';
   const MF_R = marketplace ? `AND marketplace = '${marketplace}'` : '';
 
-  const endDateNext = new Date(new Date(endDate).getTime() + 86400000).toISOString().split('T')[0];
-  const cutoffEnd = endDateNext + 'T00:00:00Z';
+  const endDateNext = addDays(endDate, 1);
 
   try {
     let groupCol: string;
@@ -83,10 +80,10 @@ export async function GET(request: NextRequest) {
       JOIN (SELECT order_id, MIN(posted_date) as posted_date FROM financial_events WHERE event_type = 'ShipmentEvent' AND order_id IS NOT NULL GROUP BY order_id) fe ON oi.order_id = fe.order_id
       JOIN orders o ON oi.order_id = o.order_id
       ${joinClause}
-      WHERE fe.posted_date >= ? AND fe.posted_date < ? ${MF}
+      WHERE ${MKT_DATE('fe.posted_date')} >= ? AND ${MKT_DATE('fe.posted_date')} < ? ${MF}
       GROUP BY ${groupByClause}
       ORDER BY SUM(oi.total_price) DESC
-    `).all(cutoff, cutoffEnd) as any[];
+    `).all(startDate, endDateNext) as any[];
 
     // Get fees per order first, then distribute to SKUs/ASINs
     // This avoids cross-product multiplication from joining fee_details to order_items
@@ -109,9 +106,9 @@ export async function GET(request: NextRequest) {
       ) order_totals ON oi.order_id = order_totals.order_id AND order_totals.order_revenue > 0
       ${groupBy === 'category' ? 'LEFT JOIN products p ON oi.asin = p.asin' : ''}
       ${groupBy === 'supplier' ? `LEFT JOIN (SELECT asin, MIN(supplier_id) as supplier_id FROM inventory_ledger GROUP BY asin) il ON oi.asin = il.asin LEFT JOIN suppliers s ON il.supplier_id = s.id` : ''}
-      WHERE fe.posted_date >= ? AND fe.posted_date < ? ${MF}
+      WHERE ${MKT_DATE('fe.posted_date')} >= ? AND ${MKT_DATE('fe.posted_date')} < ? ${MF}
       GROUP BY ${feeGroupKey}
-    `).all(cutoff, cutoffEnd) as any[];
+    `).all(startDate, endDateNext) as any[];
 
     const feesMap = new Map(feesByGroup.map((f: any) => [f.groupKey, f.totalFees]));
 
@@ -144,9 +141,9 @@ export async function GET(request: NextRequest) {
       JOIN orders o ON oi.order_id = o.order_id
       ${groupBy === 'category' ? 'LEFT JOIN products p ON oi.asin = p.asin' : ''}
       ${groupBy === 'supplier' ? `LEFT JOIN (SELECT asin, MIN(supplier_id) as supplier_id FROM inventory_ledger GROUP BY asin) il_s ON oi.asin = il_s.asin LEFT JOIN suppliers s ON il_s.supplier_id = s.id` : ''}
-      WHERE fe.posted_date >= ? AND fe.posted_date < ? ${MF}
+      WHERE ${MKT_DATE('fe.posted_date')} >= ? AND ${MKT_DATE('fe.posted_date')} < ? ${MF}
       GROUP BY ${cogsGroupKey}
-    `).all(cutoff, cutoffEnd) as any[];
+    `).all(startDate, endDateNext) as any[];
 
     const cogsMap = new Map(cogsByGroup.map((c: any) => [c.groupKey, c.totalCogs]));
 
@@ -157,10 +154,10 @@ export async function GET(request: NextRequest) {
         SUM(r.quantity) as refundUnits
       FROM refunds r
       ${groupBy === 'category' ? 'LEFT JOIN products p ON r.asin = p.asin' : ''}
-      WHERE r.refund_date >= ? AND r.refund_date < ?
+      WHERE ${MKT_DATE('r.refund_date')} >= ? AND ${MKT_DATE('r.refund_date')} < ?
         ${marketplace ? `AND COALESCE(r.marketplace, 'amazon') = '${marketplace}'` : ''}
       GROUP BY ${groupBy === 'category' ? 'p.category' : groupBy === 'supplier' ? '1' : 'r.asin'}
-    `).all(cutoff, cutoffEnd) as any[];
+    `).all(startDate, endDateNext) as any[];
 
     const refundsMap = new Map(refundsByGroup.map((r: any) => [r.groupKey, { count: r.refundCount, units: r.refundUnits }]));
 
@@ -291,7 +288,7 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ rows: result, totals });
   } catch (error) {
     db.close();
-    console.error('Profitability API error:', error);
+    log.error('Profitability API error:', error);
     return NextResponse.json({ error: 'Failed to load profitability data' }, { status: 500 });
   }
 }

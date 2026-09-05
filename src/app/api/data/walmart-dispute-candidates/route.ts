@@ -3,15 +3,9 @@
  * PATCH /api/data/walmart-dispute-candidates  — update status (file/dismiss/received/reopen)
  */
 import { NextRequest, NextResponse } from 'next/server';
-import Database from 'better-sqlite3';
-import path from 'path';
+import { openDb } from '@/lib/db-conn';
 
-function getDb() {
-  const dbPath = path.join(process.cwd(), 'data', 'flipledger.db');
-  const db = new Database(dbPath);
-  db.pragma('journal_mode = WAL');
-  return db;
-}
+const getDb = () => openDb();
 
 export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url);
@@ -86,7 +80,7 @@ export async function GET(req: NextRequest) {
 
 export async function PATCH(req: NextRequest) {
   const body = await req.json();
-  const { id, action, claimNotes } = body as { id: number; action: 'file' | 'dismiss' | 'received' | 'reopen'; claimNotes?: string };
+  const { id, action, claimNotes } = body as { id: number; action: 'file' | 'dismiss' | 'received' | 'denied' | 'reopen'; claimNotes?: string };
   if (!id || !action) return NextResponse.json({ error: 'id and action required' }, { status: 400 });
 
   const db = getDb();
@@ -95,6 +89,11 @@ export async function PATCH(req: NextRequest) {
       db.prepare(`UPDATE walmart_dispute_candidates SET status = 'filed', filed_at = datetime('now'), claim_notes = ?, updated_at = datetime('now') WHERE id = ?`).run(claimNotes || null, id);
     } else if (action === 'dismiss') {
       db.prepare(`UPDATE walmart_dispute_candidates SET status = 'dismissed', claim_notes = ?, updated_at = datetime('now') WHERE id = ?`).run(claimNotes || null, id);
+    } else if (action === 'denied') {
+      // Distinct from 'dismiss': Walmart rejected the claim, vs the seller
+      // choosing not to pursue it. Keeping them apart is what makes a
+      // recovery hit-rate meaningful.
+      db.prepare(`UPDATE walmart_dispute_candidates SET status = 'denied', claim_notes = ?, updated_at = datetime('now') WHERE id = ?`).run(claimNotes || null, id);
     } else if (action === 'received') {
       db.prepare(`UPDATE walmart_dispute_candidates SET status = 'received', updated_at = datetime('now') WHERE id = ?`).run(id);
     } else if (action === 'reopen') {

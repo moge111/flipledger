@@ -1,11 +1,12 @@
 'use client';
 
-import { useEffect, useState, useCallback, useMemo } from 'react';
+import {useMemo } from 'react';
 import { type ColumnDef } from '@tanstack/react-table';
 import StatCard from '@/components/ui/StatCard';
 import PageHeader from '@/components/ui/PageHeader';
-import { type DateRange } from '@/components/ui/DateRangePicker';
+import {type DateRange } from '@/components/ui/DateRangePicker';
 import { useFilters } from '@/lib/useFilters';
+import { useQuery } from '@/lib/useQuery';
 import DataTable from '@/components/tables/DataTable';
 import { formatCurrency, formatPercent, formatDate } from '@/lib/formatters';
 
@@ -29,25 +30,16 @@ interface MFNSaleRow {
 }
 
 export default function MerchantSalesPage() {
-  const [rows, setRows] = useState<MFNSaleRow[]>([]);
-  const [loading, setLoading] = useState(true);
   const { dateRange, setDateRange, marketplace, setMarketplace, marketplaceParam } = useFilters();
 
-  const fetchData = useCallback(async () => {
-    setLoading(true);
-    const res = await fetch(`/api/data/merchant-sales?startDate=${dateRange.startDate}&endDate=${dateRange.endDate}${marketplaceParam}`);
-    const data = await res.json();
-    setRows(data.items || data.rows || []);
-    setLoading(false);
-  }, [dateRange, marketplace]);
-
-  useEffect(() => { fetchData(); }, [fetchData]);
+  const { data, loading, reload: fetchData } = useQuery<{ items?: MFNSaleRow[]; rows?: MFNSaleRow[] }>(`/api/data/merchant-sales?startDate=${dateRange.startDate}&endDate=${dateRange.endDate}${marketplaceParam}`);
+  const rows: MFNSaleRow[] = data?.items || data?.rows || [];
 
   const totalRevenue = rows.reduce((s, r) => s + r.salePrice, 0);
   const totalProfit = rows.reduce((s, r) => s + r.profit, 0);
 
   const columns = useMemo<ColumnDef<MFNSaleRow, any>[]>(() => [
-    { id: 'date', header: 'Date', accessorKey: 'date', cell: ({ getValue }) => <span className="font-mono text-sm text-text-secondary">{formatDate(getValue() as string)}</span>, size: 110 },
+    { id: 'date', header: 'Date', accessorKey: 'date', cell: ({ getValue }) => <span className="font-mono text-sm text-text-secondary whitespace-nowrap">{formatDate(getValue() as string)}</span>, size: 110 },
     {
       id: 'order', header: 'Order Details', accessorFn: (row) => row.productName || row.orderId,
       cell: ({ row }) => (

@@ -1,12 +1,13 @@
 'use client';
 
-import { useEffect, useState, useCallback, useMemo } from 'react';
+import {useMemo } from 'react';
 import { type ColumnDef } from '@tanstack/react-table';
 import StatCard from '@/components/ui/StatCard';
 import PageHeader from '@/components/ui/PageHeader';
 import { useFilters } from '@/lib/useFilters';
 import DataTable from '@/components/tables/DataTable';
 import { formatCurrency, formatDate, formatNumber } from '@/lib/formatters';
+import { useQuery } from '@/lib/useQuery';
 
 interface SettlementRow {
   settlementId: string;
@@ -36,22 +37,12 @@ interface Summary {
 }
 
 export default function SettlementsPage() {
-  const [rows, setRows] = useState<SettlementRow[]>([]);
-  const [summary, setSummary] = useState<Summary | null>(null);
-  const [loading, setLoading] = useState(true);
   // Settlement reports are available ~90 days back, so default to that window.
   const { dateRange, setDateRange } = useFilters('90d');
 
-  const fetchData = useCallback(async () => {
-    setLoading(true);
-    const res = await fetch(`/api/data/settlements?startDate=${dateRange.startDate}&endDate=${dateRange.endDate}`);
-    const data = await res.json();
-    setRows(data.settlements || []);
-    setSummary(data.summary || null);
-    setLoading(false);
-  }, [dateRange]);
-
-  useEffect(() => { fetchData(); }, [fetchData]);
+  const { data, loading } = useQuery<{ settlements?: SettlementRow[]; summary?: Summary | null }>(`/api/data/settlements?startDate=${dateRange.startDate}&endDate=${dateRange.endDate}`);
+  const rows: SettlementRow[] = data?.settlements || [];
+  const summary: Summary | null = data?.summary || null;
 
   const columns = useMemo<ColumnDef<SettlementRow, any>[]>(() => [
     {

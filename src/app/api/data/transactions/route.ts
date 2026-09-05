@@ -1,13 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server';
-import Database from 'better-sqlite3';
-import path from 'path';
+import { MKT_DATE, marketToday, addDays } from '@/lib/market-day';
+import { openDb } from '@/lib/db-conn';
+import { marketplaceParam } from '@/lib/request-params';
+import { createLogger } from '@/lib/log';
 
-function getDb() {
-  const dbPath = process.env.FLIPLEDGER_DB_PATH || path.join(process.cwd(), 'data', 'flipledger.db');
-  const db = new Database(dbPath, { readonly: true });
-  db.pragma('journal_mode = WAL');
-  return db;
-}
+const log = createLogger('api/data/transactions');
+
+const getDb = () => openDb({ readonly: true });
 
 // Same date subqueries as the Dashboard/P&L so the feed reconciles with the
 // stat cards exactly (cash basis = MIN ShipmentEvent posted_date per order).
@@ -31,11 +30,11 @@ export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url);
   const db = getDb();
 
-  const startDate = searchParams.get('startDate') || new Date().toISOString().split('T')[0];
+  const startDate = searchParams.get('startDate') || marketToday();
   const endDate = searchParams.get('endDate') || startDate;
-  const endDateNext = new Date(new Date(endDate).getTime() + 86400000).toISOString().split('T')[0];
+  const endDateNext = addDays(endDate, 1);
 
-  const marketplace = searchParams.get('marketplace');
+  const marketplace = marketplaceParam(searchParams);
   const MF = marketplace ? `AND o.marketplace = '${marketplace}'` : '';
   const MF_R = marketplace ? `AND marketplace = '${marketplace}'` : '';
   const dateBasis = searchParams.get('dateBasis') || 'posted';
@@ -60,7 +59,7 @@ export async function GET(request: NextRequest) {
       LEFT JOIN products p ON p.asin = oi.asin
       LEFT JOIN products p_sku ON p_sku.asin = oi.sku
       LEFT JOIN live_inventory li ON li.sku = oi.sku
-      WHERE fe.posted_date >= ? AND fe.posted_date < ? ${MF}
+      WHERE ${MKT_DATE('fe.posted_date')} >= ? AND ${MKT_DATE('fe.posted_date')} < ? ${MF}
       GROUP BY o.order_id
     `).all(startDate, endDateNext) as any[];
 
@@ -70,7 +69,7 @@ export async function GET(request: NextRequest) {
       JOIN ${FE} fe ON fd.order_id = fe.order_id
       JOIN orders o ON fd.order_id = o.order_id
       WHERE fd.order_id IS NOT NULL AND fd.order_id != ''
-        AND fe.posted_date >= ? AND fe.posted_date < ? ${MF}
+        AND ${MKT_DATE('fe.posted_date')} >= ? AND ${MKT_DATE('fe.posted_date')} < ? ${MF}
       GROUP BY fd.order_id
     `).all(startDate, endDateNext) as any[];
     const feesByOrder = new Map(orderFees.map(f => [f.order_id, f.fees]));
@@ -115,7 +114,7 @@ export async function GET(request: NextRequest) {
       LEFT JOIN products p_oi ON p_oi.asin = oi.asin
       LEFT JOIN products p ON p.asin = r.asin
       LEFT JOIN products p_sku ON p_sku.asin = r.sku
-      WHERE r.refund_date >= ? AND r.refund_date < ? ${MF_R.replace(/marketplace/g, 'r.marketplace')}
+      WHERE ${MKT_DATE('r.refund_date')} >= ? AND ${MKT_DATE('r.refund_date')} < ? ${MF_R.replace(/marketplace/g, 'r.marketplace')}
     `).all(startDate, endDateNext) as any[];
 
     for (const r of refunds) {
@@ -137,7 +136,7 @@ export async function GET(request: NextRequest) {
       FROM fee_details fd
       JOIN financial_events fe ON fd.financial_event_id = fe.id
       WHERE (fd.order_id IS NULL OR fd.order_id = '')
-        AND date(fd.posted_date) >= ? AND date(fd.posted_date) < ?
+        AND ${MKT_DATE('fd.posted_date')} >= ? AND ${MKT_DATE('fd.posted_date')} < ?
         ${marketplace ? "AND fe.marketplace = '" + marketplace + "'" : ''}
     `).all(startDate, endDateNext) as any[];
 
@@ -158,7 +157,7 @@ export async function GET(request: NextRequest) {
       SELECT reimbursement_date as time, reimbursement_id, reason, amount, marketplace,
         COALESCE(asin, sku, '') as ref
       FROM reimbursements
-      WHERE reimbursement_date >= ? AND reimbursement_date < ? ${MF_R}
+      WHERE ${MKT_DATE('reimbursement_date')} >= ? AND ${MKT_DATE('reimbursement_date')} < ? ${MF_R}
     `).all(startDate, endDateNext) as any[];
 
     for (const r of reimbs) {
@@ -193,7 +192,7 @@ export async function GET(request: NextRequest) {
       },
     });
   } catch (error) {
-    console.error('Transactions API error:', error);
+    log.error('Transactions API error:', error);
     return NextResponse.json({ error: String(error) }, { status: 500 });
   } finally {
     db.close();

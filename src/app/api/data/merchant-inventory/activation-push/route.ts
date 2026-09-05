@@ -1,18 +1,15 @@
 import { NextRequest, NextResponse } from 'next/server';
-import Database from 'better-sqlite3';
-import path from 'path';
 import { getSellerId } from '@/lib/sp-api/listingsItems';
 import { patchMfnListing } from '@/lib/sp-api/mfnActivation';
 import type { SPAPICredentials } from '@/lib/sp-api/types';
+import { openDb } from '@/lib/db-conn';
+import { createLogger } from '@/lib/log';
+
+const log = createLogger('api/data/merchant-inventory/activation-push');
 
 const DEFAULT_MFN_SHIPPING_TEMPLATE = 'DEFAULT MFN USE THIS ONE';
 
-function getDb(readonly = false) {
-  const dbPath = path.join(process.cwd(), 'data', 'flipledger.db');
-  const db = new Database(dbPath, { readonly });
-  db.pragma('journal_mode = WAL');
-  return db;
-}
+const getDb = (readonly = false) => openDb({ readonly });
 
 function getCredentials(): SPAPICredentials {
   const db = getDb(true);
@@ -260,7 +257,7 @@ export async function POST(request: NextRequest) {
       // Surface Amazon's issues[] in logs regardless of status — warnings on
       // an ACCEPTED push are useful diagnostic signal but do not fail the row.
       if (spIssues.length > 0) {
-        console.warn(`[activation-push] sku=${item.sku} status=${spStatus} issues=${JSON.stringify(spIssues)}`);
+        log.warn(`sku=${item.sku} status=${spStatus} issues=${JSON.stringify(spIssues)}`);
       }
 
       const logId = db.prepare(`
@@ -292,7 +289,7 @@ export async function POST(request: NextRequest) {
               last_synced = ?
           WHERE sku = ? AND marketplace = 'amazon'
         `).run(item.proposed_qty, item.proposed_price_cents, now, item.sku);
-        console.log(`[activation-push] mirror sku=${item.sku} rows_updated=${upd.changes} qty=${item.proposed_qty} price_cents=${item.proposed_price_cents}`);
+        log.info(`mirror sku=${item.sku} rows_updated=${upd.changes} qty=${item.proposed_qty} price_cents=${item.proposed_price_cents}`);
       }
 
       results.push({
@@ -314,7 +311,7 @@ export async function POST(request: NextRequest) {
       timestamp: now,
     });
   } catch (error) {
-    console.error('[activation-push] error:', error);
+    log.error('error:', error);
     return NextResponse.json({ error: String(error) }, { status: 500 });
   } finally {
     db.close();

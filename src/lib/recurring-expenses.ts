@@ -5,15 +5,9 @@
  * Skips months that already have an expense row for that category.
  */
 
-import Database from 'better-sqlite3';
-import path from 'path';
+import { openDb } from '@/lib/db-conn';
 
-function getDb() {
-  const dbPath = path.join(process.cwd(), 'data', 'flipledger.db');
-  const db = new Database(dbPath);
-  db.pragma('journal_mode = WAL');
-  return db;
-}
+const getDb = () => openDb();
 
 export function generateRecurringExpenses(): { generated: number; skipped: number } {
   const db = getDb();

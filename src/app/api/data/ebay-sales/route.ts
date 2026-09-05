@@ -1,13 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server';
-import Database from 'better-sqlite3';
-import path from 'path';
+import { MKT_DATE, marketToday, marketDaysAgo, addDays } from '@/lib/market-day';
+import { openDb } from '@/lib/db-conn';
+import { marketplaceParam } from '@/lib/request-params';
+import { createLogger } from '@/lib/log';
 
-function getDb() {
-  const dbPath = path.join(process.cwd(), 'data', 'flipledger.db');
-  const db = new Database(dbPath, { readonly: true });
-  db.pragma('journal_mode = WAL');
-  return db;
-}
+const log = createLogger('api/data/ebay-sales');
+
+const getDb = () => openDb({ readonly: true });
 
 const ORDER_POSTED = `(SELECT order_id, MIN(posted_date) as posted_date FROM financial_events WHERE event_type = 'ShipmentEvent' AND order_id IS NOT NULL GROUP BY order_id)`;
 
@@ -19,16 +18,16 @@ export async function GET(request: NextRequest) {
   let endDate = searchParams.get('endDate');
   if (!startDate) {
     const days = parseInt(searchParams.get('days') || '30');
-    startDate = new Date(Date.now() - days * 86400000).toISOString().split('T')[0];
+    startDate = marketDaysAgo(days);
   }
   if (!endDate) {
-    endDate = new Date().toISOString().split('T')[0];
+    endDate = marketToday();
   }
-  const marketplace = searchParams.get('marketplace');
+  const marketplace = marketplaceParam(searchParams);
   const MF = marketplace ? `AND o.marketplace = '${marketplace}'` : '';
   const MF_R = marketplace ? `AND marketplace = '${marketplace}'` : '';
 
-  const endDateNext = new Date(new Date(endDate).getTime() + 86400000).toISOString().split('T')[0];
+  const endDateNext = addDays(endDate, 1);
 
   try {
     const rows = db.prepare(`
@@ -61,7 +60,7 @@ export async function GET(request: NextRequest) {
         SELECT order_id, SUM(total_price) as order_total FROM order_items GROUP BY order_id
       ) ot ON o.order_id = ot.order_id
       WHERE o.marketplace = 'ebay'
-        AND fe.posted_date >= ? AND fe.posted_date < ?
+        AND ${MKT_DATE('fe.posted_date')} >= ? AND ${MKT_DATE('fe.posted_date')} < ?
       ORDER BY fe.posted_date DESC
     `).all(startDate, endDateNext) as any[];
 
@@ -119,7 +118,7 @@ export async function GET(request: NextRequest) {
     });
   } catch (error) {
     db.close();
-    console.error('Merchant Sales API error:', error);
+    log.error('Merchant Sales API error:', error);
     return NextResponse.json({ error: 'Failed to load merchant sales data' }, { status: 500 });
   }
 }

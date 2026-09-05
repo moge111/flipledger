@@ -1,9 +1,10 @@
 'use client';
 
-import { useEffect, useState, useCallback } from 'react';
+import { useState } from 'react';
 import Link from 'next/link';
 import { formatCurrency } from '@/lib/formatters';
 import { Plus, Package, Trash2 } from 'lucide-react';
+import { useQuery } from '@/lib/useQuery';
 
 interface BatchRow {
   id: number;
@@ -41,26 +42,13 @@ function StatusBadge({ status }: { status: string }) {
 }
 
 export default function BatchesPage() {
-  const [batches, setBatches] = useState<BatchRow[]>([]);
-  const [loading, setLoading] = useState(true);
   const [showNew, setShowNew] = useState(false);
   const [name, setName] = useState('');
   const [channel, setChannel] = useState<'FBA' | 'MFN'>('FBA');
   const [creating, setCreating] = useState(false);
 
-  const fetchBatches = useCallback(async () => {
-    setLoading(true);
-    try {
-      const res = await fetch('/api/list/batches');
-      const data = await res.json();
-      setBatches(data.batches || []);
-    } catch (err) {
-      console.error(err);
-    }
-    setLoading(false);
-  }, []);
-
-  useEffect(() => { fetchBatches(); }, [fetchBatches]);
+  const { data, loading, reload: fetchBatches } = useQuery<{ batches?: BatchRow[] }>('/api/list/batches');
+  const batches: BatchRow[] = data?.batches || [];
 
   async function handleCreate() {
     if (!name.trim()) return;

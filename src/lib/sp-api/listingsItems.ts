@@ -7,17 +7,14 @@
  *
  * Docs: https://developer-docs.amazon.com/sp-api/docs/listings-items-api-v2021-08-01-reference
  */
-import Database from 'better-sqlite3';
-import path from 'path';
 import { getAccessToken, getEndpoint, spApiRequest, fetchWithRetry } from './auth';
 import type { SPAPICredentials } from './types';
+import { openDb } from '@/lib/db-conn';
+import { createLogger } from '@/lib/log';
 
-function getDb() {
-  const dbPath = process.env.FLIPLEDGER_DB_PATH || path.join(process.cwd(), 'data', 'flipledger.db');
-  const db = new Database(dbPath);
-  db.pragma('journal_mode = WAL');
-  return db;
-}
+const log = createLogger('sp-api/listingsItems');
+
+const getDb = () => openDb();
 
 /**
  * Return the Amazon seller ID (a.k.a. "Merchant Token") for the current account.
@@ -62,7 +59,7 @@ export async function getSellerId(credentials: SPAPICredentials): Promise<string
     }
   } catch (err) {
     // fall through to error below
-    console.warn('[getSellerId] marketplaceParticipations fetch failed:', err);
+    log.warn('marketplaceParticipations fetch failed:', err);
   }
 
   if (!sellerId) {

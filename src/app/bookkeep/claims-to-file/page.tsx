@@ -1,10 +1,11 @@
 'use client';
 
-import { useEffect, useState, useCallback } from 'react';
+import { useState, } from 'react';
 import { formatCurrency, formatDate, formatNumber } from '@/lib/formatters';
 import { ExternalLink, RefreshCw, AlertCircle, Loader2, CheckCircle2, XCircle, Inbox, FileText, Copy, Check, X as XClose } from 'lucide-react';
 import { buildClaimMessage, classifyClaim, FILING_INSTRUCTIONS } from '@/lib/amazon-claims/templates';
 import CopyableText from '@/components/ui/CopyableText';
+import { useQuery } from '@/lib/useQuery';
 
 interface Candidate {
   id: number;
@@ -43,27 +44,18 @@ const STATUS_TABS: Array<{ key: 'pending' | 'filed' | 'matched' | 'expired' | 'a
 ];
 
 export default function ClaimsToFilePage() {
-  const [candidates, setCandidates] = useState<Candidate[]>([]);
-  const [totals, setTotals] = useState<Totals | null>(null);
-  const [lastSync, setLastSync] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
+  // Snapshot of "now" for deadline math — render must stay pure (react-hooks/purity).
+  const [nowMs] = useState(() => Date.now());
   const [syncing, setSyncing] = useState(false);
   const [tab, setTab] = useState<'pending' | 'filed' | 'matched' | 'expired' | 'all'>('pending');
   const [openCandidate, setOpenCandidate] = useState<Candidate | null>(null);
   const [editedBody, setEditedBody] = useState('');
   const [copied, setCopied] = useState(false);
 
-  const fetchData = useCallback(async () => {
-    setLoading(true);
-    const res = await fetch(`/api/data/reimbursement-candidates?status=${tab}`);
-    const data = await res.json();
-    setCandidates(data.candidates || []);
-    setTotals(data.totals || null);
-    setLastSync(data.lastSync || null);
-    setLoading(false);
-  }, [tab]);
-
-  useEffect(() => { fetchData(); }, [fetchData]);
+  const { data, loading, reload: fetchData } = useQuery<{ candidates?: Candidate[]; lastSync?: string | null; totals?: Totals | null }>(`/api/data/reimbursement-candidates?status=${tab}`);
+  const candidates: Candidate[] = data?.candidates || [];
+  const totals: Totals | null = data?.totals || null;
+  const lastSync: string | null = data?.lastSync || null;
 
   async function runSync() {
     if (!confirm('Pull the latest 90 days of FBA inventory adjustments from Amazon? Takes 1-3 minutes.')) return;
@@ -133,7 +125,7 @@ export default function ClaimsToFilePage() {
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">Claims to File</h1>
           <p className="text-sm text-text-tertiary mt-0.5">
-            FBA inventory losses Amazon owes you for. Cross-checked against payouts you've already received.
+            FBA inventory losses Amazon owes you for. Cross-checked against payouts you&apos;ve already received.
             {lastSync && (
               <span className="ml-2 text-text-tertiary">· Last synced {formatDate(lastSync)}</span>
             )}
@@ -216,7 +208,7 @@ export default function ClaimsToFilePage() {
             <tbody>
               {candidates.map((c) => {
                 const days = c.eligibleUntil
-                  ? Math.ceil((new Date(c.eligibleUntil).getTime() - Date.now()) / 86400000)
+                  ? Math.ceil((new Date(c.eligibleUntil).getTime() - nowMs) / 86400000)
                   : null;
                 const urgent = days !== null && days <= 14 && c.status === 'pending';
                 return (
@@ -387,7 +379,7 @@ export default function ClaimsToFilePage() {
                 {/* Claim message */}
                 <div>
                   <label className="text-[11px] uppercase tracking-widest text-text-tertiary font-medium block mb-2">
-                    Claim message (paste into Amazon's case form)
+                    Claim message (paste into Amazon&apos;s case form)
                   </label>
                   <textarea
                     value={editedBody}

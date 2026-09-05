@@ -18,8 +18,7 @@
  *
  * Idempotent — running it when there are no dupes is a no-op.
  */
-import Database from 'better-sqlite3';
-import path from 'path';
+import { openDb } from '@/lib/db-conn';
 
 export interface DedupServiceFeesResult {
   feeDetailsDeleted: number;
@@ -28,8 +27,7 @@ export interface DedupServiceFeesResult {
 }
 
 export function dedupServiceFees(): DedupServiceFeesResult {
-  const dbPath = path.join(process.cwd(), 'data', 'flipledger.db');
-  const db = new Database(dbPath);
+  const db = openDb();
   db.pragma('journal_mode = WAL');
 
   try {

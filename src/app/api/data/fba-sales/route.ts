@@ -1,13 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server';
-import Database from 'better-sqlite3';
-import path from 'path';
+import { MKT_DATE, marketToday, marketDaysAgo, addDays } from '@/lib/market-day';
+import { openDb } from '@/lib/db-conn';
+import { marketplaceParam } from '@/lib/request-params';
+import { createLogger } from '@/lib/log';
 
-function getDb() {
-  const dbPath = path.join(process.cwd(), 'data', 'flipledger.db');
-  const db = new Database(dbPath, { readonly: true });
-  db.pragma('journal_mode = WAL');
-  return db;
-}
+const log = createLogger('api/data/fba-sales');
+
+const getDb = () => openDb({ readonly: true });
 
 export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url);
@@ -17,18 +16,16 @@ export async function GET(request: NextRequest) {
   let endDate = searchParams.get('endDate');
   if (!startDate) {
     const days = parseInt(searchParams.get('days') || '30');
-    startDate = new Date(Date.now() - days * 86400000).toISOString().split('T')[0];
+    startDate = marketDaysAgo(days);
   }
   if (!endDate) {
-    endDate = new Date().toISOString().split('T')[0];
+    endDate = marketToday();
   }
-  const cutoff = startDate + 'T00:00:00Z';
-  const marketplace = searchParams.get('marketplace');
+  const marketplace = marketplaceParam(searchParams);
   const MF = marketplace ? `AND o.marketplace = '${marketplace}'` : '';
   const MF_R = marketplace ? `AND marketplace = '${marketplace}'` : '';
 
-  const endDateNext = new Date(new Date(endDate).getTime() + 86400000).toISOString().split('T')[0];
-  const cutoffEnd = endDateNext + 'T00:00:00Z';
+  const endDateNext = addDays(endDate, 1);
 
   try {
     // Fulfilled Sales: FBA (Amazon) + WFS (Walmart)
@@ -58,8 +55,8 @@ export async function GET(request: NextRequest) {
         SELECT order_id, SUM(total_price) as order_total FROM order_items GROUP BY order_id
       ) ot ON o.order_id = ot.order_id
       WHERE o.fulfillment_channel = 'FBA'
-        AND fep.posted_date >= ? AND fep.posted_date < ?
-      ORDER BY fep.posted_date DESC
+        AND ${MKT_DATE('fep.posted_date')} >= ? AND ${MKT_DATE('fep.posted_date')} < ?
+      ORDER BY o.purchase_date DESC, fep.posted_date DESC
     `).all(startDate, endDateNext) as any[];
 
     const items = rows.map((row) => {
@@ -113,7 +110,7 @@ export async function GET(request: NextRequest) {
     });
   } catch (error) {
     db.close();
-    console.error('FBA Sales API error:', error);
+    log.error('FBA Sales API error:', error);
     return NextResponse.json({ error: 'Failed to load FBA sales data' }, { status: 500 });
   }
 }

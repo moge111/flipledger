@@ -1,15 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server';
-import Database from 'better-sqlite3';
-import path from 'path';
 import { fetchCatalogByAsin, isBarcode, searchCatalog } from '@/lib/sp-api/catalog';
 import type { SPAPICredentials } from '@/lib/sp-api/types';
+import { openDb } from '@/lib/db-conn';
+import { createLogger } from '@/lib/log';
 
-function getDb(readonly = true) {
-  const dbPath = path.join(process.cwd(), 'data', 'flipledger.db');
-  const db = new Database(dbPath, { readonly });
-  db.pragma('journal_mode = WAL');
-  return db;
-}
+const log = createLogger('api/data/mfn-search');
+
+const getDb = (readonly = true) => openDb({ readonly });
 
 function getCredentials(): SPAPICredentials | null {
   const db = getDb();
@@ -209,7 +206,7 @@ function cacheCatalogImages(rows: DbRow[], catalogImageByAsin: Map<string, strin
     });
     writeImages();
   } catch (error) {
-    console.warn('[mfn-search] catalog image cache write failed:', error);
+    log.warn('catalog image cache write failed:', error);
   } finally {
     db.close();
   }
@@ -234,7 +231,7 @@ async function addCatalogImageFallback(rows: DbRow[]): Promise<DbRow[]> {
       const catalogItem = await fetchCatalogByAsin(creds, asin);
       if (catalogItem?.imageUrl) catalogImageByAsin.set(asin, catalogItem.imageUrl);
     } catch (error) {
-      console.warn(`[mfn-search] catalog image fallback failed asin=${asin}:`, error);
+      log.warn(`catalog image fallback failed asin=${asin}:`, error);
     }
   }
 
@@ -316,7 +313,7 @@ export async function GET(request: NextRequest) {
 
       return NextResponse.json({ results, barcode: true });
     } catch (error) {
-      console.error('[mfn-search] barcode path error:', error);
+      log.error('barcode path error:', error);
       return NextResponse.json({ error: 'Search failed' }, { status: 500 });
     } finally {
       db.close();
@@ -341,7 +338,7 @@ export async function GET(request: NextRequest) {
       ${LISTING_ORDER}
     `).all(exactAsin, skuLike, titleLike) as DbRow[];
   } catch (error) {
-    console.error('[mfn-search] error:', error);
+    log.error('error:', error);
     return NextResponse.json({ error: 'Search failed' }, { status: 500 });
   } finally {
     db.close();

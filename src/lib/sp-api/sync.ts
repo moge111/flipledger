@@ -14,15 +14,12 @@ import { syncSettlementReports } from './reports';
 import { estimateAndBackfillFees, overrideEstimatedFees } from './fee-estimator';
 import { generateRecurringExpenses } from '../recurring-expenses';
 import type { SPAPICredentials, SyncResult, SyncStatus } from './types';
-import Database from 'better-sqlite3';
-import path from 'path';
+import { openDb } from '@/lib/db-conn';
+import { createLogger } from '@/lib/log';
 
-function getDb() {
-  const dbPath = path.join(process.cwd(), 'data', 'flipledger.db');
-  const db = new Database(dbPath);
-  db.pragma('journal_mode = WAL');
-  return db;
-}
+const log = createLogger('sp-api/sync');
+
+const getDb = () => openDb();
 
 // Sync state lives on globalThis so hot-reloaded module instances share one
 // mutex — a module-level variable let a manual sync and the hourly auto-sync
@@ -74,7 +71,7 @@ export async function runFullSync(
 
   try {
     // 1. Orders FIRST — gets correct purchase dates
-    console.log('[Sync] Starting orders sync...');
+    log.info('Starting orders sync...');
     const ordStart = Date.now();
     const ordResult = await syncOrders(credentials, startDate, endDate);
     const ordSyncResult: SyncResult = {
@@ -85,11 +82,11 @@ export async function runFullSync(
     };
     g.__flCurrentSync!.results.push(ordSyncResult);
     totalRecords += ordResult.ordersProcessed;
-    console.log(`[Sync] Orders: ${ordResult.ordersProcessed} orders, ${ordResult.errors.length} errors`);
+    log.info(`Orders: ${ordResult.ordersProcessed} orders, ${ordResult.errors.length} errors`);
 
     // 2. Financial Events — fees, refunds, reimbursements (overlays on orders)
     resetServiceFeeTracker(); // Reset dedup tracker for this sync run
-    console.log('[Sync] Starting financial events sync...');
+    log.info('Starting financial events sync...');
     const finStart = Date.now();
     const finResult = await syncFinancialEvents(credentials, startDate, endDate);
     const finSyncResult: SyncResult = {
@@ -100,13 +97,13 @@ export async function runFullSync(
     };
     g.__flCurrentSync!.results.push(finSyncResult);
     totalRecords += finResult.eventsProcessed;
-    console.log(`[Sync] Financial events: ${finResult.eventsProcessed} events, ${finResult.errors.length} errors`);
+    log.info(`Financial events: ${finResult.eventsProcessed} events, ${finResult.errors.length} errors`);
 
     // 2b. Finances v2024 — per-transaction deferral status + maturityDate.
     // The v0 sync above doesn't expose DD7 hold info; v2024 does. Keeps both
     // in sync — we use v0 for event ingestion and v2024 for cash-flow timing.
     // Default window: last 30 days (matches Amazon's max per-call window).
-    console.log('[Sync] Starting finances v2024 transactions sync...');
+    log.info('Starting finances v2024 transactions sync...');
     const fin2Start = Date.now();
     const fin2Result = await syncFinancesV2024Transactions(credentials);
     const fin2SyncResult: SyncResult = {
@@ -117,10 +114,10 @@ export async function runFullSync(
     };
     g.__flCurrentSync!.results.push(fin2SyncResult);
     totalRecords += fin2Result.inserted + fin2Result.updated;
-    console.log(`[Sync] Finances v2024: ${fin2Result.inserted} new, ${fin2Result.updated} updated, ${fin2Result.pagesFetched} page(s), ${fin2Result.errors.length} errors`);
+    log.info(`Finances v2024: ${fin2Result.inserted} new, ${fin2Result.updated} updated, ${fin2Result.pagesFetched} page(s), ${fin2Result.errors.length} errors`);
 
     // 3. FBA Inventory — current stock levels
-    console.log('[Sync] Starting FBA inventory sync...');
+    log.info('Starting FBA inventory sync...');
     const invStart = Date.now();
     const invResult = await syncFBAInventory(credentials);
     const invSyncResult: SyncResult = {
@@ -131,10 +128,10 @@ export async function runFullSync(
     };
     g.__flCurrentSync!.results.push(invSyncResult);
     totalRecords += invResult.itemsProcessed;
-    console.log(`[Sync] FBA Inventory: ${invResult.itemsProcessed} items, ${invResult.errors.length} errors`);
+    log.info(`FBA Inventory: ${invResult.itemsProcessed} items, ${invResult.errors.length} errors`);
 
     // 4. Product Catalog — enrich product names/categories/images
-    console.log('[Sync] Starting catalog enrichment...');
+    log.info('Starting catalog enrichment...');
     const catStart = Date.now();
     const catResult = await enrichProductCatalog(credentials);
     const catSyncResult: SyncResult = {
@@ -144,10 +141,10 @@ export async function runFullSync(
       duration: Date.now() - catStart,
     };
     g.__flCurrentSync!.results.push(catSyncResult);
-    console.log(`[Sync] Catalog: ${catResult.enriched} enriched, ${catResult.errors.length} errors`);
+    log.info(`Catalog: ${catResult.enriched} enriched, ${catResult.errors.length} errors`);
 
     // 5. Settlement Reports — shipping label costs + reconciliation data
-    console.log('[Sync] Starting settlement reports sync...');
+    log.info('Starting settlement reports sync...');
     const setStart = Date.now();
     const setResult = await syncSettlementReports(credentials, startDate);
     const setSyncResult: SyncResult = {
@@ -157,18 +154,18 @@ export async function runFullSync(
       duration: Date.now() - setStart,
     };
     g.__flCurrentSync!.results.push(setSyncResult);
-    console.log(`[Sync] Settlement Reports: ${setResult.reportsProcessed} reports, ${setResult.shippingCostsUpdated} shipping costs updated, ${setResult.errors.length} errors`);
+    log.info(`Settlement Reports: ${setResult.reportsProcessed} reports, ${setResult.shippingCostsUpdated} shipping costs updated, ${setResult.errors.length} errors`);
 
     // 6. Override estimated fees with real data, then estimate fees for remaining orders
-    console.log('[Sync] Overriding estimated fees and backfilling...');
+    log.info('Overriding estimated fees and backfilling...');
     const overridden = overrideEstimatedFees();
     const estimated = estimateAndBackfillFees();
-    console.log(`[Sync] Fee estimation: ${overridden} estimates overridden, ${estimated.estimated} new estimates created`);
+    log.info(`Fee estimation: ${overridden} estimates overridden, ${estimated.estimated} new estimates created`);
 
     // Generate recurring expenses for any new months
-    console.log('[Sync] Generating recurring expenses...');
+    log.info('Generating recurring expenses...');
     const recurResult = generateRecurringExpenses();
-    console.log(`[Sync] Recurring expenses: ${recurResult.generated} generated, ${recurResult.skipped} already existed`);
+    log.info(`Recurring expenses: ${recurResult.generated} generated, ${recurResult.skipped} already existed`);
 
     // Self-healing dedup: ADJ-* / SETTLEMENT-* placeholders shadowed by canonical
     // numeric reimbursements (from FBA Reimbursements Report). Idempotent.
@@ -181,14 +178,14 @@ export async function runFullSync(
     try {
       const sfResult = dedupServiceFees();
       if (sfResult.feeDetailsDeleted > 0) {
-        console.log(
+        log.info(
           `[Sync] Service-fee dedup swept ${sfResult.feeDetailsDeleted} dupes ` +
             `($${(Math.abs(sfResult.dollarsRemoved) / 100).toFixed(2)}), ` +
             `${sfResult.eventsDeleted} orphan events removed`
         );
       }
     } catch (err) {
-      console.error('[Sync] Service-fee dedup error:', err);
+      log.error('Service-fee dedup error:', err);
     }
 
     // Collect all errors
@@ -217,7 +214,7 @@ export async function runFullSync(
     db2.prepare(`INSERT OR REPLACE INTO settings (key, value) VALUES ('lastSync', ?)`).run(new Date().toISOString());
     db2.close();
 
-    console.log(`[Sync] Complete. ${totalRecords} total records, ${g.__flCurrentSync!.totalErrors.length} errors.`);
+    log.info(`Complete. ${totalRecords} total records, ${g.__flCurrentSync!.totalErrors.length} errors.`);
   } catch (error) {
     const db2 = getDb();
     db2.prepare(`
@@ -227,7 +224,7 @@ export async function runFullSync(
     db2.close();
 
     g.__flCurrentSync!.totalErrors.push(String(error));
-    console.error('[Sync] Fatal error:', error);
+    log.error('Fatal error:', error);
   }
 
   g.__flCurrentSync!.running = false;

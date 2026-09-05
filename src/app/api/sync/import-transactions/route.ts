@@ -8,9 +8,9 @@
  * Reads from data/amazon-transaction-report.csv (no upload needed).
  */
 import { NextRequest, NextResponse } from 'next/server';
-import Database from 'better-sqlite3';
 import path from 'path';
 import fs from 'fs';
+import { openDb } from '@/lib/db-conn';
 
 interface ParsedRow {
   dateTime: string;
@@ -160,7 +160,6 @@ function mapDescriptionToFeeType(type: string, description: string): { feeType: 
 }
 
 export async function POST(request: NextRequest) {
-  const dbPath = path.join(process.cwd(), 'data', 'flipledger.db');
   const csvPath = path.join(process.cwd(), 'data', 'amazon-transaction-report.csv');
 
   if (!fs.existsSync(csvPath)) {
@@ -168,7 +167,7 @@ export async function POST(request: NextRequest) {
   }
 
   const content = fs.readFileSync(csvPath, 'utf-8').replace(/^\uFEFF/, '');
-  const db = new Database(dbPath);
+  const db = openDb();
   db.pragma('journal_mode = WAL');
 
   try {

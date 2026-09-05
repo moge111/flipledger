@@ -6,8 +6,7 @@
  *
  * Can recalculate a single SKU/ASIN (after editing a buy price) or all items.
  */
-import Database from 'better-sqlite3';
-import path from 'path';
+import { openDb } from '@/lib/db-conn';
 
 interface InventoryBatch {
   id: number;
@@ -40,12 +39,7 @@ interface FIFOResult {
   errors: string[];
 }
 
-function getDb(readonly = false) {
-  const dbPath = process.env.FLIPLEDGER_DB_PATH || path.join(process.cwd(), 'data', 'flipledger.db');
-  const db = new Database(dbPath, { readonly });
-  db.pragma('journal_mode = WAL');
-  return db;
-}
+const getDb = (readonly = false) => openDb({ readonly });
 
 /**
  * Recalculate FIFO COGS for a specific SKU, ASIN, or all items.
@@ -238,11 +232,21 @@ export function recalculateFIFO(options: {
           // identical either way). DIFFERENT year → the sale keeps its COGS
           // (the sale year may be filed) and the relief is booked as a
           // cogs_reversals row dated at the refund.
+          //
+          // Both the cash-basis recognition year (P&L) AND the purchase-date
+          // year (Tax Report / accrual view) must match the refund year for
+          // the zero-at-sale shortcut. A sale bought Dec 31 that posts Jan 2
+          // and is returned in Feb is same-year on the cash books but
+          // cross-year on the purchase-date books; zeroing it would strip the
+          // COGS from the prior tax year with no relief anywhere. Booking a
+          // reversal instead is correct on BOTH bases (Sept 4, 2026 fix).
+          const refundYear = sale.refundDate ? sale.refundDate.slice(0, 4) : null;
           const crossYearReturn = Boolean(
             sale.isReturned &&
-            sale.refundDate &&
+            refundYear &&
             sale.recognitionDate &&
-            sale.refundDate.slice(0, 4) !== sale.recognitionDate.slice(0, 4)
+            (refundYear !== sale.recognitionDate.slice(0, 4) ||
+              (sale.purchaseDate && refundYear !== sale.purchaseDate.slice(0, 4)))
           );
 
           // Same-year returned sale: the physical unit came back to sellable

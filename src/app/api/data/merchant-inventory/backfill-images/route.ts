@@ -8,14 +8,15 @@
  * Body (optional): { limit?: number }  — ASINs to process this call (default 100).
  */
 import { NextRequest, NextResponse } from 'next/server';
-import Database from 'better-sqlite3';
-import path from 'path';
 import { backfillMerchantListingImages } from '@/lib/sp-api/catalog';
 import type { SPAPICredentials } from '@/lib/sp-api/types';
+import { openDb } from '@/lib/db-conn';
+import { createLogger } from '@/lib/log';
+
+const log = createLogger('api/data/merchant-inventory/backfill-images');
 
 function getAmazonCredentials(): SPAPICredentials | null {
-  const dbPath = path.join(process.cwd(), 'data', 'flipledger.db');
-  const db = new Database(dbPath, { readonly: true });
+  const db = openDb({ readonly: true });
   db.pragma('journal_mode = WAL');
   try {
     const rows = db.prepare('SELECT key, value FROM settings').all() as { key: string; value: string }[];
@@ -47,7 +48,7 @@ export async function POST(request: NextRequest) {
     const result = await backfillMerchantListingImages(creds, limit);
     return NextResponse.json(result);
   } catch (err) {
-    console.error('Backfill images error:', err);
+    log.error('Backfill images error:', err);
     return NextResponse.json({ error: String(err) }, { status: 500 });
   }
 }

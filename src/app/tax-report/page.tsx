@@ -1,11 +1,12 @@
 'use client';
 
-import { useEffect, useState, useCallback } from 'react';
+import { useState } from 'react';
 import { ChevronDown, ChevronRight, Download, FileText } from 'lucide-react';
 import StatCard from '@/components/ui/StatCard';
 import YearSelector from '@/components/ui/YearSelector';
 import { formatCurrency, formatNumber } from '@/lib/formatters';
 import { downloadCsv, centsToDollarStr } from '@/lib/csv-export';
+import { useQuery } from '@/lib/useQuery';
 
 interface TaxData {
   year: number;
@@ -50,23 +51,9 @@ function monthLabel(monthStr: string): string {
 }
 
 export default function TaxReportPage() {
-  const [data, setData] = useState<TaxData | null>(null);
-  const [loading, setLoading] = useState(true);
   const [year, setYear] = useState(new Date().getFullYear() - 1);
 
-  const fetchData = useCallback(async () => {
-    setLoading(true);
-    try {
-      const res = await fetch(`/api/data/tax-report?year=${year}`);
-      const json = await res.json();
-      setData(json);
-    } catch (err) {
-      console.error('Failed to load tax report:', err);
-    }
-    setLoading(false);
-  }, [year]);
-
-  useEffect(() => { fetchData(); }, [fetchData]);
+  const { data, loading } = useQuery<TaxData>(`/api/data/tax-report?year=${year}`);
 
   function exportAll() {
     if (!data) return;
@@ -361,7 +348,7 @@ export default function TaxReportPage() {
         <TaxSection title="Marketplace Fee Breakdown" description="All selling fees, fulfillment fees, and service fees — deductible business expenses" onExport={exportFees}>
           {data.amazonFeeSummary.map(cat => {
             const children = data.amazonFees.filter(f => f.category === cat.category);
-            return <FeeCategory key={cat.category} category={cat.category} total={cat.total} children={children} />;
+            return <FeeCategory key={cat.category} category={cat.category} total={cat.total} rows={children} />;
           })}
           <div className="flex justify-between py-3 border-t-2 border-border-subtle font-semibold text-sm">
             <span>Total Marketplace Fees</span>
@@ -533,8 +520,8 @@ function ScheduleRow({ line, label, value, bold, negative, hideValue }: {
   );
 }
 
-function FeeCategory({ category, total, children }: {
-  category: string; total: number; children: { feeType: string; total: number; count: number }[];
+function FeeCategory({ category, total, rows }: {
+  category: string; total: number; rows: { feeType: string; total: number; count: number }[];
 }) {
   const [open, setOpen] = useState(false);
   return (
@@ -543,13 +530,13 @@ function FeeCategory({ category, total, children }: {
         <div className="flex items-center gap-2">
           {open ? <ChevronDown size={14} className="text-text-tertiary" /> : <ChevronRight size={14} className="text-text-tertiary" />}
           <span className="text-text-primary font-medium">{category}</span>
-          <span className="text-text-tertiary text-xs">({children.length} fee types)</span>
+          <span className="text-text-tertiary text-xs">({rows.length} fee types)</span>
         </div>
         <span className="font-mono text-negative">{formatCurrency(total)}</span>
       </button>
       {open && (
         <div className="pl-7 pb-2 space-y-1">
-          {children.map((f, i) => (
+          {rows.map((f, i) => (
             <div key={i} className="flex justify-between text-xs text-text-secondary py-0.5">
               <span>{f.feeType} <span className="text-text-tertiary">({f.count})</span></span>
               <span className="font-mono">{formatCurrency(f.total)}</span>

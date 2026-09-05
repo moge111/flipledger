@@ -19,8 +19,7 @@
  *   - MFN: seller eats the refund unless they file SAFE-T. More
  *     candidates here typically.
  */
-import Database from 'better-sqlite3';
-import path from 'path';
+import { openDb } from '@/lib/db-conn';
 
 // Amazon cut the SAFE-T filing window from 60 to 30 days effective
 // February 16, 2026. The clock runs from the return delivery scan at the
@@ -56,12 +55,7 @@ const NOT_ELIGIBLE_REASONS = new Set([
   'CUSTOMER_RETURN',          // Generic placeholder — can't dispute without specific reason
 ]);
 
-function getDb() {
-  const dbPath = path.join(process.cwd(), 'data', 'flipledger.db');
-  const db = new Database(dbPath);
-  db.pragma('journal_mode = WAL');
-  return db;
-}
+const getDb = () => openDb();
 
 /**
  * Classify which recovery path to use:

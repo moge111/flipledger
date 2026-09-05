@@ -21,7 +21,6 @@
  */
 import { NextRequest, NextResponse } from 'next/server';
 import Database from 'better-sqlite3';
-import path from 'path';
 import { clearTokenCache } from '@/lib/sp-api/auth';
 import {
   generatePackingOptions,
@@ -31,13 +30,12 @@ import {
   getInboundOperation,
 } from '@/lib/sp-api/inboundPlansV2';
 import type { SPAPICredentials } from '@/lib/sp-api/types';
+import { openDb } from '@/lib/db-conn';
+import { createLogger } from '@/lib/log';
 
-function getDb() {
-  const dbPath = path.join(process.cwd(), 'data', 'flipledger.db');
-  const db = new Database(dbPath);
-  db.pragma('journal_mode = WAL');
-  return db;
-}
+const log = createLogger('api/list/batches/[id]/pack');
+
+const getDb = () => openDb();
 
 function getAmazonCredentials(db: Database.Database): SPAPICredentials | null {
   const rows = db.prepare('SELECT key, value FROM settings').all() as { key: string; value: string }[];
@@ -201,7 +199,7 @@ export async function POST(
     if (cachedPackingOptionId && packGroups.length > 0) {
       packingOptionId = cachedPackingOptionId;
       validGroupIds = packGroups.map((g) => g.packingGroupId);
-      console.log(`[pack] Using cached packingOptionId=${packingOptionId} with ${validGroupIds.length} group(s)`);
+      log.info(`Using cached packingOptionId=${packingOptionId} with ${validGroupIds.length} group(s)`);
     } else {
       // Fallback: generate now (legacy path for batches that skipped initialize-boxing)
       let packingOp: { operationId: string };
@@ -319,7 +317,7 @@ export async function POST(
 
     // Step 3: confirmPackingOption — commits to the chosen option, associates
     // its packingGroupId with the plan so subsequent calls can reference it.
-    console.log(`[pack] Confirming packing option ${packingOptionId} (associates group(s) with plan)`);
+    log.info(`Confirming packing option ${packingOptionId} (associates group(s) with plan)`);
     let confirmOp: { operationId: string };
     try {
       confirmOp = await confirmPackingOption(creds, batch.inboundPlanId, packingOptionId);
@@ -337,7 +335,7 @@ export async function POST(
 
     // Step 4: setPackingInformation — push our box dimensions/contents now
     // that the group is associated with the plan.
-    console.log(`[pack] Sending ${packageGroupings.length} pack group(s) with ${boxes.length} total box(es) to setPackingInformation`);
+    log.info(`Sending ${packageGroupings.length} pack group(s) with ${boxes.length} total box(es) to setPackingInformation`);
     let setPackingOp: { operationId: string };
     try {
       setPackingOp = await setPackingInformation(creds, batch.inboundPlanId, packageGroupings);

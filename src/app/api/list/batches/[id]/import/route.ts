@@ -20,16 +20,17 @@
 //
 // Body (JSON): { csv, mapping?, decisions?: { [rowIndex]: { mode?, skip? } } }
 import { NextRequest, NextResponse } from 'next/server';
-import Database from 'better-sqlite3';
-import path from 'path';
 import { parseBuyListCsv, type ColumnMapping } from '@/lib/imports/airtable-buylist';
 import { recalculateFIFO } from '@/lib/fifo';
 import { backfillBatchImages } from '@/lib/sp-api/catalog';
 import type { SPAPICredentials } from '@/lib/sp-api/types';
+import { openDb } from '@/lib/db-conn';
+import { createLogger } from '@/lib/log';
+
+const log = createLogger('api/list/batches/[id]/import');
 
 function getAmazonCredentials(): SPAPICredentials | null {
-  const dbPath = path.join(process.cwd(), 'data', 'flipledger.db');
-  const db = new Database(dbPath, { readonly: true });
+  const db = openDb({ readonly: true });
   db.pragma('journal_mode = WAL');
   try {
     const rows = db.prepare('SELECT key, value FROM settings').all() as { key: string; value: string }[];
@@ -47,12 +48,7 @@ function getAmazonCredentials(): SPAPICredentials | null {
   }
 }
 
-function getDb() {
-  const dbPath = path.join(process.cwd(), 'data', 'flipledger.db');
-  const db = new Database(dbPath);
-  db.pragma('journal_mode = WAL');
-  return db;
-}
+const getDb = () => openDb();
 
 const ALLOWED_MODES = new Set(['CREATE_NEW', 'REPLENISH_EXISTING']);
 
@@ -254,7 +250,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
 
     // FIFO recalculation per affected SKU (lots changed).
     for (const sku of affectedSkus) {
-      try { recalculateFIFO({ sku }); } catch (e) { console.warn('[buylist import] FIFO recalc skipped for', sku, e); }
+      try { recalculateFIFO({ sku }); } catch (e) { log.warn('FIFO recalc skipped for', sku, e); }
     }
 
     // Auto-fetch product photos for the imported ASINs (MFN lots are tagged
@@ -265,7 +261,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
       const creds = getAmazonCredentials();
       if (creds) {
         try { await backfillBatchImages(creds, batchId, rowsImported || 100); }
-        catch (e) { console.warn('[buylist import] image backfill skipped', e); }
+        catch (e) { log.warn('image backfill skipped', e); }
       }
     }
 

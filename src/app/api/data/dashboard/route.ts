@@ -1,17 +1,28 @@
 import { NextRequest, NextResponse } from 'next/server';
-import Database from 'better-sqlite3';
-import path from 'path';
+import { MKT_DATE, MKT_MONTH_START, MKT_WEEK_START, marketToday, marketDaysAgo, addDays } from '@/lib/market-day';
+import { openDb } from '@/lib/db-conn';
+import { calculateROI } from '@/lib/calculations';
+import {
+  orderDateSubquery, ORDER_POSTED_DATE, walmartSettledRefund, chargedBackShippingInner,
+  mfnShippingCreditExpr, mfnShippingCostExpr, ORDER_FEE_ROWS, SERVICE_FEE_ROWS, SIGNED_FEE_TOTAL,
+} from '@/lib/accounting-sql';
 
-function getDb() {
-  const dbPath = process.env.FLIPLEDGER_DB_PATH || path.join(process.cwd(), 'data', 'flipledger.db');
-  const db = new Database(dbPath, { readonly: true });
-  db.pragma('journal_mode = WAL');
-  return db;
-}
+interface SalesAgg { totalRevenue: number; totalOrders: number; totalUnits: number; totalPromos: number; totalShippingCost: number }
+type FeesAgg = { totalFees: number };
+type CogsAgg = { totalCogs: number };
+type RefundAgg = { totalRefunds: number; totalClawbacks: number };
+type Total = { total: number };
+type ExpenseAgg = { totalExpenses: number };
+interface ChartRow { day: string; revenue: number; cogs: number }
+interface ProductRow { name: string; asin: string; category: string | null; revenue: number; unitsSold: number; cogs: number }
+type CategoryTotal = { category: string; total: number };
+import { marketplaceParam } from '@/lib/request-params';
+import { createLogger } from '@/lib/log';
 
-// Shared subquery: each order's date — cash basis (posted_date) or accrual (purchase_date)
-const FE_POSTED = `(SELECT order_id, MIN(posted_date) as posted_date FROM financial_events WHERE event_type = 'ShipmentEvent' AND order_id IS NOT NULL GROUP BY order_id)`;
-const FE_PURCHASE = `(SELECT order_id, purchase_date as posted_date FROM orders)`;
+const log = createLogger('api/data/dashboard');
+
+const getDb = () => openDb({ readonly: true });
+
 
 export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url);
@@ -21,120 +32,107 @@ export async function GET(request: NextRequest) {
   let endDate = searchParams.get('endDate');
   if (!startDate) {
     const days = parseInt(searchParams.get('days') || '30');
-    startDate = new Date(Date.now() - days * 86400000).toISOString().split('T')[0];
+    startDate = marketDaysAgo(days);
   }
   if (!endDate) {
-    endDate = new Date().toISOString().split('T')[0];
+    endDate = marketToday();
   }
-  const endDateNext = new Date(new Date(endDate).getTime() + 86400000).toISOString().split('T')[0];
+  const endDateNext = addDays(endDate, 1);
   const startMs = new Date(startDate).getTime();
   const endMs = new Date(endDate).getTime();
   const periodMs = endMs - startMs + 86400000;
   const prevStart = new Date(startMs - periodMs).toISOString().split('T')[0];
 
   // Marketplace filter
-  const marketplace = searchParams.get('marketplace');
+  const marketplace = marketplaceParam(searchParams);
   const MF = marketplace ? `AND o.marketplace = '${marketplace}'` : '';
   const MF_R = marketplace ? `AND marketplace = '${marketplace}'` : '';
-  const dateBasis = searchParams.get('dateBasis') || 'posted';
-  const FE = dateBasis === 'purchase' ? FE_PURCHASE : FE_POSTED;
+  const dateBasis = searchParams.get('dateBasis') === 'purchase' ? 'purchase' : 'posted';
+  // Same order-date subquery the P&L uses — parity depends on it.
+  const FE = orderDateSubquery(dateBasis);
+  const IN_RANGE = `${MKT_DATE('fe.posted_date')} >= ? AND ${MKT_DATE('fe.posted_date')} < ?`;
 
   try {
     // ─── Revenue & units ──────────────────────────────────────────────
     const salesData = db.prepare(`
       SELECT
-        COALESCE(SUM(oi.total_price + CASE WHEN o.fulfillment_channel IN ('MFN', 'Seller') THEN COALESCE(oi.shipping_charged, 0) ELSE 0 END), 0) as totalRevenue,
+        COALESCE(SUM(oi.total_price + ${mfnShippingCreditExpr()}), 0) as totalRevenue,
         COUNT(DISTINCT oi.order_id) as totalOrders,
         COALESCE(SUM(oi.quantity), 0) as totalUnits,
         COALESCE(SUM(ABS(COALESCE(oi.promotional_rebate, 0))), 0) as totalPromos,
-        COALESCE(SUM(COALESCE(oi.shipping_cost, 0)), 0) as totalShippingCost
+        COALESCE(SUM(${mfnShippingCostExpr()}), 0) as totalShippingCost
       FROM order_items oi
       JOIN ${FE} fe ON oi.order_id = fe.order_id
       JOIN orders o ON oi.order_id = o.order_id
-      WHERE fe.posted_date >= ? AND fe.posted_date < ? ${MF}
-    `).get(startDate, endDateNext) as any;
+      WHERE ${IN_RANGE} ${MF}
+    `).get(startDate, endDateNext) as SalesAgg;
 
     const prevSalesData = db.prepare(`
       SELECT
-        COALESCE(SUM(oi.total_price + CASE WHEN o.fulfillment_channel IN ('MFN', 'Seller') THEN COALESCE(oi.shipping_charged, 0) ELSE 0 END), 0) as totalRevenue,
+        COALESCE(SUM(oi.total_price + ${mfnShippingCreditExpr()}), 0) as totalRevenue,
         COUNT(DISTINCT oi.order_id) as totalOrders,
         COALESCE(SUM(oi.quantity), 0) as totalUnits,
         COALESCE(SUM(ABS(COALESCE(oi.promotional_rebate, 0))), 0) as totalPromos,
-        COALESCE(SUM(COALESCE(oi.shipping_cost, 0)), 0) as totalShippingCost
+        COALESCE(SUM(${mfnShippingCostExpr()}), 0) as totalShippingCost
       FROM order_items oi
       JOIN ${FE} fe ON oi.order_id = fe.order_id
       JOIN orders o ON oi.order_id = o.order_id
-      WHERE fe.posted_date >= ? AND fe.posted_date < ? ${MF}
-    `).get(prevStart, startDate) as any;
+      WHERE ${IN_RANGE} ${MF}
+    `).get(prevStart, startDate) as SalesAgg;
 
     // Non-MFN shipping credits are income only when Amazon also charges them
-    // back (the chargeback is already counted in fees, so the pair nets to
-    // zero). Must mirror the P&L exactly — see the long note in
-    // src/app/api/data/profitloss/route.ts. Excluding the credit while keeping
-    // the chargeback fee double-penalised every one of these orders.
+    // back — shared rule, see chargedBackShippingInner in accounting-sql.ts.
     const chargedBackShipping = db.prepare(`
       SELECT COALESCE(SUM(MIN(x.sc, x.cb)), 0) as total
-      FROM (
-        SELECT oi.order_id,
-               SUM(oi.shipping_charged) as sc,
-               COALESCE((SELECT -SUM(fd.amount) FROM fee_details fd
-                         WHERE fd.order_id = oi.order_id
-                           AND fd.fee_type = 'ShippingChargeback'), 0) as cb
-        FROM order_items oi
-        JOIN ${FE} fe ON oi.order_id = fe.order_id
-        JOIN orders o ON oi.order_id = o.order_id
-        WHERE fe.posted_date >= ? AND fe.posted_date < ? ${MF}
-          AND o.fulfillment_channel NOT IN ('MFN', 'Seller')
-        GROUP BY oi.order_id
-      ) x
+      FROM (${chargedBackShippingInner(FE, `${IN_RANGE} ${MF}`)}) x
       WHERE x.sc > 0 AND x.cb > 0
     `);
-    salesData.totalRevenue += (chargedBackShipping.get(startDate, endDateNext) as any).total;
-    prevSalesData.totalRevenue += (chargedBackShipping.get(prevStart, startDate) as any).total;
+    salesData.totalRevenue += (chargedBackShipping.get(startDate, endDateNext) as Total).total;
+    prevSalesData.totalRevenue += (chargedBackShipping.get(prevStart, startDate) as Total).total;
 
     // ─── Order fees ───────────────────────────────────────────────────
     const orderFeeData = db.prepare(`
-      SELECT COALESCE(-SUM(fd.amount), 0) as totalFees
+      SELECT ${SIGNED_FEE_TOTAL} as totalFees
       FROM fee_details fd
       JOIN ${FE} fe ON fd.order_id = fe.order_id
       JOIN orders o ON fd.order_id = o.order_id
-      WHERE fd.order_id IS NOT NULL AND fd.order_id != ''
-        AND fe.posted_date >= ? AND fe.posted_date < ? ${MF}
-    `).get(startDate, endDateNext) as any;
+      WHERE ${ORDER_FEE_ROWS}
+        AND ${IN_RANGE} ${MF}
+    `).get(startDate, endDateNext) as FeesAgg;
 
     const serviceFeeData = db.prepare(`
-      SELECT COALESCE(-SUM(fd.amount), 0) as totalFees
+      SELECT ${SIGNED_FEE_TOTAL} as totalFees
       FROM fee_details fd
       JOIN financial_events fe ON fd.financial_event_id = fe.id
-      WHERE (fd.order_id IS NULL OR fd.order_id = '')
-        AND date(fd.posted_date) >= ? AND date(fd.posted_date) < ?
+      WHERE ${SERVICE_FEE_ROWS}
+        AND ${MKT_DATE('fd.posted_date')} >= ? AND ${MKT_DATE('fd.posted_date')} < ?
         ${marketplace ? "AND fe.marketplace = '" + marketplace + "'" : ''}
-    `).get(startDate, endDateNext) as any;
+    `).get(startDate, endDateNext) as FeesAgg;
 
     const prevOrderFeeData = db.prepare(`
-      SELECT COALESCE(-SUM(fd.amount), 0) as totalFees
+      SELECT ${SIGNED_FEE_TOTAL} as totalFees
       FROM fee_details fd
       JOIN ${FE} fe ON fd.order_id = fe.order_id
       JOIN orders o ON fd.order_id = o.order_id
-      WHERE fd.order_id IS NOT NULL AND fd.order_id != ''
-        AND fe.posted_date >= ? AND fe.posted_date < ? ${MF}
-    `).get(prevStart, startDate) as any;
+      WHERE ${ORDER_FEE_ROWS}
+        AND ${IN_RANGE} ${MF}
+    `).get(prevStart, startDate) as FeesAgg;
 
     const prevServiceFeeData = db.prepare(`
-      SELECT COALESCE(-SUM(fd.amount), 0) as totalFees
+      SELECT ${SIGNED_FEE_TOTAL} as totalFees
       FROM fee_details fd
       JOIN financial_events fe ON fd.financial_event_id = fe.id
-      WHERE (fd.order_id IS NULL OR fd.order_id = '')
-        AND date(fd.posted_date) >= ? AND date(fd.posted_date) < ?
+      WHERE ${SERVICE_FEE_ROWS}
+        AND ${MKT_DATE('fd.posted_date')} >= ? AND ${MKT_DATE('fd.posted_date')} < ?
         ${marketplace ? "AND fe.marketplace = '" + marketplace + "'" : ''}
-    `).get(prevStart, startDate) as any;
+    `).get(prevStart, startDate) as FeesAgg;
 
     // ─── COGS ─────────────────────────────────────────────────────────
     // Net of cross-year return relief (cogs_reversals, dated by refund_date)
     // — mirrors the P&L exactly so Dashboard = P&L parity holds.
     const cogsReversalQ = db.prepare(`
       SELECT COALESCE(SUM(amount), 0) as total FROM cogs_reversals
-      WHERE refund_date >= ? AND refund_date < ? ${MF_R}
+      WHERE ${MKT_DATE('refund_date')} >= ? AND ${MKT_DATE('refund_date')} < ? ${MF_R}
     `);
 
     const cogsData = db.prepare(`
@@ -142,79 +140,66 @@ export async function GET(request: NextRequest) {
       FROM order_items oi
       JOIN ${FE} fe ON oi.order_id = fe.order_id
       JOIN orders o ON oi.order_id = o.order_id
-      WHERE fe.posted_date >= ? AND fe.posted_date < ? ${MF}
-    `).get(startDate, endDateNext) as any;
-    cogsData.totalCogs -= (cogsReversalQ.get(startDate, endDateNext) as any).total;
+      WHERE ${IN_RANGE} ${MF}
+    `).get(startDate, endDateNext) as CogsAgg;
+    cogsData.totalCogs -= (cogsReversalQ.get(startDate, endDateNext) as Total).total;
 
     const prevCogsData = db.prepare(`
       SELECT COALESCE(SUM(oi.cogs_per_unit * oi.quantity), 0) as totalCogs
       FROM order_items oi
       JOIN ${FE} fe ON oi.order_id = fe.order_id
       JOIN orders o ON oi.order_id = o.order_id
-      WHERE fe.posted_date >= ? AND fe.posted_date < ? ${MF}
-    `).get(prevStart, startDate) as any;
-    prevCogsData.totalCogs -= (cogsReversalQ.get(prevStart, startDate) as any).total;
+      WHERE ${IN_RANGE} ${MF}
+    `).get(prevStart, startDate) as CogsAgg;
+    prevCogsData.totalCogs -= (cogsReversalQ.get(prevStart, startDate) as Total).total;
 
     // ─── Refunds ──────────────────────────────────────────────────────
-    // Walmart refunds: only count those settled in recon (matches Walmart Net
-    // Payable). Non-Walmart refunds: count all (Amazon refunds come pre-settled
-    // through Financial Events, eBay refunds come from Fulfillment API at
-    // settlement time).
-    const SETTLED_FILTER = `
-      AND (
-        marketplace != 'walmart'
-        OR EXISTS (
-          SELECT 1 FROM financial_events fe
-          WHERE fe.event_type = 'WalmartRefundEvent'
-            AND fe.order_id = refunds.order_id
-            AND json_extract(fe.raw_data, '$."Amount Type"') = 'Product Price'
-        )
-      )
-    `;
+    // Walmart refunds only once settled in recon — shared gate with the P&L.
+    const SETTLED_FILTER = `AND ${walmartSettledRefund('refunds')}`;
     const refundData = db.prepare(`
       SELECT COALESCE(SUM(refund_amount), 0) as totalRefunds,
         COALESCE(SUM(fee_clawback), 0) as totalClawbacks
-      FROM refunds WHERE refund_date >= ? AND refund_date < ? ${MF_R} ${SETTLED_FILTER}
-    `).get(startDate, endDateNext) as any;
+      FROM refunds WHERE ${MKT_DATE('refund_date')} >= ? AND ${MKT_DATE('refund_date')} < ? ${MF_R} ${SETTLED_FILTER}
+    `).get(startDate, endDateNext) as RefundAgg;
 
     const prevRefundData = db.prepare(`
       SELECT COALESCE(SUM(refund_amount), 0) as totalRefunds,
         COALESCE(SUM(fee_clawback), 0) as totalClawbacks
-      FROM refunds WHERE refund_date >= ? AND refund_date < ? ${MF_R} ${SETTLED_FILTER}
-    `).get(prevStart, startDate) as any;
+      FROM refunds WHERE ${MKT_DATE('refund_date')} >= ? AND ${MKT_DATE('refund_date')} < ? ${MF_R} ${SETTLED_FILTER}
+    `).get(prevStart, startDate) as RefundAgg;
 
     // ─── Reimbursements ───────────────────────────────────────────────
     const reimbData = db.prepare(`
       SELECT COALESCE(SUM(amount), 0) as total
-      FROM reimbursements WHERE reimbursement_date >= ? AND reimbursement_date < ? ${MF_R}
-    `).get(startDate, endDateNext) as any;
+      FROM reimbursements WHERE ${MKT_DATE('reimbursement_date')} >= ? AND ${MKT_DATE('reimbursement_date')} < ? ${MF_R}
+    `).get(startDate, endDateNext) as Total;
 
     const prevReimbData = db.prepare(`
       SELECT COALESCE(SUM(amount), 0) as total
-      FROM reimbursements WHERE reimbursement_date >= ? AND reimbursement_date < ? ${MF_R}
-    `).get(prevStart, startDate) as any;
+      FROM reimbursements WHERE ${MKT_DATE('reimbursement_date')} >= ? AND ${MKT_DATE('reimbursement_date')} < ? ${MF_R}
+    `).get(prevStart, startDate) as Total;
 
     // ─── Other expenses ───────────────────────────────────────────────
     // Business-wide expenses (insurance, subscriptions, etc.) — only counted
     // in the "All Marketplaces" view, matching the P&L's behavior. Per-
     // marketplace views exclude them because they're not attributable to
     // any single channel.
-    const expenseData = marketplace ? { totalExpenses: 0 } : db.prepare(`
+    const expenseData: ExpenseAgg = marketplace ? { totalExpenses: 0 } : db.prepare(`
       SELECT COALESCE(SUM(amount), 0) as totalExpenses
       FROM expenses WHERE date >= ? AND date < ?
-    `).get(startDate, endDateNext) as any;
-    const prevExpenseData = marketplace ? { totalExpenses: 0 } : db.prepare(`
+    `).get(startDate, endDateNext) as ExpenseAgg;
+    const prevExpenseData: ExpenseAgg = marketplace ? { totalExpenses: 0 } : db.prepare(`
       SELECT COALESCE(SUM(amount), 0) as totalExpenses
       FROM expenses WHERE date >= ? AND date < ?
-    `).get(prevStart, startDate) as any;
+    `).get(prevStart, startDate) as ExpenseAgg;
 
     // ─── Chart data (daily/weekly/monthly depending on range) ─────────
     const rangeDays = Math.ceil((new Date(endDateNext).getTime() - new Date(startDate).getTime()) / 86400000);
     // daily for ≤31 days, weekly for ≤90, monthly for longer
     const chartGrouping = rangeDays <= 31 ? 'daily' : rangeDays <= 90 ? 'weekly' : 'monthly';
-    const chartGroupExpr = chartGrouping === 'daily' ? "date(fe.posted_date)"
-      : chartGrouping === 'weekly' ? "date(fe.posted_date, 'weekday 0', '-6 days')"
-      : "strftime('%Y-%m-01', fe.posted_date)";
+    const chartGroupExpr = chartGrouping === 'daily' ? MKT_DATE('fe.posted_date')
+      : chartGrouping === 'weekly' ? MKT_WEEK_START('fe.posted_date')
+      : MKT_MONTH_START('fe.posted_date');
 
     const dailyRevenue = db.prepare(`
       SELECT ${chartGroupExpr} as day, SUM(oi.total_price) as revenue,
@@ -222,24 +207,24 @@ export async function GET(request: NextRequest) {
       FROM order_items oi
       JOIN ${FE} fe ON oi.order_id = fe.order_id
       JOIN orders o ON oi.order_id = o.order_id
-      WHERE fe.posted_date >= ? AND fe.posted_date < ? ${MF}
+      WHERE ${IN_RANGE} ${MF}
       GROUP BY ${chartGroupExpr} ORDER BY day
-    `).all(startDate, endDateNext) as any[];
+    `).all(startDate, endDateNext) as ChartRow[];
 
     const dailyOrderFees = db.prepare(`
       SELECT ${chartGroupExpr} as day, -SUM(fd.amount) as fees
       FROM fee_details fd
       JOIN ${FE} fe ON fd.order_id = fe.order_id
       JOIN orders o ON fd.order_id = o.order_id
-      WHERE fd.order_id IS NOT NULL AND fd.order_id != ''
-        AND fe.posted_date >= ? AND fe.posted_date < ? ${MF}
+      WHERE ${ORDER_FEE_ROWS}
+        AND ${IN_RANGE} ${MF}
       GROUP BY ${chartGroupExpr}
-    `).all(startDate, endDateNext) as any[];
+    `).all(startDate, endDateNext) as { day: string; fees: number }[];
 
     const feesByDay: Record<string, number> = {};
     for (const row of dailyOrderFees) feesByDay[row.day] = row.fees;
 
-    const chartData = dailyRevenue.map((d: any) => ({
+    const chartData = dailyRevenue.map((d) => ({
       day: d.day, revenue: d.revenue,
       profit: d.revenue - d.cogs - (feesByDay[d.day] || 0),
       grouping: chartGrouping,
@@ -255,11 +240,11 @@ export async function GET(request: NextRequest) {
       JOIN orders o ON oi.order_id = o.order_id
       LEFT JOIN products p ON oi.asin = p.asin
       LEFT JOIN products p2 ON oi.sku = p2.asin
-      WHERE fe.posted_date >= ? AND fe.posted_date < ? ${MF}
+      WHERE ${IN_RANGE} ${MF}
       GROUP BY oi.asin
       ORDER BY (SUM(oi.total_price) - COALESCE(SUM(oi.cogs_per_unit * oi.quantity), 0)) DESC
       LIMIT 5
-    `).all(startDate, endDateNext) as any[];
+    `).all(startDate, endDateNext) as ProductRow[];
 
     const worstProducts = db.prepare(`
       SELECT COALESCE(p.name, p2.name, oi.asin) as name, oi.asin, COALESCE(p.category, p2.category) as category,
@@ -270,12 +255,12 @@ export async function GET(request: NextRequest) {
       JOIN orders o ON oi.order_id = o.order_id
       LEFT JOIN products p ON oi.asin = p.asin
       LEFT JOIN products p2 ON oi.sku = p2.asin
-      WHERE fe.posted_date >= ? AND fe.posted_date < ? ${MF}
+      WHERE ${IN_RANGE} ${MF}
         AND oi.cogs_per_unit > 0
       GROUP BY oi.asin
       ORDER BY (SUM(oi.total_price) - COALESCE(SUM(oi.cogs_per_unit * oi.quantity), 0)) ASC
       LIMIT 5
-    `).all(startDate, endDateNext) as any[];
+    `).all(startDate, endDateNext) as ProductRow[];
 
     // ─── Expense breakdown ────────────────────────────────────────────
     const orderFeeBreakdown = db.prepare(`
@@ -283,20 +268,20 @@ export async function GET(request: NextRequest) {
       FROM fee_details fd
       JOIN ${FE} fe ON fd.order_id = fe.order_id
       JOIN orders o ON fd.order_id = o.order_id
-      WHERE fd.order_id IS NOT NULL AND fd.order_id != ''
-        AND fe.posted_date >= ? AND fe.posted_date < ? ${MF}
+      WHERE ${ORDER_FEE_ROWS}
+        AND ${IN_RANGE} ${MF}
       GROUP BY fd.fee_category
-    `).all(startDate, endDateNext) as any[];
+    `).all(startDate, endDateNext) as CategoryTotal[];
 
     const serviceFeeBreakdown = db.prepare(`
       SELECT COALESCE(fd.fee_category, 'Other') as category, -SUM(fd.amount) as total
       FROM fee_details fd
       JOIN financial_events fe ON fd.financial_event_id = fe.id
-      WHERE (fd.order_id IS NULL OR fd.order_id = '')
-        AND date(fd.posted_date) >= ? AND date(fd.posted_date) < ?
+      WHERE ${SERVICE_FEE_ROWS}
+        AND ${MKT_DATE('fd.posted_date')} >= ? AND ${MKT_DATE('fd.posted_date')} < ?
         ${marketplace ? "AND fe.marketplace = '" + marketplace + "'" : ''}
       GROUP BY fd.fee_category
-    `).all(startDate, endDateNext) as any[];
+    `).all(startDate, endDateNext) as CategoryTotal[];
 
     const categoryMap: Record<string, number> = {};
     for (const row of [...orderFeeBreakdown, ...serviceFeeBreakdown]) {
@@ -319,7 +304,7 @@ export async function GET(request: NextRequest) {
         SELECT sku, buy_price FROM inventory_ledger
         WHERE id IN (SELECT MAX(id) FROM inventory_ledger GROUP BY sku)
       ) il ON li.sku = il.sku
-    `).get() as any;
+    `).get() as { totalValue: number; totalUnits: number };
 
     // ─── Calculate totals ─────────────────────────────────────────────
     const totalRevenue = salesData.totalRevenue;
@@ -345,8 +330,8 @@ export async function GET(request: NextRequest) {
     const prevNetRefunds = prevRefundData.totalRefunds;
     const prevProfit = prevRevenue - prevCogs - prevAllFees - prevShippingCost - prevExpenseData.totalExpenses - prevNetRefunds + prevReimbData.total;
 
-    const roi = totalCogs > 0 ? (totalProfit / totalCogs) * 100 : 0;
-    const prevRoi = prevCogs > 0 ? (prevProfit / prevCogs) * 100 : 0;
+    const roi = calculateROI(totalProfit, totalCogs);
+    const prevRoi = calculateROI(prevProfit, prevCogs);
 
     // ─── In-flight: orders not yet recognized in P&L (regardless of dateBasis) ──
     // pending = customer placed but not shipped (Pending/Unshipped)
@@ -359,7 +344,7 @@ export async function GET(request: NextRequest) {
       FROM orders o
       LEFT JOIN order_items oi ON oi.order_id = o.order_id
       WHERE o.status IN ('Pending', 'Unshipped') ${pendingMF}
-    `).get() as any;
+    `).get() as { orders: number; revenue: number };
 
     // Limit to last 14 days — older shipped-no-event orders are stuck anomalies, not actionable.
     // Amazon's Delivery Date Policy holds funds ~7-10 days from ship (≈ delivery + 7-day cushion).
@@ -382,7 +367,7 @@ export async function GET(request: NextRequest) {
         )) as latestRelease
       FROM orders o
       JOIN order_items oi ON oi.order_id = o.order_id
-      LEFT JOIN ${FE_POSTED} fe ON fe.order_id = o.order_id
+      LEFT JOIN ${ORDER_POSTED_DATE} fe ON fe.order_id = o.order_id
       LEFT JOIN (
         SELECT order_id, MAX(maturity_date) as maturity_date FROM finances_transactions_v2
         WHERE transaction_type = 'Shipment' AND order_id IS NOT NULL
@@ -392,7 +377,7 @@ export async function GET(request: NextRequest) {
         AND fe.order_id IS NULL
         AND o.purchase_date >= ?
         ${pendingMF}
-    `).get(DDP_DAYS, DDP_DAYS, recentCutoff) as any;
+    `).get(DDP_DAYS, DDP_DAYS, recentCutoff) as { orders: number; revenue: number; cogs: number; earliestRelease: string | null; latestRelease: string | null };
 
     const earliestRelease = shippedNotPostedData.earliestRelease || null;
     const latestRelease = shippedNotPostedData.latestRelease || null;
@@ -409,7 +394,7 @@ export async function GET(request: NextRequest) {
       WHERE o.purchase_date >= ?
         AND o.status IN ('Shipped', 'PartiallyShipped')
         ${pendingMF}
-    `).get(aovCutoff) as any;
+    `).get(aovCutoff) as { revenue: number; orders: number };
     const avgOrderValueCents = aovData.orders > 0 ? Math.round(aovData.revenue / aovData.orders) : 0;
     const pendingEstimateCents = pendingData.orders * avgOrderValueCents;
 
@@ -451,7 +436,7 @@ export async function GET(request: NextRequest) {
     });
   } catch (error) {
     db.close();
-    console.error('Dashboard API error:', error);
+    log.error('Dashboard API error:', error);
     return NextResponse.json({ error: 'Failed to load dashboard data' }, { status: 500 });
   }
 }

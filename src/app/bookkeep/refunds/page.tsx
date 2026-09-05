@@ -1,13 +1,14 @@
 'use client';
 
-import { useEffect, useState, useCallback, useMemo } from 'react';
+import { useState, useCallback, useMemo, Fragment } from 'react';
 import { type ColumnDef } from '@tanstack/react-table';
 import StatCard from '@/components/ui/StatCard';
 import PageHeader from '@/components/ui/PageHeader';
-import { type DateRange } from '@/components/ui/DateRangePicker';
+import {type DateRange } from '@/components/ui/DateRangePicker';
 import { useFilters } from '@/lib/useFilters';
 import DataTable from '@/components/tables/DataTable';
 import { formatCurrency, formatDate } from '@/lib/formatters';
+import { useQuery } from '@/lib/useQuery';
 
 interface RefundRow {
   refundDate: string;
@@ -22,28 +23,97 @@ interface RefundRow {
   netImpact: number;
   marketplace?: string;
   settled?: boolean;
-  disposition?: 'rtv' | 'restocked' | 'pending' | 'in-pipeline' | 'claim-due' | null;
+  disposition?: 'rtv' | 'restocked' | 'pending' | 'in-pipeline' | 'claim-due' | 'reimbursed' | null;
   cashImpact?: 'held-fund' | 'real' | 'unknown';
   shipmentStatus?: string | null;
   shipmentMaturity?: string | null;
+  returnOrderId?: string | null;
+  customerOrderId?: string | null;
+  walmartItemId?: string | null;
+  refundId?: number;
+  claimId?: number | null;
+  claimStatus?: string | null;
+  claimFiledAt?: string | null;
 }
 
 export default function RefundsPage() {
-  const [rows, setRows] = useState<RefundRow[]>([]);
-  const [totals, setTotals] = useState<any>(null);
-  const [loading, setLoading] = useState(true);
+  // Optimistic claim-status edits, keyed by claimId; cleared when a re-fetch lands.
+  const [patches, setPatches] = useState<Record<string, Partial<RefundRow>>>({});
+  const [showClaimDue, setShowClaimDue] = useState(false);
+  const [openCase, setOpenCase] = useState<string | null>(null);
+  const [copiedField, setCopiedField] = useState<string | null>(null);
+  const [savingClaim, setSavingClaim] = useState<number | null>(null);
   const { dateRange, setDateRange, marketplace, setMarketplace, marketplaceParam } = useFilters();
 
-  const fetchData = useCallback(async () => {
-    setLoading(true);
-    const res = await fetch(`/api/data/refunds?startDate=${dateRange.startDate}&endDate=${dateRange.endDate}${marketplaceParam}`);
-    const data = await res.json();
-    setRows(data.items || data.rows || []);
-    setTotals(data.totals || null);
-    setLoading(false);
-  }, [dateRange, marketplace]);
+  const { data, loading, reload: fetchData } = useQuery<{ items?: RefundRow[]; rows?: RefundRow[]; totals?: any }>(`/api/data/refunds?startDate=${dateRange.startDate}&endDate=${dateRange.endDate}${marketplaceParam}`);
+  const rows: RefundRow[] = (data?.items || data?.rows || []).map(x =>
+    x.claimId != null && patches[String(x.claimId)] ? { ...x, ...patches[String(x.claimId)] } : x
+  );
+  const totals: any = data?.totals || null;
 
-  useEffect(() => { fetchData(); }, [fetchData]);
+  // The claim-due banner totals are computed by the API over this same `items`
+  // array, so filtering here yields exactly the rows behind the headline number.
+  const claimDueRows = useMemo(() => rows.filter(r => r.disposition === 'claim-due'), [rows]);
+  const claimFiled = useMemo(
+    () => claimDueRows.filter(r => r.claimStatus === 'filed' || r.claimStatus === 'received'), [claimDueRows]);
+  const claimOutstanding = useMemo(
+    () => claimDueRows.filter(r => !(r.claimStatus === 'filed' || r.claimStatus === 'received')), [claimDueRows]);
+
+  // Walmart publishes NO deep link that opens a pre-filled support case — its
+  // own WFS dispute guide says only "contact Seller Support to create a case".
+  // So the closest thing to a direct link is: open the exact order in Seller
+  // Center, and put every identifier the case form asks for on the clipboard.
+  const sellerCenterOrderUrl = (orderId: string) =>
+    `https://seller.walmart.com/orders/details?purchaseOrderId=${encodeURIComponent(orderId)}`;
+
+  // Walmart's "Seller Has Not Received Return" case form has DISCRETE fields —
+  // Subject, Purchase order number*, RMA, Item ID, Description* — so a single
+  // blob is the wrong shape. Each field is offered separately, and the
+  // description carries only the argument (the identifiers have their own
+  // fields and repeating them just eats the description limit).
+  const buildDescription = useCallback((r: RefundRow) => {
+    const days = Math.floor((Date.now() - new Date(r.refundDate).getTime()) / 86400000);
+    const amt = formatCurrency(r.refundAmount);
+    return `Walmart deducted ${amt} from me for this WFS customer return on ${formatDate(r.refundDate)} (${days} days ago), but the returned unit was never received back into my sellable inventory. There is no RTV fee for it, it never reappeared in my WFS inventory, it has not resold, and no reimbursement has been issued. Requesting reimbursement of ${amt}.`;
+  }, []);
+
+  const caseFields = useCallback((r: RefundRow) => ([
+    { key: 'subject', label: 'Subject line', required: true, value: 'Seller Has Not Received Return' },
+    { key: 'po', label: 'Purchase order number', required: true, value: r.orderId },
+    { key: 'rma', label: 'RMA', required: false, value: r.returnOrderId || '' },
+    { key: 'item', label: 'Item ID', required: false, value: r.walmartItemId || '' },
+    { key: 'desc', label: 'Description of the issue', required: true, value: buildDescription(r) },
+  ]), [buildDescription]);
+
+  const copyField = useCallback(async (id: string, value: string) => {
+    try {
+      await navigator.clipboard.writeText(value);
+      setCopiedField(id);
+      setTimeout(() => setCopiedField(c => (c === id ? null : c)), 2000);
+    } catch { setCopiedField(null); }
+  }, []);
+
+  // Writes through to walmart_dispute_candidates — the same record the Walmart
+  // Disputes page reads — so a claim marked filed here shows as filed there.
+  const setClaimStatus = useCallback(async (r: RefundRow, action: 'file' | 'reopen' | 'received') => {
+    if (!r.claimId) return;
+    setSavingClaim(r.claimId);
+    try {
+      const res = await fetch('/api/data/walmart-dispute-candidates', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: r.claimId, action }),
+      });
+      if (!res.ok) throw new Error('save failed');
+      const nextStatus = action === 'file' ? 'filed' : action === 'received' ? 'received' : 'pending';
+      setPatches(prev => ({ ...prev, [String(r.claimId)]: { claimStatus: nextStatus, claimFiledAt: action === 'file' ? new Date().toISOString() : null } }));
+    } catch {
+      // Re-pull rather than leave the checkbox lying about what was saved.
+      fetchData();
+    } finally {
+      setSavingClaim(null);
+    }
+  }, [fetchData]);
 
   const columns = useMemo<ColumnDef<RefundRow, any>[]>(() => [
     { id: 'refundDate', header: 'Date', accessorKey: 'refundDate', cell: ({ getValue }) => <span className="font-mono text-sm text-text-secondary">{formatDate(getValue() as string)}</span>, size: 110 },
@@ -151,6 +221,14 @@ export default function RefundsPage() {
             </span>
           );
         }
+        if (d === 'reimbursed') {
+          return (
+            <span className="text-[10px] font-semibold px-2 py-0.5 rounded bg-positive-muted text-positive"
+              title="Walmart already paid you for this loss (lost-return adjustment, WFS lost inventory, or a dispute settlement). Claiming again would be a duplicate.">
+              REIMBURSED
+            </span>
+          );
+        }
         if (d === 'restocked') {
           // A unit the buyer called defective/not-as-described going back into
           // sellable stock is the next return waiting to happen — flag it.
@@ -231,15 +309,215 @@ export default function RefundsPage() {
         </div>
       )}
       {totals?.claimDueCount > 0 && (
-        <div className="mb-6 bg-bg-surface border border-negative/40 rounded-lg p-4">
-          <div className="flex items-center justify-between mb-1">
-            <div className="text-[11px] uppercase tracking-wider text-negative">WFS claims to file — returns never returned to you</div>
-            <div className="text-[10px] text-text-tertiary">{totals.claimDueCount} return{totals.claimDueCount === 1 ? '' : 's'}</div>
-          </div>
-          <div className="text-2xl font-mono text-negative">{formatCurrency(totals?.claimDueImpact || 0)}</div>
-          <div className="text-xs text-text-tertiary mt-1">
-            Walmart deducted you for these returns 60+ days ago — past their own auto-reimbursement window for lost returns — and the units never came back: no RTV, no restock, no resale, no reimbursement. Open a Seller Support case for each. They&apos;re also tracked with file/dismiss status on the Walmart Disputes page.
-          </div>
+        <div className="mb-6 bg-bg-surface border border-negative/40 rounded-lg overflow-hidden">
+          <button
+            type="button"
+            onClick={() => setShowClaimDue(v => !v)}
+            className="w-full text-left p-4 hover:bg-bg-elevated/40 transition-colors"
+            aria-expanded={showClaimDue}
+          >
+            <div className="flex items-center justify-between mb-1">
+              <div className="text-[11px] uppercase tracking-wider text-negative">WFS claims to file — returns never returned to you</div>
+              <div className="text-[10px] text-text-tertiary">
+                {claimOutstanding.length} to file{claimFiled.length > 0 ? ` · ${claimFiled.length} filed` : ''}
+              </div>
+            </div>
+            <div className="flex items-center gap-2">
+              {/* Headline counts only what's still outstanding — a filed claim
+                  is no longer a to-do, so leaving it in the number would keep
+                  the banner shouting after the work is done. */}
+              <div className="text-2xl font-mono text-negative">
+                {formatCurrency(claimOutstanding.reduce((a, r) => a + r.refundAmount, 0))}
+              </div>
+              {claimFiled.length > 0 && (
+                <span className="text-[10px] font-semibold px-2 py-0.5 rounded bg-positive-muted text-positive">
+                  {formatCurrency(claimFiled.reduce((a, r) => a + r.refundAmount, 0))} FILED
+                </span>
+              )}
+              <span className="text-[10px] font-semibold px-2 py-0.5 rounded bg-negative/20 text-negative">
+                {showClaimDue ? 'HIDE' : 'SHOW'} {claimDueRows.length} RETURN{claimDueRows.length === 1 ? '' : 'S'}
+                <span className="ml-1">{showClaimDue ? '\u25B2' : '\u25BC'}</span>
+              </span>
+            </div>
+            <div className="text-xs text-text-tertiary mt-1">
+              Walmart deducted you for these returns 60+ days ago and the unit never came back: no return-to-vendor, no restock, no resale, and no matching loss reimbursement. Returned units are matched per-GTIN and allocated one-to-one, so if Walmart sent back 1 of 2 returns of the same item, only the other one is listed. Tracked with file/dismiss status on the Walmart Disputes page.
+            </div>
+            <div className="text-[11px] text-amber-400/80 mt-1">
+              RTV evidence comes from the Seller Center → Payments → Services Fees export (RC_InventoryRTVFee) in data/walmart-service-fees/ — the recon feed&apos;s RTV rows are period totals with no item attribution. Re-export and re-import before filing; a return sent back after your last export still shows here. Recon-sourced WFS Refund / Lost Inventory credits carry no SKU either, so they cannot clear a claim automatically.
+            </div>
+          </button>
+          {showClaimDue && (
+            <div className="border-t border-negative/30">
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="text-[11px] uppercase tracking-wider text-text-tertiary border-b border-border-subtle">
+                      <th className="text-left font-medium px-3 py-2 w-10">Filed</th>
+                      <th className="text-left font-medium px-4 py-2">Refund date</th>
+                      <th className="text-left font-medium px-4 py-2">Order</th>
+                      <th className="text-left font-medium px-4 py-2">RMA / Customer order #</th>
+                      <th className="text-left font-medium px-4 py-2">Product</th>
+                      <th className="text-left font-medium px-4 py-2">Reason</th>
+                      <th className="text-right font-medium px-4 py-2">Refund</th>
+                      <th className="text-right font-medium px-4 py-2">Days</th>
+                      <th className="text-right font-medium px-4 py-2">File case</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {claimDueRows.map((r, i) => {
+                      const days = Math.floor((Date.now() - new Date(r.refundDate).getTime()) / 86400000);
+                      const rowKey = `${r.orderId}-${r.sku}-${i}`;
+                      const filed = r.claimStatus === 'filed' || r.claimStatus === 'received';
+                      return (
+                      <Fragment key={rowKey}>
+                        <tr className={`border-b border-border-subtle/60 hover:bg-bg-elevated/30 ${filed ? 'opacity-50' : ''}`}>
+                          <td className="px-3 py-2">
+                            <input
+                              type="checkbox"
+                              checked={filed}
+                              disabled={!r.claimId || savingClaim === r.claimId}
+                              onChange={() => setClaimStatus(r, filed ? 'reopen' : 'file')}
+                              title={filed
+                                ? `Filed${r.claimFiledAt ? ` ${formatDate(r.claimFiledAt)}` : ''} — uncheck to reopen`
+                                : 'Mark this claim as filed with Walmart'}
+                              className="w-4 h-4 accent-current text-negative cursor-pointer disabled:cursor-not-allowed"
+                            />
+                          </td>
+                          <td className={`px-4 py-2 font-mono whitespace-nowrap ${filed ? 'text-text-tertiary line-through' : 'text-text-secondary'}`}>{formatDate(r.refundDate)}</td>
+                          <td className="px-4 py-2 font-mono whitespace-nowrap">
+                            <a href={sellerCenterOrderUrl(r.orderId)} target="_blank" rel="noopener noreferrer"
+                              className="text-accent hover:underline" title="Open this order in Walmart Seller Center">
+                              {r.orderId} ↗
+                            </a>
+                            <div>
+                              <a href={`/lookup/${r.orderId}`} className="text-xs text-text-tertiary hover:text-text-secondary">
+                                view in FlipLedger
+                              </a>
+                            </div>
+                          </td>
+                          <td className="px-4 py-2 font-mono text-xs whitespace-nowrap">
+                            {r.returnOrderId
+                              ? <div className="text-text-primary" title="Return Order ID — Walmart's RMA number for this return">{r.returnOrderId}</div>
+                              : <div className="text-text-tertiary" title="Not captured — this return predates Walmart's ~6-month Returns API window">RMA n/a</div>}
+                            <div className="text-text-tertiary">{r.customerOrderId || '—'}</div>
+                          </td>
+                          <td className="px-4 py-2">
+                            <div className="text-text-primary truncate max-w-[240px]">{r.productName || r.asin || r.sku}</div>
+                            <div className="text-xs text-text-tertiary font-mono">{r.sku}</div>
+                          </td>
+                          <td className="px-4 py-2 text-text-secondary">{r.reason}</td>
+                          <td className="px-4 py-2 text-right font-mono text-negative whitespace-nowrap">{formatCurrency(r.refundAmount)}</td>
+                          <td className="px-4 py-2 text-right font-mono text-text-secondary whitespace-nowrap">{days}d</td>
+                          <td className="px-4 py-2 text-right whitespace-nowrap">
+                            <button
+                              type="button"
+                              onClick={() => setOpenCase(c => (c === rowKey ? null : rowKey))}
+                              title="Show the exact values for Walmart's case form fields"
+                              className={`text-[10px] font-semibold px-2 py-1 rounded transition-colors ${
+                                openCase === rowKey
+                                  ? 'bg-negative/20 text-negative'
+                                  : 'bg-bg-elevated text-text-secondary hover:text-text-primary'
+                              }`}
+                            >
+                              CASE FIELDS {openCase === rowKey ? '\u25B2' : '\u25BC'}
+                            </button>
+                            <a
+                              href="https://seller.walmart.com/help"
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              title="Open Walmart Seller Support to create the case"
+                              className="ml-1 text-[10px] font-semibold px-2 py-1 rounded bg-negative/15 text-negative hover:bg-negative/25 transition-colors inline-block"
+                            >
+                              OPEN ↗
+                            </a>
+                          </td>
+                        </tr>
+                        {openCase === rowKey && (
+                          <tr className="border-b border-border-subtle/60 bg-bg-elevated/20">
+                            <td colSpan={9} className="px-4 py-3">
+                              <div className="text-[11px] uppercase tracking-wider text-text-tertiary mb-2">
+                                Walmart case form — &quot;Seller Has Not Received Return&quot;
+                              </div>
+                              <div className="space-y-2">
+                                {caseFields(r).map(f => {
+                                  const id = `${rowKey}-${f.key}`;
+                                  const empty = !f.value;
+                                  return (
+                                    <div key={f.key} className="flex items-start gap-2">
+                                      <div className="w-44 shrink-0 text-xs text-text-tertiary pt-1">
+                                        {f.label}{f.required && <span className="text-negative">*</span>}
+                                      </div>
+                                      <div className={`flex-1 text-xs rounded px-2 py-1 border border-border-subtle ${empty ? 'text-text-tertiary italic' : 'text-text-primary font-mono'}`}>
+                                        {empty ? 'not available — optional field, leave blank' : f.value}
+                                      </div>
+                                      <button
+                                        type="button"
+                                        disabled={empty}
+                                        onClick={() => copyField(id, f.value)}
+                                        className={`text-[10px] font-semibold px-2 py-1 rounded shrink-0 transition-colors ${
+                                          empty ? 'bg-bg-elevated/50 text-text-tertiary cursor-not-allowed'
+                                            : copiedField === id ? 'bg-positive-muted text-positive'
+                                            : 'bg-bg-elevated text-text-secondary hover:text-text-primary'
+                                        }`}
+                                      >
+                                        {copiedField === id ? 'COPIED ✓' : 'COPY'}
+                                      </button>
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                              <div className="text-xs text-text-tertiary mt-2">
+                                Leave &quot;What best describes your Issue?&quot; on the option matching <span className="text-text-secondary">returned item not processed / not received</span>. Attach the Customer Returns Report as evidence.
+                              </div>
+                            </td>
+                          </tr>
+                        )}
+                      </Fragment>
+                      );
+                    })}
+                  </tbody>
+                  <tfoot>
+                    <tr className="border-t border-negative/30">
+                      <td className="px-4 py-2 text-[11px] uppercase tracking-wider text-text-tertiary" colSpan={6}>
+                        {claimOutstanding.length} still to file
+                        {claimFiled.length > 0 && (
+                          <span className="ml-2 text-positive normal-case tracking-normal">
+                            · {claimFiled.length} filed ({formatCurrency(claimFiled.reduce((a, r) => a + r.refundAmount, 0))})
+                          </span>
+                        )}
+                      </td>
+                      <td className="px-4 py-2 text-right font-mono text-negative">
+                        {formatCurrency(claimOutstanding.reduce((a, r) => a + r.refundAmount, 0))}
+                      </td>
+                      <td colSpan={2} />
+                    </tr>
+                  </tfoot>
+                </table>
+              </div>
+              <div className="px-4 py-3 border-t border-border-subtle">
+                <div className="flex flex-wrap items-center gap-2">
+                  <a href="/bookkeep/walmart-disputes" className="text-xs px-3 py-1.5 rounded bg-bg-elevated text-text-secondary hover:text-text-primary transition-colors">
+                    Track file/dismiss status →
+                  </a>
+                  <a href="https://seller.walmart.com/help" target="_blank" rel="noopener noreferrer"
+                    className="text-xs px-3 py-1.5 rounded bg-negative/15 text-negative hover:bg-negative/25 transition-colors">
+                    Help → Contact Support ↗
+                  </a>
+                  <a href="https://seller.walmart.com/wfsLite/reports" target="_blank" rel="noopener noreferrer"
+                    className="text-xs px-3 py-1.5 rounded bg-bg-elevated text-text-secondary hover:text-text-primary transition-colors">
+                    Customer Returns Report ↗
+                  </a>
+                  <a href="https://seller.walmart.com/returns-reimbursements/dashboard" target="_blank" rel="noopener noreferrer"
+                    className="text-xs px-3 py-1.5 rounded bg-bg-elevated text-text-secondary hover:text-text-primary transition-colors">
+                    Returns dashboard ↗
+                  </a>
+                </div>
+                <div className="text-xs text-text-tertiary mt-2">
+                  Walmart has no URL that opens a pre-filled case — their WFS dispute guide only says &quot;contact Seller Support to create a case,&quot; so OPEN drops you at Help → Contact Support. Pick the <span className="text-text-secondary">&quot;Seller Has Not Received Return&quot;</span> topic, then use CASE FIELDS on a row to copy each form field individually. Walmart allows <span className="text-text-secondary">one case per order</span>, and asks you to attach the Customer Returns Report as evidence.
+                </div>
+              </div>
+            </div>
+          )}
         </div>
       )}
       <DataTable data={rows} columns={columns} searchPlaceholder="Search by order ID, product, or reason..." />

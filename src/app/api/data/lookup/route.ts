@@ -5,8 +5,7 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-import Database from 'better-sqlite3';
-import path from 'path';
+import { openDb } from '@/lib/db-conn';
 
 interface LookupResult {
   type: 'order' | 'reimbursement' | 'product' | 'refund' | 'batch';
@@ -27,8 +26,7 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ query: q, results: [] });
   }
 
-  const dbPath = path.join(process.cwd(), 'data', 'flipledger.db');
-  const db = new Database(dbPath, { readonly: true });
+  const db = openDb({ readonly: true });
 
   try {
     const like = `%${q}%`;

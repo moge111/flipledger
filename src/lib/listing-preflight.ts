@@ -23,7 +23,6 @@
  * others (the same exclude-and-proceed philosophy as the send flow).
  */
 import Database from 'better-sqlite3';
-import path from 'path';
 import { spApiRequest } from '@/lib/sp-api/auth';
 import {
   getSellerId,
@@ -34,12 +33,12 @@ import {
 } from '@/lib/sp-api/listingsItems';
 import { getPrepDetails, setPrepDetails } from '@/lib/sp-api/inboundPlansV2';
 import type { SPAPICredentials } from '@/lib/sp-api/types';
+import { openDb } from '@/lib/db-conn';
+import { createLogger } from '@/lib/log';
 
-function getDb() {
-  const db = new Database(process.env.FLIPLEDGER_DB_PATH || path.join(process.cwd(), 'data', 'flipledger.db'));
-  db.pragma('journal_mode = WAL');
-  return db;
-}
+const log = createLogger('listing-preflight');
+
+const getDb = () => openDb();
 
 function getAmazonCredentials(db: Database.Database): SPAPICredentials | null {
   const rows = db.prepare('SELECT key, value FROM settings').all() as { key: string; value: string }[];
@@ -226,7 +225,7 @@ export async function preflightBatch(batchId: number): Promise<{
           detail.restriction = await checkRestriction(creds, sellerId, item.asin, item.condition);
         } catch (err) {
           // Leave prior restriction info; gating is best-effort.
-          console.warn(`[preflight] restriction check failed for ${item.sku}:`, String(err));
+          log.warn(`restriction check failed for ${item.sku}:`, String(err));
         }
       }
 
@@ -238,7 +237,7 @@ export async function preflightBatch(batchId: number): Promise<{
         // limitations". Surface the badge and stop.
         const gated = detail.restriction && detail.restriction.status !== 'OK';
 
-        let listing = fnsku ? null : await getListing(creds, sellerId, item.sku);
+        const listing = fnsku ? null : await getListing(creds, sellerId, item.sku);
         if (fnsku) {
           // Already known inbound-ready — no need to re-poll Amazon.
           status = 'READY';
@@ -309,7 +308,7 @@ export async function preflightBatch(batchId: number): Promise<{
       }
     } catch (err) {
       // Network/API error on this item — keep whatever we knew, mark PENDING.
-      console.warn(`[preflight] check failed for ${item.sku}:`, String(err));
+      log.warn(`check failed for ${item.sku}:`, String(err));
       status = fnsku ? 'READY' : 'PENDING';
     }
 
@@ -380,11 +379,11 @@ export async function preflightBatch(batchId: number): Promise<{
             prepCategory: 'NONE',
             prepTypes: ['ITEM_NO_PREP'],
           })));
-          console.log(`[preflight] batch ${batchId}: prep classification fired for ${unknown.length} MSKU(s)` +
+          log.info(`batch ${batchId}: prep classification fired for ${unknown.length} MSKU(s)` +
             (res.skipped.length > 0 ? ` (${res.skipped.length} already Amazon-classified: ${res.skipped.join(', ')})` : ''));
         }
       } catch (err) {
-        console.warn(`[preflight] prep read/set failed (non-fatal):`, String(err));
+        log.warn(`prep read/set failed (non-fatal):`, String(err));
       }
     }
   }

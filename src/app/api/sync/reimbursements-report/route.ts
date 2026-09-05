@@ -6,14 +6,13 @@
  * window updates rows by reimbursement_id rather than duplicating.
  */
 import { NextRequest, NextResponse } from 'next/server';
-import Database from 'better-sqlite3';
 import path from 'path';
 import { syncReimbursementsReport } from '@/lib/sp-api/reimbursementsReport';
 import type { SPAPICredentials } from '@/lib/sp-api/types';
+import { openDb } from '@/lib/db-conn';
 
 function getCredentials(): SPAPICredentials | null {
-  const dbPath = path.join(process.cwd(), 'data', 'flipledger.db');
-  const db = new Database(dbPath, { readonly: true });
+  const db = openDb({ readonly: true });
   db.pragma('journal_mode = WAL');
   const rows = db.prepare('SELECT key, value FROM settings').all() as { key: string; value: string }[];
   db.close();
@@ -45,7 +44,7 @@ export async function POST(req: NextRequest) {
     const result = await syncReimbursementsReport(creds, startDate, endDate);
 
     const dbPath = path.join(process.cwd(), 'data', 'flipledger.db');
-    const db = new Database(dbPath);
+    const db = openDb();
     db.pragma('journal_mode = WAL');
     db.prepare(`
       INSERT INTO settings (key, value) VALUES ('reimbursements_report_last_sync', ?)

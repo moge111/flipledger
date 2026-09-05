@@ -9,6 +9,9 @@ const eslintConfig = defineConfig([
   globalIgnores([
     // Default ignores of eslint-config-next:
     ".next/**",
+    // Any moved-aside build cache (e.g. `.next.old`) — a stale 8.6 GB copy once
+    // made `npm run lint` report 46K bogus problems.
+    ".next*/**",
     "out/**",
     "build/**",
     "next-env.d.ts",

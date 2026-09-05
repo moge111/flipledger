@@ -1,8 +1,8 @@
 'use client';
 
-import { useEffect, useState, useCallback } from 'react';
+import {useState, useMemo } from 'react';
 import StatCard from '@/components/ui/StatCard';
-import DateRangePicker, { type DateRange } from '@/components/ui/DateRangePicker';
+import DateRangePicker, {type DateRange } from '@/components/ui/DateRangePicker';
 import MarketplaceFilter from '@/components/ui/MarketplaceFilter';
 import { useFilters } from '@/lib/useFilters';
 import { formatCurrency, centsToDollars, formatNumber } from '@/lib/formatters';
@@ -10,6 +10,7 @@ import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip,
   ResponsiveContainer, PieChart, Pie, Cell, Legend
 } from 'recharts';
+import { useQuery } from '@/lib/useQuery';
 
 interface DashboardData {
   stats: {
@@ -74,68 +75,41 @@ interface DayDetail {
 }
 
 export default function Dashboard() {
-  const [data, setData] = useState<DashboardData | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [dayDetails, setDayDetails] = useState<DayDetail[]>([]);
-  const [dayRefunds, setDayRefunds] = useState<any[]>([]);
-  const [dayDetailsLoading, setDayDetailsLoading] = useState(false);
   const [selectedDay, setSelectedDay] = useState<string | null>(null);
   const [showInFlight, setShowInFlight] = useState(false);
   const [inFlightItems, setInFlightItems] = useState<any[]>([]);
   const [inFlightLoading, setInFlightLoading] = useState(false);
-  const [transactions, setTransactions] = useState<TxRow[]>([]);
-  const [txSummary, setTxSummary] = useState<TxSummary | null>(null);
-  const [txLoading, setTxLoading] = useState(false);
   const { dateRange, setDateRange, marketplace, setMarketplace, marketplaceParam, dateBasis, setDateBasis, dateBasisParam } = useFilters();
 
   // Single-day view (Today / Yesterday / a clicked day): show the exact
   // transaction feed for that day automatically.
   const singleDay = dateRange.startDate === dateRange.endDate;
 
-  useEffect(() => {
-    if (!singleDay) { setTransactions([]); setTxSummary(null); return; }
-    setTxLoading(true);
-    fetch(`/api/data/transactions?startDate=${dateRange.startDate}&endDate=${dateRange.endDate}${marketplaceParam}${dateBasisParam}`)
-      .then(r => r.json())
-      .then(d => {
-        setTransactions(d.transactions || []);
-        setTxSummary(d.summary || null);
-        setTxLoading(false);
-      })
-      .catch(() => setTxLoading(false));
-  }, [singleDay, dateRange.startDate, dateRange.endDate, marketplaceParam, dateBasisParam]);
+  const txUrl = singleDay
+    ? `/api/data/transactions?startDate=${dateRange.startDate}&endDate=${dateRange.endDate}${marketplaceParam}${dateBasisParam}`
+    : null;
+  const { data: txData, loading: txLoading } = useQuery<{ transactions?: TxRow[]; summary?: TxSummary | null }>(txUrl);
+  const transactions: TxRow[] = txData?.transactions || [];
+  const txSummary: TxSummary | null = txData?.summary || null;
 
-  const fetchData = useCallback(async () => {
-    setLoading(true);
-    try {
-      const res = await fetch(`/api/data/dashboard?startDate=${dateRange.startDate}&endDate=${dateRange.endDate}${marketplaceParam}${dateBasisParam}`);
-      const json = await res.json();
-      setData(json);
-    } catch (err) {
-      console.error('Failed to load dashboard:', err);
-    }
-    setLoading(false);
-  }, [dateRange, marketplaceParam, dateBasisParam]);
+  const { data, loading, reload: fetchData } = useQuery<DashboardData>(
+    `/api/data/dashboard?startDate=${dateRange.startDate}&endDate=${dateRange.endDate}${marketplaceParam}${dateBasisParam}`
+  );
 
-  useEffect(() => {
-    fetchData();
-  }, [fetchData]);
-
-  useEffect(() => {
-    if (!selectedDay) { setDayDetails([]); setDayRefunds([]); return; }
-    setDayDetailsLoading(true);
-    // Three modes:
-    //   '__range__' = use the current dateRange filter (Today / Yesterday / This Week / etc)
-    //   'YYYY-MM-DD' single day clicked from chart with daily grouping
-    //   'YYYY-MM-01' clicked from chart with monthly grouping → expand to full month
-    //   'YYYY-MM-DD' clicked from chart with weekly grouping → expand to 7 days
+  // Day drill-down. Three modes for selectedDay:
+  //   '__range__' = use the current dateRange filter (Today / Yesterday / This Week / etc)
+  //   'YYYY-MM-DD' single day clicked from chart with daily grouping
+  //   'YYYY-MM-01' clicked from chart with monthly grouping → expand to full month
+  //   'YYYY-MM-DD' clicked from chart with weekly grouping → expand to 7 days
+  let dayUrl: string | null = null;
+  if (selectedDay) {
     let fetchStart = selectedDay;
     let fetchEnd = selectedDay;
     if (selectedDay === '__range__') {
       fetchStart = dateRange.startDate;
       fetchEnd = dateRange.endDate;
     } else {
-      const grouping = dailyRevenue[0]?.grouping || 'daily';
+      const grouping = data?.dailyRevenue?.[0]?.grouping || 'daily';
       if (grouping === 'monthly') {
         const d = new Date(selectedDay + 'T00:00:00');
         fetchStart = selectedDay;
@@ -146,29 +120,26 @@ export default function Dashboard() {
         fetchEnd = end.toISOString().split('T')[0];
       }
     }
-    fetch(`/api/data/profitloss?startDate=${fetchStart}&endDate=${fetchEnd}${marketplaceParam}${dateBasisParam}`)
-      .then(r => r.json())
-      .then(d => {
-        // Group by product (sku + marketplace), sum quantities and amounts
-        const grouped: Record<string, any> = {};
-        for (const item of (d.salesDetail || [])) {
-          const key = `${item.sku || item.asin}-${item.marketplace}`;
-          if (!grouped[key]) {
-            grouped[key] = { ...item };
-          } else {
-            grouped[key].quantity += item.quantity;
-            grouped[key].revenue += item.revenue;
-            grouped[key].cogs += item.cogs;
-            grouped[key].net_profit += item.net_profit;
-          }
-        }
-        const sales = Object.values(grouped).sort((a: any, b: any) => b.net_profit - a.net_profit);
-        setDayDetails(sales);
-        setDayRefunds(d.refundDetail || []);
-        setDayDetailsLoading(false);
-      })
-      .catch(() => setDayDetailsLoading(false));
-  }, [selectedDay, marketplaceParam, dateBasisParam, dateRange.startDate, dateRange.endDate, data]);
+    dayUrl = `/api/data/profitloss?startDate=${fetchStart}&endDate=${fetchEnd}${marketplaceParam}${dateBasisParam}`;
+  }
+  const { data: dayData, loading: dayDetailsLoading } = useQuery<{ salesDetail?: any[]; refundDetail?: any[] }>(dayUrl);
+  // Group by product (sku + marketplace), sum quantities and amounts
+  const dayDetails: DayDetail[] = useMemo(() => {
+    const grouped: Record<string, any> = {};
+    for (const item of (dayData?.salesDetail || [])) {
+      const key = `${item.sku || item.asin}-${item.marketplace}`;
+      if (!grouped[key]) {
+        grouped[key] = { ...item };
+      } else {
+        grouped[key].quantity += item.quantity;
+        grouped[key].revenue += item.revenue;
+        grouped[key].cogs += item.cogs;
+        grouped[key].net_profit += item.net_profit;
+      }
+    }
+    return Object.values(grouped).sort((a: any, b: any) => b.net_profit - a.net_profit);
+  }, [dayData]);
+  const dayRefunds: any[] = dayData?.refundDetail || [];
 
   if (loading || !data) {
     return <DashboardSkeleton />;
@@ -592,7 +563,7 @@ export default function Dashboard() {
         {/* Expense Breakdown Donut */}
         <div className="bg-bg-surface border border-border-subtle rounded-lg p-5">
           <h3 className="text-sm font-medium text-text-secondary mb-4">Expense Breakdown</h3>
-          <div className="flex items-center gap-4">
+          <div className="flex flex-col items-center gap-4">
             <div className="flex-shrink-0" style={{ width: 180, height: 180 }}>
               <ResponsiveContainer width="100%" height="100%">
                 <PieChart>
@@ -622,7 +593,7 @@ export default function Dashboard() {
                 </PieChart>
               </ResponsiveContainer>
             </div>
-            <div className="flex-1 min-w-0 space-y-1.5 max-h-[200px] overflow-y-auto">
+            <div className="w-full space-y-1.5 max-h-[220px] overflow-y-auto">
               {(() => {
                 const total = donutData.reduce((s, d: any) => s + (d.value || 0), 0);
                 return donutData.map((d: any, i: number) => {

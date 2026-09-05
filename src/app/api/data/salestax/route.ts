@@ -1,20 +1,18 @@
 import { NextRequest, NextResponse } from 'next/server';
-import Database from 'better-sqlite3';
-import path from 'path';
+import { openDb } from '@/lib/db-conn';
+import { marketplaceParam } from '@/lib/request-params';
+import { createLogger } from '@/lib/log';
 
-function getDb() {
-  const dbPath = path.join(process.cwd(), 'data', 'flipledger.db');
-  const db = new Database(dbPath, { readonly: true });
-  db.pragma('journal_mode = WAL');
-  return db;
-}
+const log = createLogger('api/data/salestax');
+
+const getDb = () => openDb({ readonly: true });
 
 export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url);
   const days = parseInt(searchParams.get('days') || '30');
 
   const db = getDb();
-  const marketplace = searchParams.get('marketplace');
+  const marketplace = marketplaceParam(searchParams);
   const MF_R = marketplace ? `AND COALESCE(marketplace, 'amazon') = '${marketplace}'` : '';
 
   const cutoff = new Date(Date.now() - days * 86400000).toISOString();
@@ -57,7 +55,7 @@ export async function GET(request: NextRequest) {
     });
   } catch (error) {
     db.close();
-    console.error('Sales Tax API error:', error);
+    log.error('Sales Tax API error:', error);
     return NextResponse.json({ error: 'Failed to load sales tax data' }, { status: 500 });
   }
 }

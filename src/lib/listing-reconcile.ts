@@ -13,17 +13,15 @@
  * transitions the batch to 'ready'; on hard failures to 'failed'.
  */
 import Database from 'better-sqlite3';
-import path from 'path';
 import { getListing, getSellerId } from '@/lib/sp-api/listingsItems';
 import { getInboundOperation } from '@/lib/sp-api/inboundPlansV2';
 import type { SPAPICredentials } from '@/lib/sp-api/types';
+import { openDb } from '@/lib/db-conn';
+import { createLogger } from '@/lib/log';
 
-function getDb() {
-  const dbPath = process.env.FLIPLEDGER_DB_PATH || path.join(process.cwd(), 'data', 'flipledger.db');
-  const db = new Database(dbPath);
-  db.pragma('journal_mode = WAL');
-  return db;
-}
+const log = createLogger('listing-reconcile');
+
+const getDb = () => openDb();
 
 function getAmazonCredentials(db: Database.Database): SPAPICredentials | null {
   const rows = db.prepare('SELECT key, value FROM settings').all() as { key: string; value: string }[];
@@ -129,7 +127,7 @@ export async function reconcileSendingBatch(batchId: number): Promise<ReconcileR
           item.listingError = errorNote;
         }
       } catch (err) {
-        console.warn(`[batch reconcile] listing poll failed for ${item.sku}:`, err);
+        log.warn(`listing poll failed for ${item.sku}:`, err);
       }
     }
   }
@@ -151,7 +149,7 @@ export async function reconcileSendingBatch(batchId: number): Promise<ReconcileR
       }
       batch.planStatus = op.operationStatus;
     } catch (err) {
-      console.warn(`[batch reconcile] operation poll failed:`, err);
+      log.warn(`operation poll failed:`, err);
     }
   }
 
@@ -224,10 +222,10 @@ export async function reconcileStaleSendingBatches(): Promise<{ checked: number;
       const result = await reconcileSendingBatch(b.id);
       if (result.reconciled && result.status !== 'sending') {
         transitioned++;
-        console.log(`[AutoSync] Batch ${b.id} ("${b.name}") reconciled: sending → ${result.status}`);
+        log.info(`Batch ${b.id} ("${b.name}") reconciled: sending → ${result.status}`);
       }
     } catch (err) {
-      console.warn(`[AutoSync] Batch ${b.id} reconcile failed:`, err);
+      log.warn(`Batch ${b.id} reconcile failed:`, err);
     }
   }
   return { checked: stale.length, transitioned };

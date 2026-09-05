@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
-import Database from 'better-sqlite3';
-import path from 'path';
+import { openDb } from '@/lib/db-conn';
+import { createLogger } from '@/lib/log';
+
+const log = createLogger('api/data/mfn-orders');
 
 /**
  * GET /api/data/mfn-orders — operational fulfillment queue for merchant-fulfilled
@@ -11,12 +13,7 @@ import path from 'path';
  * Query params:
  *   status = awaiting (default) | pending | shipped | all
  */
-function getDb() {
-  const dbPath = path.join(process.cwd(), 'data', 'flipledger.db');
-  const db = new Database(dbPath, { readonly: true });
-  db.pragma('journal_mode = WAL');
-  return db;
-}
+const getDb = () => openDb({ readonly: true });
 
 const OPEN_STATUSES = ['Unshipped', 'PartiallyShipped'];
 
@@ -105,7 +102,7 @@ export async function GET(request: NextRequest) {
 
     return NextResponse.json({ orders, counts });
   } catch (err) {
-    console.error('[mfn-orders] error:', err);
+    log.error('error:', err);
     return NextResponse.json({ error: 'Failed to load MFN orders' }, { status: 500 });
   } finally {
     db.close();

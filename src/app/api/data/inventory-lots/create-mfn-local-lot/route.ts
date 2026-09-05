@@ -1,14 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server';
-import Database from 'better-sqlite3';
-import path from 'path';
 import { recalculateFIFO } from '@/lib/fifo';
+import { openDb } from '@/lib/db-conn';
+import { createLogger } from '@/lib/log';
 
-function getDb() {
-  const dbPath = path.join(process.cwd(), 'data', 'flipledger.db');
-  const db = new Database(dbPath);
-  db.pragma('journal_mode = WAL');
-  return db;
-}
+const log = createLogger('api/data/inventory-lots/create-mfn-local-lot');
+
+const getDb = () => openDb();
 
 // POST /api/data/inventory-lots/create-mfn-local-lot
 //
@@ -114,7 +111,7 @@ export async function POST(request: NextRequest) {
         claimedNow = true;
       }
       const totalMs = Date.now() - t0;
-      console.log(`[create-mfn-local-lot] sku=${sku} existing-lot-returned batch_id=${existing.batch_id ?? 'null'} claimed=${claimedNow} total=${totalMs}ms guard=${guardMs}ms`);
+      log.info(`sku=${sku} existing-lot-returned batch_id=${existing.batch_id ?? 'null'} claimed=${claimedNow} total=${totalMs}ms guard=${guardMs}ms`);
       return NextResponse.json({
         created: false,
         existingLotUsed: true,
@@ -182,13 +179,13 @@ export async function POST(request: NextRequest) {
     const fifoMs = Date.now() - tFifo;
 
     const totalMs = Date.now() - t0;
-    console.log(`[create-mfn-local-lot] sku=${sku} created lot_id=${newId} total=${totalMs}ms (guard=${guardMs}ms insert=${insertMs}ms readback=${readbackMs}ms fifo=${fifoMs}ms)`);
+    log.info(`sku=${sku} created lot_id=${newId} total=${totalMs}ms (guard=${guardMs}ms insert=${insertMs}ms readback=${readbackMs}ms fifo=${fifoMs}ms)`);
 
     return NextResponse.json({ created: true, existingLotUsed: false, lot });
   } catch (err) {
     db.close();
     const totalMs = Date.now() - t0;
-    console.error(`[create-mfn-local-lot] sku=${sku} error total=${totalMs}ms err=${String(err)}`);
+    log.error(`sku=${sku} error total=${totalMs}ms err=${String(err)}`);
     return NextResponse.json({ error: String(err) }, { status: 500 });
   }
 }

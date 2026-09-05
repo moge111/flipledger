@@ -11,7 +11,6 @@
  */
 import { NextRequest, NextResponse } from 'next/server';
 import Database from 'better-sqlite3';
-import path from 'path';
 import {
   getTemplateForCandidate as wmtTemplate,
   renderTemplate as renderWmt,
@@ -20,13 +19,9 @@ import {
   getTemplateForReason as amzTemplate,
   renderTemplate as renderAmz,
 } from '@/lib/amazon-claims/disputeTemplates';
+import { openDb } from '@/lib/db-conn';
 
-function getDb() {
-  const dbPath = process.env.FLIPLEDGER_DB_PATH || path.join(process.cwd(), 'data', 'flipledger.db');
-  const db = new Database(dbPath);
-  db.pragma('journal_mode = WAL');
-  return db;
-}
+const getDb = () => openDb();
 
 const GET_SUPPORT_URL = 'https://sellercentral.amazon.com/cu/contact-us';
 const SAFET_URL = 'https://sellercentral.amazon.com/safetclaim/dashboard';

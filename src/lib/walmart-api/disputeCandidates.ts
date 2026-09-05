@@ -16,8 +16,7 @@
  * Seller Center deeplink — Walmart's dispute API is undocumented and
  * inconsistent across seller accounts.
  */
-import Database from 'better-sqlite3';
-import path from 'path';
+import { openDb } from '@/lib/db-conn';
 
 // Walmart's published dispute rule (Marketplace Learn, "WFS customer returns,
 // reimbursement and dispute processes", verified July 2026): disputes must be
@@ -55,12 +54,7 @@ const NOT_ELIGIBLE_REASONS = new Set([
   'MISSING_PARTS',
 ]);
 
-function getDb() {
-  const dbPath = path.join(process.cwd(), 'data', 'flipledger.db');
-  const db = new Database(dbPath);
-  db.pragma('journal_mode = WAL');
-  return db;
-}
+const getDb = () => openDb();
 
 // How long Walmart's recon reports typically take to settle a return.
 // If a refund is younger than this and we don't see a financial event yet,
@@ -99,6 +93,16 @@ function classifyEligibility(
   // deducted the refund AND the unit never came back to the seller's
   // inventory. Applies even to "customer's right" reasons like LOWER_PRICE.
   if (hasRefundEvent && fulfillmentChannel === 'WFS' && unitLostInPipeline && ageDays >= LOST_IN_PIPELINE_DAYS) {
+    // The window CLOSES 45 days after it opens. This branch originally had
+    // only a lower bound, so a return stayed labelled "eligible" forever —
+    // Parker filed 6 claims on 2026-08-29 that were 60-105 days past their
+    // deadline (one 239 days old) and Walmart denied every one. Walmart
+    // states "no appeals", so a dead claim is not worth a filing slot.
+    if (ageDays > LOST_CLAIM_WINDOW_DAYS) {
+      tags.push(`Unit never returned, but the claim window closed ${Math.floor(ageDays - LOST_CLAIM_WINDOW_DAYS)} days ago (opens day ${LOST_IN_PIPELINE_DAYS}, closes day ${LOST_CLAIM_WINDOW_DAYS} after the return)`);
+      tags.push('Walmart states "no appeals" on these — filing now gets denied on timing regardless of merit');
+      return { eligibility: 'not_eligible', reasons: tags, windowDays: LOST_CLAIM_WINDOW_DAYS };
+    }
     tags.push(`Walmart deducted this refund ${Math.floor(ageDays)} days ago, but the unit never returned: no RTV fee, no restock, no resale, no reimbursement`);
     tags.push('The "return not processed / no reimbursement" dispute window opens 90 days after the return — it is open now, and closes 45 days later. Open a Seller Support case ("Initiate claim")');
     tags.push('Tip: refresh the Services Fees export first — a recent RTV fee, LostReturnAdjustment, or LostInventory reimbursement beyond your last import would clear this');
@@ -213,18 +217,34 @@ export function syncWalmartDisputeCandidates(): WalmartDisputeSyncResult {
   // Evidence the returned unit made it back: an RTV fee for the order's GTIN
   // (shipped back to the seller), current sellable stock for the SKU, or a
   // sale of the SKU after the refund. Absence of all three = lost in pipeline.
-  const hasRtvForOrder = db.prepare(`
-    SELECT 1 FROM fee_details fd
-    JOIN financial_events fe ON fe.id = fd.financial_event_id
-    WHERE fd.fee_type = 'WFSInventoryRTVFee'
-      AND fe.asin = (
-        SELECT MAX(json_extract(raw_data, '$."Partner GTIN"')) FROM financial_events
-        WHERE order_id = ? AND marketplace = 'walmart'
-          AND event_type IN ('WalmartReconEvent', 'WalmartRefundEvent')
-      )
-      AND date(fe.posted_date) >= date(?, '-14 days')
-    LIMIT 1
-  `);
+  // Reads wfs_rtv_units (per-GTIN, from the Services Fees CSVs), NOT the
+  // WFSInventoryRTVFee rows. Since the Aug 2026 recon migration those fee rows
+  // are period-level roll-ups with a NULL GTIN, so the old `fe.asin = <gtin>`
+  // predicate could never match and this evidence check was silently dead —
+  // every settled WFS return looked lost. Same defect as the Refunds page.
+  // Units are allocated oldest-refund-first so one returned unit clears
+  // exactly one refund of that GTIN, never all of them.
+  const rtvCoveredRefundIds = new Set<number>(
+    (db.prepare(`
+      SELECT id FROM (
+        SELECT rr.id AS id,
+               ROW_NUMBER() OVER (PARTITION BY gg.gtin ORDER BY rr.refund_date) AS rn,
+               (SELECT COALESCE(SUM(u2.quantity), 0) FROM wfs_rtv_units u2 WHERE u2.gtin = gg.gtin) AS units
+        FROM refunds rr
+        JOIN orders oo ON oo.order_id = rr.order_id AND oo.fulfillment_channel = 'WFS'
+        JOIN (
+          SELECT order_id, MAX(json_extract(raw_data, '$."Partner GTIN"')) AS gtin
+          FROM financial_events
+          WHERE marketplace = 'walmart' AND order_id IS NOT NULL
+            AND json_extract(raw_data, '$."Partner GTIN"') IS NOT NULL
+          GROUP BY order_id
+        ) gg ON gg.order_id = rr.order_id
+        WHERE rr.marketplace = 'walmart'
+          AND EXISTS (SELECT 1 FROM wfs_rtv_units u
+                      WHERE u.gtin = gg.gtin AND u.rtv_date >= date(rr.refund_date, '-7 days'))
+      ) WHERE rn <= units
+    `).all() as Array<{ id: number }>).map((r) => r.id)
+  );
   const hasStock = db.prepare(`SELECT 1 FROM live_inventory WHERE sku = ? AND fulfillable_qty > 0 LIMIT 1`);
   // Walmart's auto-reimbursement for a lost return arrives as a Walmart
   // reimbursement — match by the order's GTIN (LostInventory rows from the
@@ -264,9 +284,21 @@ export function syncWalmartDisputeCandidates(): WalmartDisputeSyncResult {
       dispute_window_until = excluded.dispute_window_until,
       product_name = excluded.product_name,
       fulfillment_channel = excluded.fulfillment_channel,
+      -- Refresh everything derived from the refunds row. These are NOT
+      -- immutable: a refund's amount, reason, date or SKU can all be
+      -- corrected upstream (a re-synced return line, a recon settlement
+      -- overwriting a placeholder amount). Writing them once at insert and
+      -- never again left the claim page showing a stale dollar value —
+      -- order 119124132800655 sat at $440 after its refund was corrected to
+      -- $880, which is the number Parker would have put on the claim.
+      refund_amount_cents = excluded.refund_amount_cents,
+      return_reason = excluded.return_reason,
+      refund_date = excluded.refund_date,
+      asin = excluded.asin,
+      sku = excluded.sku,
       -- Don't overwrite filed/received/dismissed states
       status = CASE
-        WHEN walmart_dispute_candidates.status IN ('filed', 'received', 'dismissed') THEN walmart_dispute_candidates.status
+        WHEN walmart_dispute_candidates.status IN ('filed', 'received', 'dismissed', 'denied') THEN walmart_dispute_candidates.status
         ELSE excluded.status
       END,
       updated_at = datetime('now')
@@ -284,7 +316,7 @@ export function syncWalmartDisputeCandidates(): WalmartDisputeSyncResult {
       const unitLostInPipeline =
         hasRefundEvent &&
         r.fulfillmentChannel === 'WFS' &&
-        !hasRtvForOrder.get(r.orderId, r.refundDate) &&
+        !rtvCoveredRefundIds.has(r.refundId) &&
         !(r.sku && hasStock.get(r.sku)) &&
         !(r.sku && hasLaterSale.get(r.sku, r.refundDate)) &&
         !hasReimbursement.get(r.refundDate, gtin, gtin, r.orderId, r.orderId);

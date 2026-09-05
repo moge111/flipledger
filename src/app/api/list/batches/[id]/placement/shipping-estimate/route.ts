@@ -14,8 +14,6 @@
  * partial data with complete=false and the frontend shows what it has.
  */
 import { NextRequest, NextResponse } from 'next/server';
-import Database from 'better-sqlite3';
-import path from 'path';
 import { clearTokenCache } from '@/lib/sp-api/auth';
 import { resolveShipFromContact } from '@/lib/listing-ship-from';
 import {
@@ -26,13 +24,9 @@ import {
   type TransportationOption,
 } from '@/lib/sp-api/inboundPlansV2';
 import type { SPAPICredentials } from '@/lib/sp-api/types';
+import { openDb } from '@/lib/db-conn';
 
-function getDb() {
-  const dbPath = path.join(process.cwd(), 'data', 'flipledger.db');
-  const db = new Database(dbPath);
-  db.pragma('journal_mode = WAL');
-  return db;
-}
+const getDb = () => openDb();
 
 async function waitForOp(creds: SPAPICredentials, opId: string, maxMs = 90_000): Promise<{ success: boolean; error?: string }> {
   const deadline = Date.now() + maxMs;

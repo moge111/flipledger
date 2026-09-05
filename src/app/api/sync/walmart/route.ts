@@ -1,6 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getWalmartCredentials } from '@/lib/walmart-api/auth';
 import { runWalmartSync, getWalmartSyncStatus } from '@/lib/walmart-api/sync';
+import { createLogger } from '@/lib/log';
+
+const log = createLogger('api/sync/walmart');
 
 export async function GET() {
   const status = getWalmartSyncStatus();
@@ -23,7 +26,7 @@ export async function POST(request: NextRequest) {
 
   // Start sync in background (don't await)
   runWalmartSync(credentials, lookbackDays, explicitStartDate, explicitEndDate).catch(err => {
-    console.error('Walmart sync background error:', err);
+    log.error('Walmart sync background error:', err);
   });
 
   return NextResponse.json({

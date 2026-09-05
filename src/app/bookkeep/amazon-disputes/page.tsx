@@ -1,10 +1,11 @@
 'use client';
 
-import { useEffect, useState, useCallback } from 'react';
+import { useState, } from 'react';
 import { formatCurrency, formatDate, formatNumber } from '@/lib/formatters';
 import { ExternalLink, RefreshCw, AlertCircle, Loader2, CheckCircle2, XCircle, Inbox, Copy, Check, X as XClose } from 'lucide-react';
 import { getTemplateForReason, renderTemplate } from '@/lib/amazon-claims/disputeTemplates';
 import CopyableText from '@/components/ui/CopyableText';
+import { useQuery } from '@/lib/useQuery';
 
 interface Candidate {
   id: number;
@@ -45,27 +46,18 @@ const TABS: Array<{ key: 'eligible' | 'maybe' | 'filed' | 'not_eligible' | 'all'
 ];
 
 export default function AmazonDisputesPage() {
-  const [candidates, setCandidates] = useState<Candidate[]>([]);
-  const [totals, setTotals] = useState<Totals | null>(null);
-  const [lastSync, setLastSync] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
+  // Snapshot of "now" for deadline math — render must stay pure (react-hooks/purity).
+  const [nowMs] = useState(() => Date.now());
   const [syncing, setSyncing] = useState(false);
   const [tab, setTab] = useState<'eligible' | 'maybe' | 'filed' | 'not_eligible' | 'all'>('eligible');
   const [openCandidate, setOpenCandidate] = useState<Candidate | null>(null);
   const [editedBody, setEditedBody] = useState('');
   const [copied, setCopied] = useState(false);
 
-  const fetchData = useCallback(async () => {
-    setLoading(true);
-    const res = await fetch(`/api/data/amazon-dispute-candidates?tab=${tab}`);
-    const data = await res.json();
-    setCandidates(data.candidates || []);
-    setTotals(data.totals || null);
-    setLastSync(data.lastSync || null);
-    setLoading(false);
-  }, [tab]);
-
-  useEffect(() => { fetchData(); }, [fetchData]);
+  const { data, loading, reload: fetchData } = useQuery<{ candidates?: Candidate[]; lastSync?: string | null; totals?: Totals | null }>(`/api/data/amazon-dispute-candidates?tab=${tab}`);
+  const candidates: Candidate[] = data?.candidates || [];
+  const totals: Totals | null = data?.totals || null;
+  const lastSync: string | null = data?.lastSync || null;
 
   async function runSync() {
     setSyncing(true);
@@ -147,7 +139,7 @@ export default function AmazonDisputesPage() {
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">Amazon SAFE-T Disputes</h1>
           <p className="text-sm text-text-tertiary mt-0.5">
-            MFN/SFP customer refunds where seller fault is questionable. Filed via SAFE-T claim within 90 days. <strong>FBA refunds aren't here</strong> — for those, see <a href="/bookkeep/reimbursement-reevaluations" className="text-accent hover:underline">Reimbursement Re-Evaluations</a> (underpaid claims) or <a href="/bookkeep/claims-to-file" className="text-accent hover:underline">Claims to File</a> (warehouse losses).
+            MFN/SFP customer refunds where seller fault is questionable. Filed via SAFE-T claim within 90 days. <strong>FBA refunds aren&apos;t here</strong> — for those, see <a href="/bookkeep/reimbursement-reevaluations" className="text-accent hover:underline">Reimbursement Re-Evaluations</a> (underpaid claims) or <a href="/bookkeep/claims-to-file" className="text-accent hover:underline">Claims to File</a> (warehouse losses).
             {lastSync && (
               <span className="ml-2 text-text-tertiary">· Last synced {formatDate(lastSync)}</span>
             )}
@@ -228,7 +220,7 @@ export default function AmazonDisputesPage() {
             <tbody>
               {candidates.map((c) => {
                 const days = c.disputeWindowUntil
-                  ? Math.ceil((new Date(c.disputeWindowUntil).getTime() - Date.now()) / 86400000)
+                  ? Math.ceil((new Date(c.disputeWindowUntil).getTime() - nowMs) / 86400000)
                   : null;
                 const urgent = days !== null && days <= 14 && c.status === 'pending' && c.eligibility !== 'not_eligible';
                 const clickable = c.eligibility !== 'not_eligible' && c.status !== 'expired' && c.status !== 'dismissed';
@@ -426,17 +418,17 @@ export default function AmazonDisputesPage() {
                   <div className="font-medium text-text-primary mb-1.5">How to file (3-5 minutes)</div>
                   {isFba ? (
                     <ol className="space-y-1">
-                      <li className="flex gap-2"><span className="text-accent font-mono">1.</span><span>Click <strong>"Open Get Support & mark filed"</strong> below.</span></li>
+                      <li className="flex gap-2"><span className="text-accent font-mono">1.</span><span>Click <strong>&quot;Open Get Support & mark filed&quot;</strong> below.</span></li>
                       <li className="flex gap-2"><span className="text-accent font-mono">2.</span><span>Choose <strong>Selling on Amazon</strong> → <strong>Fulfillment by Amazon</strong>.</span></li>
-                      <li className="flex gap-2"><span className="text-accent font-mono">3.</span><span>Click <strong>"Submit a reimbursement claim dispute"</strong>.</span></li>
+                      <li className="flex gap-2"><span className="text-accent font-mono">3.</span><span>Click <strong>&quot;Submit a reimbursement claim dispute&quot;</strong>.</span></li>
                       <li className="flex gap-2"><span className="text-accent font-mono">4.</span><span>Enter the order ID: <code className="font-mono bg-bg-elevated px-1 rounded">{openCandidate.orderId}</code></span></li>
                       <li className="flex gap-2"><span className="text-accent font-mono">5.</span><span>Paste the claim message above as the case description.</span></li>
                       <li className="flex gap-2"><span className="text-accent font-mono">6.</span><span>Submit. Amazon decides within 1-3 business days.</span></li>
                     </ol>
                   ) : (
                     <ol className="space-y-1">
-                      <li className="flex gap-2"><span className="text-accent font-mono">1.</span><span>Click <strong>"Open SAFE-T & mark filed"</strong> below.</span></li>
-                      <li className="flex gap-2"><span className="text-accent font-mono">2.</span><span>Click <strong>"File a new SAFE-T claim"</strong>.</span></li>
+                      <li className="flex gap-2"><span className="text-accent font-mono">1.</span><span>Click <strong>&quot;Open SAFE-T & mark filed&quot;</strong> below.</span></li>
+                      <li className="flex gap-2"><span className="text-accent font-mono">2.</span><span>Click <strong>&quot;File a new SAFE-T claim&quot;</strong>.</span></li>
                       <li className="flex gap-2"><span className="text-accent font-mono">3.</span><span>Paste the order ID: <code className="font-mono bg-bg-elevated px-1 rounded">{openCandidate.orderId}</code></span></li>
                       <li className="flex gap-2"><span className="text-accent font-mono">4.</span><span>Pick the matching return reason and paste the claim message above as the explanation.</span></li>
                       <li className="flex gap-2"><span className="text-accent font-mono">5.</span><span>Attach evidence (screenshots, tracking, etc.) if you have any.</span></li>

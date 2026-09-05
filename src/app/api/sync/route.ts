@@ -1,11 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { runFullSync, getSyncStatus } from '@/lib/sp-api/sync';
-import Database from 'better-sqlite3';
-import path from 'path';
+import { openDb } from '@/lib/db-conn';
+import { createLogger } from '@/lib/log';
+
+const log = createLogger('api/sync');
 
 function getCredentials() {
-  const dbPath = path.join(process.cwd(), 'data', 'flipledger.db');
-  const db = new Database(dbPath, { readonly: true });
+  const db = openDb({ readonly: true });
   db.pragma('journal_mode = WAL');
   const rows = db.prepare('SELECT key, value FROM settings').all() as { key: string; value: string }[];
   db.close();
@@ -43,7 +44,7 @@ export async function POST(request: NextRequest) {
 
   // Run sync in background — don't await it
   runFullSync(credentials, lookbackDays, explicitStartDate, explicitEndDate).catch(err => {
-    console.error('[Sync] Background sync error:', err);
+    log.error('Background sync error:', err);
   });
 
   return NextResponse.json({ message: 'Sync started', lookbackDays, startDate: explicitStartDate, endDate: explicitEndDate });

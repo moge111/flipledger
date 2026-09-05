@@ -1,6 +1,8 @@
 import { NextResponse } from 'next/server';
-import Database from 'better-sqlite3';
-import path from 'path';
+import { openDb } from '@/lib/db-conn';
+import { createLogger } from '@/lib/log';
+
+const log = createLogger('api/data/inventory-overview');
 
 /**
  * GET /api/data/inventory-overview — unified "where is my inventory" view.
@@ -9,12 +11,7 @@ import path from 'path';
  * un-shipped stock). Values everything at cost (latest lot buy_price) plus an
  * estimated resale value from list_price / historical avg sale price.
  */
-function getDb() {
-  const dbPath = process.env.FLIPLEDGER_DB_PATH || path.join(process.cwd(), 'data', 'flipledger.db');
-  const db = new Database(dbPath, { readonly: true });
-  db.pragma('journal_mode = WAL');
-  return db;
-}
+const getDb = () => openDb({ readonly: true });
 
 export interface StageBreakdown {
   fulfillable: number;
@@ -230,7 +227,7 @@ export async function GET() {
       },
     });
   } catch (error) {
-    console.error('Inventory Overview API error:', error);
+    log.error('Inventory Overview API error:', error);
     return NextResponse.json({ error: 'Failed to load inventory overview' }, { status: 500 });
   } finally {
     db.close();

@@ -1,12 +1,13 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { syncFinancialEvents, resetServiceFeeTracker } from '@/lib/sp-api/finances';
 import { dedupAmazonReimbursements } from '@/lib/sp-api/dedupReimbursements';
-import Database from 'better-sqlite3';
-import path from 'path';
+import { openDb } from '@/lib/db-conn';
+import { createLogger } from '@/lib/log';
+
+const log = createLogger('api/sync/backfill');
 
 function getCredentials() {
-  const dbPath = path.join(process.cwd(), 'data', 'flipledger.db');
-  const db = new Database(dbPath, { readonly: true });
+  const db = openDb({ readonly: true });
   db.pragma('journal_mode = WAL');
   const rows = db.prepare('SELECT key, value FROM settings').all() as { key: string; value: string }[];
   db.close();
@@ -51,13 +52,13 @@ export async function POST(request: NextRequest) {
   }
 
   resetServiceFeeTracker();
-  console.log(`[Backfill] Starting ${year} sync in ${chunks.length} chunks`);
+  log.info(`Starting ${year} sync in ${chunks.length} chunks`);
 
   const results: { chunk: string; events: number; errors: string[] }[] = [];
   let totalEvents = 0;
 
   for (const chunk of chunks) {
-    console.log(`[Backfill] Syncing ${chunk.start} → ${chunk.end}...`);
+    log.info(`Syncing ${chunk.start} → ${chunk.end}...`);
     try {
       const result = await syncFinancialEvents(credentials, chunk.start, chunk.end);
       results.push({
@@ -66,18 +67,18 @@ export async function POST(request: NextRequest) {
         errors: result.errors,
       });
       totalEvents += result.eventsProcessed;
-      console.log(`[Backfill] Chunk done: ${result.eventsProcessed} events, ${result.errors.length} errors`);
+      log.info(`Chunk done: ${result.eventsProcessed} events, ${result.errors.length} errors`);
     } catch (err) {
       results.push({
         chunk: `${chunk.start} → ${chunk.end}`,
         events: 0,
         errors: [String(err)],
       });
-      console.error(`[Backfill] Chunk error:`, err);
+      log.error(`Chunk error:`, err);
     }
   }
 
-  console.log(`[Backfill] Complete. ${totalEvents} total events for ${year}.`);
+  log.info(`Complete. ${totalEvents} total events for ${year}.`);
 
   // Self-healing: ADJ-* placeholders may have been inserted; sweep any covered
   // by a canonical numeric reimbursement.

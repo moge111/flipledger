@@ -13,15 +13,10 @@
  * GET returns the last-persisted results without touching Amazon (cheap).
  */
 import { NextRequest, NextResponse } from 'next/server';
-import Database from 'better-sqlite3';
-import path from 'path';
 import { preflightBatch, type PreflightSummary } from '@/lib/listing-preflight';
+import { openDb } from '@/lib/db-conn';
 
-function getDb() {
-  const db = new Database(process.env.FLIPLEDGER_DB_PATH || path.join(process.cwd(), 'data', 'flipledger.db'));
-  db.pragma('journal_mode = WAL');
-  return db;
-}
+const getDb = () => openDb();
 
 export async function POST(_request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;

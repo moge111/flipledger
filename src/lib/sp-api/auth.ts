@@ -1,3 +1,6 @@
+import { createLogger } from '@/lib/log';
+
+const log = createLogger('sp-api/auth');
 /**
  * SP-API LWA (Login With Amazon) authentication.
  * Exchanges refresh token for access token, auto-refreshes on expiry.
@@ -71,7 +74,7 @@ export async function netFetch(
       lastError = err;
       if (!isTransientNetworkError(err) || attempt === retries - 1) throw err;
       const waitSec = 2 * Math.pow(2, attempt); // 2s, 4s
-      console.warn(`SP-API network error on ${url} (${(err as Error).message}), retrying in ${waitSec}s (attempt ${attempt + 1}/${retries})`);
+      log.warn(`SP-API network error on ${url} (${(err as Error).message}), retrying in ${waitSec}s (attempt ${attempt + 1}/${retries})`);
       await new Promise((r) => setTimeout(r, waitSec * 1000));
     }
   }
@@ -173,7 +176,7 @@ export async function fetchWithRetry(
       ? parseInt(response.headers.get('Retry-After') || '2')
       : 3;
     const waitSec = base * Math.pow(2, attempt); // 429: 2,4,8 · 5xx: 3,6,12
-    console.warn(`SP-API ${response.status} on ${url}, retrying in ${waitSec}s (attempt ${attempt + 1}/${retries})`);
+    log.warn(`SP-API ${response.status} on ${url}, retrying in ${waitSec}s (attempt ${attempt + 1}/${retries})`);
     await new Promise((r) => setTimeout(r, waitSec * 1000));
   }
   return response;
@@ -216,7 +219,7 @@ export async function spApiRequest(
     if (response.status === 429) {
       const baseWait = parseInt(response.headers.get('Retry-After') || '3');
       const waitTime = baseWait * Math.pow(2, attempt); // 3s, 6s, 12s, 24s, 48s
-      console.warn(`SP-API 429 on ${path}, retrying in ${waitTime}s (attempt ${attempt + 1}/${retries})`);
+      log.warn(`SP-API 429 on ${path}, retrying in ${waitTime}s (attempt ${attempt + 1}/${retries})`);
       await new Promise(resolve => setTimeout(resolve, waitTime * 1000));
       continue;
     }
@@ -224,7 +227,7 @@ export async function spApiRequest(
     // Server error — retry with backoff
     if (response.status >= 500) {
       const waitTime = 5 * Math.pow(2, attempt);
-      console.warn(`SP-API ${response.status} on ${path}, retrying in ${waitTime}s (attempt ${attempt + 1}/${retries})`);
+      log.warn(`SP-API ${response.status} on ${path}, retrying in ${waitTime}s (attempt ${attempt + 1}/${retries})`);
       await new Promise(resolve => setTimeout(resolve, waitTime * 1000));
       continue;
     }

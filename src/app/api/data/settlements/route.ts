@@ -19,14 +19,10 @@
  * + reimbursements - COGS (fees/serviceFees are stored negative).
  */
 import { NextRequest, NextResponse } from 'next/server';
-import Database from 'better-sqlite3';
-import path from 'path';
+import { MKT_DATE, marketToday } from '@/lib/market-day';
+import { openDb } from '@/lib/db-conn';
 
-function getDb() {
-  const db = new Database(path.join(process.cwd(), 'data', 'flipledger.db'));
-  db.pragma('journal_mode = WAL');
-  return db;
-}
+const getDb = () => openDb();
 
 const FE_POSTED = `(
   SELECT order_id, MIN(posted_date) AS posted_date
@@ -53,7 +49,7 @@ const emptyBucket = (): Bucket => ({
 export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url);
   const startDate = searchParams.get('startDate') || '2026-01-01';
-  const endDate = searchParams.get('endDate') || new Date().toISOString().split('T')[0];
+  const endDate = searchParams.get('endDate') || marketToday();
 
   const db = getDb();
   try {
@@ -80,7 +76,7 @@ export async function GET(request: NextRequest) {
     // Per-day aggregates (cheap GROUP BY date), then bucketed in JS to the
     // tightest containing settlement.
     const salesByDay = db.prepare(`
-      SELECT date(fe.posted_date) AS d,
+      SELECT ${MKT_DATE('fe.posted_date')} AS d,
              COALESCE(SUM(oi.total_price),0) AS sales,
              COALESCE(SUM(oi.cogs_per_unit*oi.quantity),0) AS cogs,
              COALESCE(SUM(oi.quantity),0) AS units,
@@ -88,38 +84,38 @@ export async function GET(request: NextRequest) {
       FROM order_items oi
       JOIN orders o ON oi.order_id = o.order_id
       JOIN ${FE_POSTED} fe ON oi.order_id = fe.order_id
-      WHERE o.marketplace='amazon' AND date(fe.posted_date) >= ? AND date(fe.posted_date) <= ?
-      GROUP BY date(fe.posted_date)
+      WHERE o.marketplace='amazon' AND ${MKT_DATE('fe.posted_date')} >= ? AND ${MKT_DATE('fe.posted_date')} <= ?
+      GROUP BY ${MKT_DATE('fe.posted_date')}
     `).all(minStart, maxEnd) as Array<{ d: string; sales: number; cogs: number; units: number; orders: number }>;
 
     const orderFeesByDay = db.prepare(`
-      SELECT date(fd.posted_date) AS d, COALESCE(SUM(fd.amount),0) AS amt
+      SELECT ${MKT_DATE('fd.posted_date')} AS d, COALESCE(SUM(fd.amount),0) AS amt
       FROM fee_details fd JOIN orders o ON fd.order_id = o.order_id
       WHERE o.marketplace='amazon' AND fd.order_id IS NOT NULL AND fd.order_id != ''
-        AND date(fd.posted_date) >= ? AND date(fd.posted_date) <= ?
-      GROUP BY date(fd.posted_date)
+        AND ${MKT_DATE('fd.posted_date')} >= ? AND ${MKT_DATE('fd.posted_date')} <= ?
+      GROUP BY ${MKT_DATE('fd.posted_date')}
     `).all(minStart, maxEnd) as Array<{ d: string; amt: number }>;
 
     // fee_details has no marketplace column — gate via the parent financial
     // event so Walmart WFS service fees don't contaminate Amazon settlements.
     const serviceFeesByDay = db.prepare(`
-      SELECT date(fd.posted_date) AS d, COALESCE(SUM(fd.amount),0) AS amt
+      SELECT ${MKT_DATE('fd.posted_date')} AS d, COALESCE(SUM(fd.amount),0) AS amt
       FROM fee_details fd
       JOIN financial_events fe ON fe.id = fd.financial_event_id AND fe.marketplace = 'amazon'
-      WHERE (fd.order_id IS NULL OR fd.order_id='') AND date(fd.posted_date) >= ? AND date(fd.posted_date) <= ?
-      GROUP BY date(fd.posted_date)
+      WHERE (fd.order_id IS NULL OR fd.order_id='') AND ${MKT_DATE('fd.posted_date')} >= ? AND ${MKT_DATE('fd.posted_date')} <= ?
+      GROUP BY ${MKT_DATE('fd.posted_date')}
     `).all(minStart, maxEnd) as Array<{ d: string; amt: number }>;
 
     const refundsByDay = db.prepare(`
-      SELECT date(refund_date) AS d, COALESCE(SUM(refund_amount),0) AS amt
-      FROM refunds WHERE marketplace='amazon' AND date(refund_date) >= ? AND date(refund_date) <= ?
-      GROUP BY date(refund_date)
+      SELECT ${MKT_DATE('refund_date')} AS d, COALESCE(SUM(refund_amount),0) AS amt
+      FROM refunds WHERE marketplace='amazon' AND ${MKT_DATE('refund_date')} >= ? AND ${MKT_DATE('refund_date')} <= ?
+      GROUP BY ${MKT_DATE('refund_date')}
     `).all(minStart, maxEnd) as Array<{ d: string; amt: number }>;
 
     const reimbByDay = db.prepare(`
-      SELECT date(reimbursement_date) AS d, COALESCE(SUM(amount),0) AS amt
-      FROM reimbursements WHERE marketplace='amazon' AND date(reimbursement_date) >= ? AND date(reimbursement_date) <= ?
-      GROUP BY date(reimbursement_date)
+      SELECT ${MKT_DATE('reimbursement_date')} AS d, COALESCE(SUM(amount),0) AS amt
+      FROM reimbursements WHERE marketplace='amazon' AND ${MKT_DATE('reimbursement_date')} >= ? AND ${MKT_DATE('reimbursement_date')} <= ?
+      GROUP BY ${MKT_DATE('reimbursement_date')}
     `).all(minStart, maxEnd) as Array<{ d: string; amt: number }>;
 
     // Tightest settlement (smallest span) whose [start,end] contains the day.

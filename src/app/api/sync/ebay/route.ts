@@ -1,6 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getEbayCredentials } from '@/lib/ebay-api/auth';
 import { runEbaySync, getEbaySyncStatus } from '@/lib/ebay-api/sync';
+import { createLogger } from '@/lib/log';
+
+const log = createLogger('api/sync/ebay');
 
 export async function GET() {
   const status = getEbaySyncStatus();
@@ -23,7 +26,7 @@ export async function POST(request: NextRequest) {
 
   // Start sync in background (don't await)
   runEbaySync(credentials, lookbackDays, explicitStartDate, explicitEndDate).catch(err => {
-    console.error('eBay sync background error:', err);
+    log.error('eBay sync background error:', err);
   });
 
   return NextResponse.json({

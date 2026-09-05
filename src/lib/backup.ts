@@ -18,8 +18,12 @@
 import Database from 'better-sqlite3';
 import fs from 'fs';
 import path from 'path';
+import { resolveDbPath } from './db-conn';
+import { createLogger } from '@/lib/log';
 
-const DB_PATH = path.join(process.cwd(), 'data', 'flipledger.db');
+const log = createLogger('backup');
+
+const DB_PATH = resolveDbPath();
 const DEFAULT_BACKUP_DIR = path.join(process.cwd(), 'data', 'backups');
 const FILE_PREFIX = 'flipledger-';
 const FILE_SUFFIX = '.db';
@@ -64,7 +68,7 @@ function setSetting(key: string, value: string): void {
     ).run(key, value);
     db.close();
   } catch (err) {
-    console.error('[Backup] setSetting failed:', err);
+    log.error('setSetting failed:', err);
   }
 }
 

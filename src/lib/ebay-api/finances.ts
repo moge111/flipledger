@@ -8,16 +8,11 @@
 import { ebayApiRequest } from './auth';
 import type { EbayCredentials, EbayTransaction } from './types';
 import Database from 'better-sqlite3';
-import path from 'path';
+import { openDb } from '@/lib/db-conn';
 
 const FINANCES_API = 'https://api.ebay.com/sell/finances/v1';
 
-function getDb() {
-  const dbPath = path.join(process.cwd(), 'data', 'flipledger.db');
-  const db = new Database(dbPath);
-  db.pragma('journal_mode = WAL');
-  return db;
-}
+const getDb = () => openDb();
 
 function toCents(amount: number | string | undefined): number {
   if (amount === undefined || amount === null || amount === '') return 0;

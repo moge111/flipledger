@@ -18,17 +18,15 @@
  */
 import { NextRequest, NextResponse } from 'next/server';
 import Database from 'better-sqlite3';
-import path from 'path';
 import { getInboundPlan } from '@/lib/sp-api/inboundPlansV2';
 import { reconcileSendingBatch } from '@/lib/listing-reconcile';
 import type { SPAPICredentials } from '@/lib/sp-api/types';
+import { openDb } from '@/lib/db-conn';
+import { createLogger } from '@/lib/log';
 
-function getDb() {
-  const dbPath = path.join(process.cwd(), 'data', 'flipledger.db');
-  const db = new Database(dbPath);
-  db.pragma('journal_mode = WAL');
-  return db;
-}
+const log = createLogger('api/list/batches/[id]/status');
+
+const getDb = () => openDb();
 
 function getAmazonCredentials(db: Database.Database): SPAPICredentials | null {
   const rows = db.prepare('SELECT key, value FROM settings').all() as { key: string; value: string }[];
@@ -148,7 +146,7 @@ export async function GET(_request: NextRequest, { params }: { params: Promise<{
         try {
           inboundPlan = await getInboundPlan(creds, batch.inboundPlanId);
         } catch (err) {
-          console.warn(`[batch status] getInboundPlan failed:`, err);
+          log.warn(`getInboundPlan failed:`, err);
         }
       }
     }

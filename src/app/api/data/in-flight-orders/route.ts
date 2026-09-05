@@ -1,20 +1,18 @@
 import { NextRequest, NextResponse } from 'next/server';
-import Database from 'better-sqlite3';
-import path from 'path';
+import { openDb } from '@/lib/db-conn';
+import { marketplaceParam } from '@/lib/request-params';
+import { createLogger } from '@/lib/log';
 
-function getDb() {
-  const dbPath = path.join(process.cwd(), 'data', 'flipledger.db');
-  const db = new Database(dbPath, { readonly: true });
-  db.pragma('journal_mode = WAL');
-  return db;
-}
+const log = createLogger('api/data/in-flight-orders');
+
+const getDb = () => openDb({ readonly: true });
 
 const DDP_DAYS = 10;
 
 export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url);
   const db = getDb();
-  const marketplace = searchParams.get('marketplace') || 'amazon';
+  const marketplace = marketplaceParam(searchParams) || 'amazon';
 
   try {
     const recentCutoff = new Date(Date.now() - 14 * 86400000).toISOString();
@@ -138,7 +136,7 @@ export async function GET(request: NextRequest) {
     });
   } catch (error) {
     db.close();
-    console.error('In-flight orders API error:', error);
+    log.error('In-flight orders API error:', error);
     return NextResponse.json({ error: 'Failed to load in-flight orders' }, { status: 500 });
   }
 }

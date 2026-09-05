@@ -33,19 +33,17 @@
  */
 import { NextRequest, NextResponse } from 'next/server';
 import Database from 'better-sqlite3';
-import path from 'path';
 import { clearTokenCache } from '@/lib/sp-api/auth';
 import { getListing, getSellerId } from '@/lib/sp-api/listingsItems';
 import { generateFnskuLabelPdf, type LabelInput } from '@/lib/fnsku-labels';
 import { printPdfBuffer, listAvailablePrinters } from '@/lib/print';
 import type { SPAPICredentials } from '@/lib/sp-api/types';
+import { openDb } from '@/lib/db-conn';
+import { createLogger } from '@/lib/log';
 
-function getDb() {
-  const dbPath = path.join(process.cwd(), 'data', 'flipledger.db');
-  const db = new Database(dbPath);
-  db.pragma('journal_mode = WAL');
-  return db;
-}
+const log = createLogger('api/list/batches/[id]/fnsku-labels');
+
+const getDb = () => openDb();
 
 function getAmazonCredentials(db: Database.Database): SPAPICredentials | null {
   const rows = db.prepare('SELECT key, value FROM settings').all() as { key: string; value: string }[];
@@ -106,7 +104,7 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
   const db = getDb();
   let creds: SPAPICredentials | null;
   let printerName: string;
-  let items: Array<{ sku: string; productName: string | null; condition: string; quantity: number }>;
+  let items: Array<{ sku: string; productName: string | null; condition: string; quantity: number; fnsku: string | null }>;
   try {
     const batch = db.prepare(`
       SELECT id, status, channel FROM listing_batches WHERE id = ?
@@ -115,21 +113,23 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
     if (batch.channel !== 'FBA') {
       return NextResponse.json({ error: 'FNSKU labels are only for FBA batches' }, { status: 400 });
     }
-    // Need to be at least past send — listings need to exist on Amazon
-    // (otherwise the FNSKU fetch will 404).
-    if (!['ready', 'boxing', 'placement', 'shipping', 'shipped'].includes(batch.status)) {
+    // DRAFT is allowed: auto-create-on-add + the preflight poll register each
+    // listing and store its FNSKU as soon as it's scanned, so labels can be
+    // printed BEFORE Send — which is the point (once a batch is sent, item
+    // quantities are locked, so a short print is expensive to fix).
+    if (!['draft', 'ready', 'boxing', 'placement', 'shipping', 'shipped'].includes(batch.status)) {
       return NextResponse.json({
-        error: `FNSKU labels available after Send to Amazon completes (current status: ${batch.status}).`,
+        error: `FNSKU labels aren't available in status "${batch.status}".`,
       }, { status: 400 });
     }
 
     items = itemIdFilter
       ? db.prepare(`
-          SELECT sku, product_name as productName, condition, quantity
+          SELECT sku, product_name as productName, condition, quantity, fnsku
           FROM listing_batch_items WHERE batch_id = ? AND id = ?
         `).all(batchId, itemIdFilter) as any[]
       : db.prepare(`
-          SELECT sku, product_name as productName, condition, quantity
+          SELECT sku, product_name as productName, condition, quantity, fnsku
           FROM listing_batch_items WHERE batch_id = ?
           ORDER BY id ASC
         `).all(batchId) as any[];
@@ -152,16 +152,28 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
 
   clearTokenCache();
 
-  // Fetch FNSKUs for each item from Amazon
-  const sellerId = await getSellerId(creds);
+  // FNSKUs are stored on the item as soon as the listing registers (preflight
+  // / send), so the common path needs ZERO SP-API calls — important for draft
+  // batches, where the user is standing at the printer mid-scan. Amazon is
+  // only consulted for items whose FNSKU isn't recorded yet.
+  const spCreds = creds;
+  let sellerId: string | null = null;
+  const resolveSellerId = async () => (sellerId ??= await getSellerId(spCreds));
+
   const labelInputs: LabelInput[] = [];
   const missingFnsku: string[] = [];
 
   for (const item of items) {
     try {
-      const listing = await getListing(creds, sellerId, item.sku);
-      const fnsku = listing?.summaries?.[0]?.fnSku;
-      const productTitle = listing?.summaries?.[0]?.itemName || item.productName || item.sku;
+      let fnsku = item.fnsku?.trim() || null;
+      let productTitle = item.productName || item.sku;
+
+      if (!fnsku) {
+        const listing = await getListing(spCreds, await resolveSellerId(), item.sku);
+        fnsku = listing?.summaries?.[0]?.fnSku || null;
+        productTitle = listing?.summaries?.[0]?.itemName || productTitle;
+      }
+
       if (!fnsku) {
         missingFnsku.push(item.sku);
         continue;
@@ -180,14 +192,14 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
         quantity: labelQty,
       });
     } catch (err) {
-      console.warn(`[fnsku-labels] getListing failed for ${item.sku}:`, err);
+      log.warn(`getListing failed for ${item.sku}:`, err);
       missingFnsku.push(item.sku);
     }
   }
 
   if (labelInputs.length === 0) {
     return NextResponse.json({
-      error: 'No FNSKUs available yet — all items still propagating on Amazon. Try again in a minute.',
+      error: 'No FNSKUs available yet — these listings are still registering with Amazon. Labels can be printed as soon as items show FBA READY (usually a minute or two after scanning).',
       missingFnsku,
     }, { status: 400 });
   }

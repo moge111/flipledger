@@ -5,8 +5,10 @@
 
 import { v4 as uuidv4 } from 'uuid';
 import type { WalmartCredentials, WalmartTokenResponse } from './types';
-import Database from 'better-sqlite3';
-import path from 'path';
+import { openDb } from '@/lib/db-conn';
+import { createLogger } from '@/lib/log';
+
+const log = createLogger('walmart-api/auth');
 
 const WALMART_TOKEN_URL = 'https://marketplace.walmartapis.com/v3/token';
 const WALMART_API_BASE = 'https://marketplace.walmartapis.com/v3';
@@ -19,8 +21,7 @@ let tokenExpiry: number = 0;
  * Get Walmart credentials from settings table.
  */
 export function getWalmartCredentials(): WalmartCredentials | null {
-  const dbPath = path.join(process.cwd(), 'data', 'flipledger.db');
-  const db = new Database(dbPath, { readonly: true });
+  const db = openDb({ readonly: true });
   db.pragma('journal_mode = WAL');
 
   try {
@@ -125,7 +126,7 @@ export async function walmartApiRequest(
     if (response.status === 429) {
       const retryAfter = response.headers.get('X-Next-Replenishment-Time');
       const waitMs = retryAfter ? Math.max(1000, new Date(retryAfter).getTime() - Date.now()) : (attempt + 1) * 5000;
-      console.warn(`Walmart API rate limited. Waiting ${waitMs}ms before retry ${attempt + 1}/${maxRetries}`);
+      log.warn(`Walmart API rate limited. Waiting ${waitMs}ms before retry ${attempt + 1}/${maxRetries}`);
       await new Promise(r => setTimeout(r, waitMs));
       continue;
     }
@@ -133,7 +134,7 @@ export async function walmartApiRequest(
     // Server error — retry with backoff
     if (response.status >= 500 && attempt < maxRetries) {
       const waitMs = (attempt + 1) * 3000;
-      console.warn(`Walmart API server error ${response.status}. Waiting ${waitMs}ms before retry`);
+      log.warn(`Walmart API server error ${response.status}. Waiting ${waitMs}ms before retry`);
       await new Promise(r => setTimeout(r, waitMs));
       continue;
     }

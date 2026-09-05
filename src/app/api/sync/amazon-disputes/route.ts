@@ -6,15 +6,13 @@
  */
 import { NextResponse } from 'next/server';
 import { syncAmazonDisputeCandidates } from '@/lib/sp-api/amazonDisputeCandidates';
-import Database from 'better-sqlite3';
-import path from 'path';
+import { openDb } from '@/lib/db-conn';
 
 export async function POST() {
   try {
     const result = syncAmazonDisputeCandidates();
 
-    const dbPath = path.join(process.cwd(), 'data', 'flipledger.db');
-    const db = new Database(dbPath);
+    const db = openDb();
     db.pragma('journal_mode = WAL');
     db.prepare(`
       INSERT INTO settings (key, value) VALUES ('amazon_disputes_last_sync', ?)

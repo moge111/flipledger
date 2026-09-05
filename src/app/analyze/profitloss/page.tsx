@@ -1,12 +1,13 @@
 'use client';
 
-import { useEffect, useState, useCallback } from 'react';
+import { useState, Fragment } from 'react';
 import StatCard from '@/components/ui/StatCard';
 import PageHeader from '@/components/ui/PageHeader';
-import { type DateRange } from '@/components/ui/DateRangePicker';
+import {type DateRange } from '@/components/ui/DateRangePicker';
 import { useFilters } from '@/lib/useFilters';
-import { formatCurrency, formatCurrencyParens, formatNumber } from '@/lib/formatters';
+import {formatCurrency, formatCurrencyParens } from '@/lib/formatters';
 import { ChevronDown, ChevronRight, Package } from 'lucide-react';
+import { useQuery } from '@/lib/useQuery';
 
 interface SaleItem {
   order_id: string;
@@ -17,6 +18,8 @@ interface SaleItem {
   sku: string;
   quantity: number;
   revenue: number;
+  product_revenue: number;
+  shippingCredit: number;
   cogs: number;
   fees: number;
   shippingCost: number;
@@ -59,19 +62,10 @@ interface RefundItem {
 }
 
 export default function ProfitLossPage() {
-  const [data, setData] = useState<PLData | null>(null);
-  const [loading, setLoading] = useState(true);
   const { dateRange, setDateRange, marketplace, setMarketplace, marketplaceParam, dateBasis, setDateBasis, dateBasisParam } = useFilters();
   const [expandedSections, setExpandedSections] = useState<Set<string>>(new Set());
 
-  const fetchData = useCallback(async () => {
-    setLoading(true);
-    const res = await fetch(`/api/data/profitloss?startDate=${dateRange.startDate}&endDate=${dateRange.endDate}${marketplaceParam}${dateBasisParam}`);
-    setData(await res.json());
-    setLoading(false);
-  }, [dateRange, marketplace, dateBasis]);
-
-  useEffect(() => { fetchData(); }, [fetchData]);
+  const { data, loading } = useQuery<PLData>(`/api/data/profitloss?startDate=${dateRange.startDate}&endDate=${dateRange.endDate}${marketplaceParam}${dateBasisParam}`);
 
   function toggleSection(key: string) {
     setExpandedSections(prev => {
@@ -140,7 +134,7 @@ export default function ProfitLossPage() {
             </tr>
             <PLRow label="Sales" amount={data.income.sales} />
             <PLRow label="Shipping Credits" amount={data.income.shippingCredits} />
-            <PLRow label="Other Income" amount={data.income.otherIncome} />
+            {data.income.otherIncome !== 0 && <PLRow label="Other Income" amount={data.income.otherIncome} />}
             <PLRow label="Total Income" amount={data.income.total} bold />
 
             {/* ─── EXPENSES SECTION ─── */}
@@ -149,16 +143,26 @@ export default function ProfitLossPage() {
             </tr>
             <PLRow label="Cost of Goods Sold" amount={-data.expenses.cogs} />
 
-            {/* Fee categories — expandable */}
-            {Object.entries(data.expenses.feeHierarchy).map(([category, { total, children }]) => (
-              <ExpandableSection
-                key={category}
-                label={category}
-                total={-total}
-                children={children.map(c => ({ label: c.name, amount: -c.amount }))}
-                expanded={expandedSections.has(category)}
-                onToggle={() => toggleSection(category)}
-              />
+            {/* Fee categories — expandable; grouped by marketplace in the All view */}
+            {groupFeeCategories(data.expenses.feeHierarchy, !marketplace || marketplace === 'all').map(group => (
+              <Fragment key={group.label}>
+                {group.label && (
+                  <tr className="border-b border-border-subtle/50">
+                    <td className="px-4 pt-3 pb-1 text-[11px] font-semibold tracking-widest uppercase text-text-tertiary">{group.label}</td>
+                    <td className="px-4 pt-3 pb-1 text-right font-mono text-xs text-text-tertiary tabular-nums">{formatCurrencyParens(-group.total)}</td>
+                  </tr>
+                )}
+                {group.entries.map(([category, { total, children }]) => (
+                  <ExpandableSection
+                    key={category}
+                    label={category}
+                    total={-total}
+                    rows={children.map(c => ({ label: c.name, amount: -c.amount }))}
+                    expanded={expandedSections.has(category)}
+                    onToggle={() => toggleSection(category)}
+                  />
+                ))}
+              </Fragment>
             ))}
 
             <PLRow label="MFN Shipping Costs" amount={-data.expenses.shippingCosts} />
@@ -166,7 +170,7 @@ export default function ProfitLossPage() {
             <ExpandableSection
               label="Other Expenses"
               total={-data.expenses.otherExpenses}
-              children={data.expenses.otherExpensesByCategory.map(c => ({ label: c.category, amount: -c.total }))}
+              rows={data.expenses.otherExpensesByCategory.map(c => ({ label: c.category, amount: -c.total }))}
               expanded={expandedSections.has('otherExpenses')}
               onToggle={() => toggleSection('otherExpenses')}
             />
@@ -219,6 +223,7 @@ export default function ProfitLossPage() {
                   <th className="px-4 py-2.5 text-right text-[11px] font-medium tracking-widest uppercase text-text-tertiary border-b border-border-subtle w-24">Revenue</th>
                   <th className="px-4 py-2.5 text-right text-[11px] font-medium tracking-widest uppercase text-text-tertiary border-b border-border-subtle w-24">COGS</th>
                   <th className="px-4 py-2.5 text-right text-[11px] font-medium tracking-widest uppercase text-text-tertiary border-b border-border-subtle w-24">Fees</th>
+                  <th className="px-4 py-2.5 text-right text-[11px] font-medium tracking-widest uppercase text-text-tertiary border-b border-border-subtle w-24">Ship</th>
                   <th className="px-4 py-2.5 text-right text-[11px] font-medium tracking-widest uppercase text-text-tertiary border-b border-border-subtle w-24">Net Profit</th>
                   <th className="px-4 py-2.5 text-right text-[11px] font-medium tracking-widest uppercase text-text-tertiary border-b border-border-subtle w-20">Margin</th>
                   <th className="px-4 py-2.5 text-right text-[11px] font-medium tracking-widest uppercase text-text-tertiary border-b border-border-subtle w-28">Settled</th>
@@ -245,9 +250,17 @@ export default function ProfitLossPage() {
                         </span>
                       </td>
                       <td className="px-4 py-2 text-right text-sm font-mono text-text-secondary">{item.quantity}</td>
-                      <td className="px-4 py-2 text-right text-sm font-mono text-text-primary">{formatCurrency(item.revenue)}</td>
+                      <td className="px-4 py-2 text-right text-sm font-mono text-text-primary">
+                        <div>{formatCurrency(item.revenue)}</div>
+                        {item.shippingCredit > 0 && (
+                          <div className="text-[11px] text-text-tertiary" title="Shipping the buyer paid, counted as income">
+                            {formatCurrency(item.product_revenue)} + {formatCurrency(item.shippingCredit)} ship
+                          </div>
+                        )}
+                      </td>
                       <td className="px-4 py-2 text-right text-sm font-mono text-negative">{item.cogs > 0 ? formatCurrency(-item.cogs) : '-'}</td>
                       <td className="px-4 py-2 text-right text-sm font-mono text-negative">{fees > 0 ? formatCurrency(-fees) : '-'}</td>
+                      <td className="px-4 py-2 text-right text-sm font-mono text-negative">{item.shippingCost > 0 ? formatCurrency(-item.shippingCost) : '-'}</td>
                       <td className={`px-4 py-2 text-right text-sm font-mono font-medium ${item.net_profit >= 0 ? 'text-positive' : 'text-negative'}`}>
                         {formatCurrency(item.net_profit)}
                       </td>
@@ -327,6 +340,37 @@ export default function ProfitLossPage() {
   );
 }
 
+type FeeEntry = [string, { total: number; children: { name: string; amount: number }[] }];
+
+/** Which marketplace a fee_category belongs to — used only to group the All-Marketplaces view. */
+function marketplaceOfCategory(category: string): string {
+  if (category.startsWith('eBay')) return 'eBay';
+  if (category.startsWith('Walmart') || category.startsWith('WFS')) return 'Walmart';
+  if (category === 'Payment Processing Fees') return 'PayPal';
+  return 'Amazon';
+}
+
+function groupFeeCategories(
+  feeHierarchy: Record<string, { total: number; children: { name: string; amount: number }[] }>,
+  grouped: boolean,
+): { label: string | null; total: number; entries: FeeEntry[] }[] {
+  const entries = Object.entries(feeHierarchy) as FeeEntry[];
+  if (!grouped) return [{ label: null, total: 0, entries }];
+  const order = ['Amazon', 'Walmart', 'eBay', 'PayPal'];
+  const byMkt = new Map<string, FeeEntry[]>();
+  for (const e of entries) {
+    const m = marketplaceOfCategory(e[0]);
+    if (!byMkt.has(m)) byMkt.set(m, []);
+    byMkt.get(m)!.push(e);
+  }
+  return order
+    .filter(m => byMkt.has(m))
+    .map(m => {
+      const es = byMkt.get(m)!.sort((a, b) => b[1].total - a[1].total);
+      return { label: m, total: es.reduce((s, e) => s + e[1].total, 0), entries: es };
+    });
+}
+
 function PLRow({ label, amount, bold, negative, indent }: {
   label: string;
   amount: number;
@@ -334,6 +378,7 @@ function PLRow({ label, amount, bold, negative, indent }: {
   negative?: boolean;
   indent?: boolean;
 }) {
+  amount = amount === 0 ? 0 : amount; // normalise −0 (from `-x` on a zero total)
   const isNeg = amount < 0;
   return (
     <tr className="border-b border-border-subtle hover:bg-bg-hover transition-colors">
@@ -349,13 +394,14 @@ function PLRow({ label, amount, bold, negative, indent }: {
   );
 }
 
-function ExpandableSection({ label, total, children, expanded, onToggle }: {
+function ExpandableSection({ label, total, rows, expanded, onToggle }: {
   label: string;
   total: number;
-  children: { label: string; amount: number }[];
+  rows: { label: string; amount: number }[];
   expanded: boolean;
   onToggle: () => void;
 }) {
+  total = total === 0 ? 0 : total; // normalise −0
   const isNeg = total < 0;
   return (
     <>
@@ -370,7 +416,7 @@ function ExpandableSection({ label, total, children, expanded, onToggle }: {
           {isNeg ? formatCurrencyParens(total) : formatCurrency(total)}
         </td>
       </tr>
-      {expanded && children.map((child, i) => (
+      {expanded && rows.map((child, i) => (
         <PLRow key={i} label={child.label} amount={child.amount} indent />
       ))}
     </>

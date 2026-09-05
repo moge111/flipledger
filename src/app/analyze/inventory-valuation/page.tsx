@@ -1,11 +1,12 @@
 'use client';
 
-import { useEffect, useState, useCallback, useMemo } from 'react';
+import { useState, } from 'react';
 import { type ColumnDef } from '@tanstack/react-table';
 import StatCard from '@/components/ui/StatCard';
 import PageHeader from '@/components/ui/PageHeader';
-import { type DateRange } from '@/components/ui/DateRangePicker';
+import {type DateRange } from '@/components/ui/DateRangePicker';
 import { useFilters } from '@/lib/useFilters';
+import { useQuery } from '@/lib/useQuery';
 import DataTable from '@/components/tables/DataTable';
 import { formatCurrency, formatPercent, formatNumber } from '@/lib/formatters';
 
@@ -27,9 +28,6 @@ interface ValuationRow {
 }
 
 export default function InventoryValuationPage() {
-  const [rows, setRows] = useState<ValuationRow[]>([]);
-  const [totals, setTotals] = useState<any>(null);
-  const [loading, setLoading] = useState(true);
   const [editItem, setEditItem] = useState<ValuationRow | null>(null);
   const [editCogs, setEditCogs] = useState('');
   const [editField, setEditField] = useState<'cogs' | 'price' | 'mfn'>('cogs');
@@ -39,18 +37,14 @@ export default function InventoryValuationPage() {
   const [showAddMfn, setShowAddMfn] = useState(false);
   const { dateRange, setDateRange, marketplace, setMarketplace, marketplaceParam } = useFilters();
 
-  const fetchData = useCallback(async (silent = false) => {
-    if (!silent) setLoading(true);
-    const res = await fetch(`/api/data/inventory-valuation?startDate=${dateRange.startDate}&endDate=${dateRange.endDate}${marketplaceParam}`);
-    const data = await res.json();
-    setRows(data.items || data.rows || []);
-    setTotals(data.totals || null);
-    if (!silent) setLoading(false);
-  }, [dateRange, marketplace]);
+  const { data, loading, reload: fetchData } = useQuery<{ items?: ValuationRow[]; rows?: ValuationRow[]; totals?: any }>(`/api/data/inventory-valuation?startDate=${dateRange.startDate}&endDate=${dateRange.endDate}${marketplaceParam}`);
+  const rows: ValuationRow[] = data?.items || data?.rows || [];
+  const totals: any = data?.totals || null;
 
-  useEffect(() => { fetchData(); }, [fetchData]);
-
-  const columns = useMemo<ColumnDef<ValuationRow, any>[]>(() => [
+  // Not manually memoized: the cells close over handleEditCogs (declared below,
+  // re-created each render), so a [] memo captured a stale closure. React
+  // Compiler memoizes this on its own.
+  const columns: ColumnDef<ValuationRow, any>[] = [
     {
       id: 'product', header: 'Product', accessorFn: (row) => row.productName || row.asin,
       cell: ({ row }) => {
@@ -180,7 +174,7 @@ export default function InventoryValuationPage() {
         return <span className={`font-mono ${r.expectedRoi >= 0 ? 'text-positive' : 'text-negative'}`}>{formatPercent(r.expectedRoi)}</span>;
       }, size: 100,
     },
-  ], []);
+  ];
 
   function handleEditCogs(item: ValuationRow) {
     setEditItem(item);

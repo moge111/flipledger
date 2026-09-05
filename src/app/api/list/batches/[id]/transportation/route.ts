@@ -13,8 +13,6 @@
  *       (or fetches Partnered labels via the existing labels endpoint)
  */
 import { NextRequest, NextResponse } from 'next/server';
-import Database from 'better-sqlite3';
-import path from 'path';
 import { resolveShipFromContact } from '@/lib/listing-ship-from';
 import {
   generateTransportationOptions,
@@ -25,13 +23,9 @@ import {
 } from '@/lib/sp-api/inboundPlansV2';
 import type { SPAPICredentials } from '@/lib/sp-api/types';
 import { expandCarrierChoice } from '@/lib/listing-send-policy';
+import { openDb } from '@/lib/db-conn';
 
-function getDb() {
-  const dbPath = path.join(process.cwd(), 'data', 'flipledger.db');
-  const db = new Database(dbPath);
-  db.pragma('journal_mode = WAL');
-  return db;
-}
+const getDb = () => openDb();
 
 function getCredentials(): SPAPICredentials {
   const db = getDb();

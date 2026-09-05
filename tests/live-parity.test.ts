@@ -26,6 +26,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'fs';
 import path from 'path';
+import { MKT_DATE, addDays } from '../src/lib/market-day';
 
 const DB_PATH = process.env.FLIPLEDGER_DB_PATH || path.join(process.cwd(), 'data', 'flipledger.db');
 const dbExists = fs.existsSync(DB_PATH);
@@ -107,10 +108,10 @@ test('profitability totals equal raw order_items — no JOIN fan-out in any grou
           WHERE event_type = 'ShipmentEvent' AND order_id IS NOT NULL GROUP BY order_id) fe
       ON oi.order_id = fe.order_id
     JOIN orders o ON oi.order_id = o.order_id
-    WHERE fe.posted_date >= ? AND fe.posted_date < ?
+    WHERE ${MKT_DATE('fe.posted_date')} >= ? AND ${MKT_DATE('fe.posted_date')} < ?
   `).get(
-    `${YTD.startDate}T00:00:00Z`,
-    new Date(new Date(YTD.endDate).getTime() + 86400000).toISOString().split('T')[0] + 'T00:00:00Z',
+    YTD.startDate,
+    addDays(YTD.endDate, 1),
   ) as { units: number; revenue: number };
   db.close();
 
@@ -200,6 +201,36 @@ test('non-MFN shipping credits in income are exactly matched by ShippingChargeba
     'no charged-back shipping credits found at all — the rule is no longer exercised, re-verify it still applies');
   assert.equal(row.counted, row.chargebacks,
     `counted credit ${row.counted} != chargebacks ${row.chargebacks} — the credit/fee pair no longer cancels`);
+});
+
+test('salesDetail rows reconcile to the header income lines (live data)', { skip: !dbExists }, async () => {
+  // The per-order rows must account for exactly the same money the header does.
+  // Before Aug 29 2026 the rows dropped the shipping credit while still
+  // subtracting the label cost and the ShippingHB referral fee charged on that
+  // shipping income, so a buyer-paid-expedited order displayed as a large loss.
+  // A short trailing window keeps the row set under salesDetail's LIMIT 500.
+  const end = new Date();
+  const start = new Date(end.getTime() - 7 * 86400000);
+  const win = { startDate: start.toISOString().split('T')[0], endDate: end.toISOString().split('T')[0] };
+
+  for (const params of [win, { ...win, marketplace: 'amazon' }]) {
+    const d = await fetchRoute('profitloss', params);
+    const rows: Array<Record<string, number>> = d.salesDetail;
+    if (rows.length === 0) continue;
+    assert.ok(rows.length < 500, 'window too large — salesDetail hit its LIMIT, pick a shorter one');
+
+    const sum = (k: string) => rows.reduce((s, r) => s + r[k], 0);
+    assert.equal(sum('product_revenue'), d.income.sales,
+      'salesDetail product revenue must equal the header sales line');
+    assert.equal(sum('shippingCredit'), d.income.shippingCredits,
+      'salesDetail shipping credits must equal the header shippingCredits line');
+
+    for (const r of rows) {
+      assert.equal(r.revenue, r.product_revenue + r.shippingCredit, `${r.order_id}: revenue composition`);
+      assert.equal(r.net_profit, r.revenue - r.cogs + r.fees - r.shippingCost, `${r.order_id}: net_profit composition`);
+      assert.ok(r.shippingCredit >= 0, `${r.order_id}: shipping credit must never be negative`);
+    }
+  }
 });
 
 test('YTD cash vs accrual both compute (no crash) and use integer cents', { skip: !dbExists }, async () => {

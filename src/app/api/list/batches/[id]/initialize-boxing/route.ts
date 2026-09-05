@@ -20,7 +20,6 @@
  */
 import { NextRequest, NextResponse } from 'next/server';
 import Database from 'better-sqlite3';
-import path from 'path';
 import { clearTokenCache } from '@/lib/sp-api/auth';
 import {
   generatePackingOptions,
@@ -29,13 +28,12 @@ import {
   getInboundOperation,
 } from '@/lib/sp-api/inboundPlansV2';
 import type { SPAPICredentials } from '@/lib/sp-api/types';
+import { openDb } from '@/lib/db-conn';
+import { createLogger } from '@/lib/log';
 
-function getDb() {
-  const dbPath = path.join(process.cwd(), 'data', 'flipledger.db');
-  const db = new Database(dbPath);
-  db.pragma('journal_mode = WAL');
-  return db;
-}
+const log = createLogger('api/list/batches/[id]/initialize-boxing');
+
+const getDb = () => openDb();
 
 function getAmazonCredentials(db: Database.Database): SPAPICredentials | null {
   const rows = db.prepare('SELECT key, value FROM settings').all() as { key: string; value: string }[];
@@ -148,7 +146,7 @@ export async function POST(_request: NextRequest, { params }: { params: Promise<
     packingOptions = await listPackingOptions(creds, inboundPlanId!);
     if (packingOptions.length === 0) {
       // No options yet — generate them
-      console.log('[init-boxing] No packing options found, generating…');
+      log.info('No packing options found, generating…');
       const op = await generatePackingOptions(creds, inboundPlanId!);
       const result = await waitForOperation(creds, op.operationId, 180_000);
       if (!result.success) {
@@ -188,7 +186,7 @@ export async function POST(_request: NextRequest, { params }: { params: Promise<
   // Step 3: Save to local DB
   const db2 = getDb();
   const now = new Date().toISOString();
-  let savedGroups: Array<{ id: number; packingGroupId: string; groupIndex: number; items: any[] }> = [];
+  const savedGroups: Array<{ id: number; packingGroupId: string; groupIndex: number; items: any[] }> = [];
   try {
     const tx = db2.transaction(() => {
       // Save packing option ID on batch
@@ -214,7 +212,7 @@ export async function POST(_request: NextRequest, { params }: { params: Promise<
             WHERE batch_id = ? AND sku = ?
           `).get(batchId, item.msku) as any;
           if (!batchItem) {
-            console.warn(`[init-boxing] MSKU ${item.msku} returned by Amazon but not found in batch ${batchId}`);
+            log.warn(`MSKU ${item.msku} returned by Amazon but not found in batch ${batchId}`);
             continue;
           }
           db2.prepare(`
