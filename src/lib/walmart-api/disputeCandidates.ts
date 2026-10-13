@@ -76,6 +76,14 @@ const LOST_IN_PIPELINE_DAYS = 90;
 // claim is actionable days 90–135 after the return.
 const LOST_CLAIM_WINDOW_DAYS = 135;
 
+function alreadyReimbursed(creditCents: number, creditDate: string, refundCents: number): { eligibility: 'not_eligible'; reasons: string[]; windowDays?: number } {
+  const reasons = [`Walmart already reimbursed this lost return: $${(creditCents / 100).toFixed(2)} LostReturnAdjustment on ${creditDate}. Do not file.`];
+  if (creditCents < refundCents) {
+    reasons.push(`Paid $${(creditCents / 100).toFixed(2)} of the $${(refundCents / 100).toFixed(2)} refund. Walmart values lost returns at its own restock value, not the refund amount.`);
+  }
+  return { eligibility: 'not_eligible', reasons };
+}
+
 function classifyEligibility(
   reason: string,
   fulfillmentChannel: string | null,
@@ -105,7 +113,7 @@ function classifyEligibility(
     }
     tags.push(`Walmart deducted this refund ${Math.floor(ageDays)} days ago, but the unit never returned: no RTV fee, no restock, no resale, no reimbursement`);
     tags.push('The "return not processed / no reimbursement" dispute window opens 90 days after the return — it is open now, and closes 45 days later. Open a Seller Support case ("Initiate claim")');
-    tags.push('Tip: refresh the Services Fees export first — a recent RTV fee, LostReturnAdjustment, or LostInventory reimbursement beyond your last import would clear this');
+    tags.push('Before filing: export Seller Center → Payments → Services Fees (Refund and RC_InventoryRTVFee CSVs) into data/walmart-service-fees and run "Import RTV & lost returns" in Settings. A LostReturnAdjustment or RTV newer than your last import clears this claim.');
     return { eligibility: 'eligible', reasons: tags, windowDays: LOST_CLAIM_WINDOW_DAYS };
   }
 
@@ -178,6 +186,7 @@ export function syncWalmartDisputeCandidates(): WalmartDisputeSyncResult {
       SELECT
         r.id as refundId, r.order_id as orderId, r.refund_date as refundDate,
         r.asin, r.sku, r.refund_amount as refundAmount, r.reason,
+        r.return_order_id as returnOrderId,
         o.fulfillment_channel as fulfillmentChannel,
         COALESCE(p.name, p2.name, p3.name, r.asin, r.sku) as productName
       FROM refunds r
@@ -198,6 +207,7 @@ export function syncWalmartDisputeCandidates(): WalmartDisputeSyncResult {
       sku: string | null;
       refundAmount: number;
       reason: string;
+      returnOrderId: string | null;
       fulfillmentChannel: string | null;
       productName: string | null;
     }>;
@@ -271,6 +281,16 @@ export function syncWalmartDisputeCandidates(): WalmartDisputeSyncResult {
     WHERE oi.sku = ? AND o.purchase_date > ? AND o.status != 'Cancelled' LIMIT 1
   `);
 
+  // Walmart already paid for the lost return (LostReturnAdjustment, from the
+  // Services Fees Refund CSVs). Matched on the RMA, which is the refund's own
+  // return_order_id; PO only when the row carries no RMA. Sept 22 2026: the
+  // recon roll-ups carry no PO or GTIN, so hasReimbursement could never see
+  // these, and 4 already-paid returns were filed on Aug 29 and denied.
+  const lostReturnCredit = db.prepare(`
+    SELECT SUM(credit_cents) AS cents, MAX(credit_date) AS date FROM wfs_lost_returns
+    WHERE rma = ? OR (rma IS NULL AND po = ?)
+  `);
+
   const upsert = db.prepare(`
     INSERT INTO walmart_dispute_candidates (
       refund_id, order_id, refund_date, return_reason, asin, sku, product_name,
@@ -320,9 +340,10 @@ export function syncWalmartDisputeCandidates(): WalmartDisputeSyncResult {
         !(r.sku && hasStock.get(r.sku)) &&
         !(r.sku && hasLaterSale.get(r.sku, r.refundDate)) &&
         !hasReimbursement.get(r.refundDate, gtin, gtin, r.orderId, r.orderId);
-      const { eligibility, reasons, windowDays } = classifyEligibility(
-        r.reason, r.fulfillmentChannel, r.refundDate, hasRefundEvent, unitLostInPipeline
-      );
+      const credit = lostReturnCredit.get(r.returnOrderId, r.orderId) as { cents: number | null; date: string | null };
+      const { eligibility, reasons, windowDays } = credit.cents
+        ? alreadyReimbursed(credit.cents, credit.date!, r.refundAmount)
+        : classifyEligibility(r.reason, r.fulfillmentChannel, r.refundDate, hasRefundEvent, unitLostInPipeline);
       const windowEnd = new Date(new Date(r.refundDate).getTime() + (windowDays || DISPUTE_WINDOW_DAYS) * 86400000)
         .toISOString().slice(0, 10);
 

@@ -153,3 +153,102 @@ export async function walmartApiRequest(
 
   throw new Error(`Walmart API request failed after ${maxRetries} retries: ${endpoint}`);
 }
+
+export interface WalmartFetchOptions {
+  method?: 'GET' | 'POST' | 'PUT' | 'DELETE';
+  params?: Record<string, string>;
+  body?: unknown;
+  /** 'application/pdf' for label endpoints; JSON otherwise. */
+  accept?: string;
+  maxRetries?: number;
+}
+
+export interface WalmartFetchResult {
+  status: number;
+  contentType: string;
+  /** Parsed JSON body, or null for an empty or non-JSON body. */
+  json: any;
+  /** Raw body for non-JSON responses (label PDFs). */
+  buffer: Buffer | null;
+}
+
+export class WalmartApiError extends Error {
+  constructor(public status: number, public endpoint: string, public body: string) {
+    super(`Walmart API error ${status} on ${endpoint}: ${body.slice(0, 1500)}`);
+  }
+}
+
+/** Walmart Preferred Carrier endpoints (rate quotes, booking, carrier labels). */
+const CARRIER_ENDPOINT = /^\/fulfillment\/(inbound-shipments-quote|inbound-shipments-booking|generate-label|download-label)(\/|$|\?)/;
+export const needsCarrierHeaders = (endpoint: string) => CARRIER_ENDPOINT.test(endpoint);
+
+/**
+ * Walmart request for the WFS inbound + carrier endpoints. Unlike
+ * walmartApiRequest it supports PUT/DELETE, PDF responses and empty bodies,
+ * and sends the Basic client-credentials header (the payment statement 404s
+ * without it). WM_GLOBAL_VERSION / WM_MARKET go ONLY to the Preferred Carrier
+ * endpoints, which list them as required: on POST /fulfillment/inbound-shipments
+ * they make Walmart answer 400 "invalid martId,buId" / "tenant not found for
+ * buId,martId" (Oct 8, 2026 — the first live send of batch 62).
+ */
+export async function walmartFetch(
+  credentials: WalmartCredentials,
+  endpoint: string,
+  opts: WalmartFetchOptions = {},
+): Promise<WalmartFetchResult> {
+  const method = opts.method ?? 'GET';
+  const maxRetries = opts.maxRetries ?? 3;
+  const url = `${WALMART_API_BASE}${endpoint}${opts.params ? `?${new URLSearchParams(opts.params)}` : ''}`;
+  const basicAuth = Buffer.from(`${credentials.clientId}:${credentials.clientSecret}`).toString('base64');
+  let token = await getAccessToken(credentials);
+
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    const headers: Record<string, string> = {
+      'WM_SEC.ACCESS_TOKEN': token,
+      'Authorization': `Basic ${basicAuth}`,
+      'WM_SVC.NAME': 'Walmart Marketplace',
+      'WM_QOS.CORRELATION_ID': uuidv4(),
+      'Accept': opts.accept ?? 'application/json',
+    };
+    if (needsCarrierHeaders(endpoint)) {
+      headers['WM_GLOBAL_VERSION'] = '3.1';
+      headers['WM_MARKET'] = 'US';
+    }
+    const init: RequestInit = { method, headers };
+    if (opts.body !== undefined) {
+      headers['Content-Type'] = 'application/json';
+      init.body = JSON.stringify(opts.body);
+    }
+
+    const response = await fetch(url, init);
+    const contentType = response.headers.get('content-type') || '';
+
+    if (response.ok) {
+      const raw = Buffer.from(await response.arrayBuffer());
+      if (contentType.includes('json') || (raw.length > 0 && raw[0] === 0x7b /* { */)) {
+        try { return { status: response.status, contentType, json: JSON.parse(raw.toString('utf8')), buffer: null }; }
+        catch { /* fall through to raw */ }
+      }
+      return { status: response.status, contentType, json: null, buffer: raw.length ? raw : null };
+    }
+
+    if (response.status === 429 && attempt < maxRetries) {
+      const retryAfter = response.headers.get('X-Next-Replenishment-Time');
+      const waitMs = retryAfter ? Math.max(1000, new Date(retryAfter).getTime() - Date.now()) : (attempt + 1) * 5000;
+      log.warn(`Walmart API rate limited on ${endpoint}. Waiting ${waitMs}ms`);
+      await new Promise(r => setTimeout(r, waitMs));
+      continue;
+    }
+    if (response.status >= 500 && attempt < maxRetries) {
+      await new Promise(r => setTimeout(r, (attempt + 1) * 3000));
+      continue;
+    }
+    if (response.status === 401 && attempt === 0) {
+      clearTokenCache();
+      token = await getAccessToken(credentials);
+      continue;
+    }
+    throw new WalmartApiError(response.status, endpoint, await response.text());
+  }
+  throw new Error(`Walmart API request failed after ${maxRetries} retries: ${endpoint}`);
+}

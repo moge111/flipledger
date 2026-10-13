@@ -12,28 +12,38 @@ import {formatCurrency } from '@/lib/formatters';
 
 interface TaxRow {
   state: string;
+  orderCount: number;
   taxCollected: number;
   facilitatorTax: number;
-  total: number;
+  owed: number;
+}
+
+interface SalesTaxTotals {
+  stateCount: number;
+  orderCount: number;
+  totalCollected: number;
+  totalFacilitator: number;
+  totalOwed: number;
 }
 
 export default function SalesTaxPage() {
   const { dateRange, setDateRange, marketplace, setMarketplace, marketplaceParam } = useFilters();
 
-  const { data, loading, reload: fetchData } = useQuery<{ rows?: TaxRow[]; totals?: { totalCollected: number; totalFacilitator: number } }>(`/api/data/salestax?startDate=${dateRange.startDate}&endDate=${dateRange.endDate}${marketplaceParam}`);
-  const rows: TaxRow[] = data?.rows || [];
-  const totals: { totalCollected: number; totalFacilitator: number } | null = data?.totals || null;
+  const { data, loading } = useQuery<{ items?: TaxRow[]; totals?: SalesTaxTotals }>(`/api/data/salestax?startDate=${dateRange.startDate}&endDate=${dateRange.endDate}${marketplaceParam}`);
+  const rows: TaxRow[] = data?.items || [];
+  const totals: SalesTaxTotals | null = data?.totals || null;
 
   const columns = useMemo<ColumnDef<TaxRow, any>[]>(() => [
     { id: 'state', header: 'State', accessorKey: 'state', cell: ({ getValue }) => <span className="text-text-primary font-medium">{getValue() as string}</span>, size: 100 },
-    { id: 'taxCollected', header: 'Tax Collected', accessorKey: 'taxCollected', cell: ({ getValue }) => <span className="font-mono text-text-primary">{formatCurrency(getValue() as number)}</span>, size: 140 },
-    { id: 'facilitatorTax', header: 'Marketplace Facilitator Tax', accessorKey: 'facilitatorTax', cell: ({ getValue }) => <span className="font-mono text-text-secondary">{formatCurrency(getValue() as number)}</span>, size: 200 },
-    { id: 'total', header: 'Total', accessorKey: 'total', cell: ({ getValue }) => <span className="font-mono font-medium text-text-primary">{formatCurrency(getValue() as number)}</span>, size: 140 },
+    { id: 'orderCount', header: 'Orders', accessorKey: 'orderCount', cell: ({ getValue }) => <span className="text-text-secondary tabular-nums">{(getValue() as number).toLocaleString()}</span>, size: 100 },
+    { id: 'taxCollected', header: 'Tax Collected', accessorKey: 'taxCollected', cell: ({ getValue }) => <span className="text-text-primary tabular-nums">{formatCurrency(getValue() as number)}</span>, size: 140 },
+    { id: 'facilitatorTax', header: 'Remitted by Marketplace', accessorKey: 'facilitatorTax', cell: ({ getValue }) => <span className="text-text-secondary tabular-nums">{formatCurrency(getValue() as number)}</span>, size: 200 },
+    { id: 'owed', header: 'You Owe', accessorKey: 'owed', cell: ({ getValue }) => <span className="font-medium text-text-primary tabular-nums">{formatCurrency(getValue() as number)}</span>, size: 140 },
   ], []);
 
   function handleExport() {
-    const headers = ['State', 'Tax Collected', 'Marketplace Facilitator Tax', 'Total'];
-    const csvRows = rows.map(r => [r.state, (r.taxCollected / 100).toFixed(2), (r.facilitatorTax / 100).toFixed(2), (r.total / 100).toFixed(2)].join(','));
+    const headers = ['State', 'Orders', 'Tax Collected', 'Remitted by Marketplace', 'You Owe'];
+    const csvRows = rows.map(r => [r.state, r.orderCount, (r.taxCollected / 100).toFixed(2), (r.facilitatorTax / 100).toFixed(2), (r.owed / 100).toFixed(2)].join(','));
     const csv = [headers.join(','), ...csvRows].join('\n');
     const blob = new Blob([csv], { type: 'text/csv' });
     const url = URL.createObjectURL(blob);
@@ -45,9 +55,10 @@ export default function SalesTaxPage() {
 
   const footerRow = totals ? {
     state: <span className="text-text-primary font-semibold">Totals</span>,
-    taxCollected: <span className="font-mono">{formatCurrency(totals.totalCollected)}</span>,
-    facilitatorTax: <span className="font-mono">{formatCurrency(totals.totalFacilitator)}</span>,
-    total: <span className="font-mono font-semibold">{formatCurrency(totals.totalCollected + totals.totalFacilitator)}</span>,
+    taxCollected: <span className="tabular-nums">{formatCurrency(totals.totalCollected)}</span>,
+    orderCount: <span className="tabular-nums">{totals.orderCount.toLocaleString()}</span>,
+    facilitatorTax: <span className="tabular-nums">{formatCurrency(totals.totalFacilitator)}</span>,
+    owed: <span className="font-semibold tabular-nums">{formatCurrency(totals.totalOwed)}</span>,
   } : undefined;
 
   return (
@@ -55,11 +66,16 @@ export default function SalesTaxPage() {
       <PageHeader title="Sales Tax" subtitle="Analyze > Sales Tax" dateRange={dateRange} onDateRangeChange={setDateRange}
         marketplace={marketplace}
         onMarketplaceChange={setMarketplace} onExport={handleExport} />
-      <div className="grid grid-cols-2 lg:grid-cols-3 gap-4 mb-6">
-        <StatCard label="Total Tax Collected" value={totals?.totalCollected || 0} format="currency" />
-        <StatCard label="Marketplace Facilitator Tax" value={totals?.totalFacilitator || 0} format="currency" />
-        <StatCard label="States" value={rows.length} format="number" />
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
+        <StatCard label="Tax Collected" value={totals?.totalCollected || 0} format="currency" />
+        <StatCard label="Remitted by Marketplaces" value={totals?.totalFacilitator || 0} format="currency" />
+        <StatCard label="You Owe" value={totals?.totalOwed || 0} format="currency" />
+        <StatCard label="States" value={totals?.stateCount || 0} format="number" />
       </div>
+      <p className="text-sm text-text-secondary mb-4">
+        Amazon, Walmart and eBay collect and remit sales tax as marketplace facilitators. It is not your income and you file nothing for it.
+        &quot;Unknown&quot; is tax on orders whose shipping state never synced; &quot;Intl&quot; is tax on orders shipped outside the US.
+      </p>
       <DataTable data={rows} columns={columns} searchPlaceholder="Search by state..." footerRow={footerRow} />
     </div>
   );

@@ -13,7 +13,6 @@ type CogsAgg = { totalCogs: number };
 type RefundAgg = { totalRefunds: number; totalClawbacks: number };
 type Total = { total: number };
 type ExpenseAgg = { totalExpenses: number };
-interface ChartRow { day: string; revenue: number; cogs: number }
 interface ProductRow { name: string; asin: string; category: string | null; revenue: number; unitsSold: number; cogs: number }
 type CategoryTotal = { category: string; total: number };
 import { marketplaceParam } from '@/lib/request-params';
@@ -201,34 +200,93 @@ export async function GET(request: NextRequest) {
       : chartGrouping === 'weekly' ? MKT_WEEK_START('fe.posted_date')
       : MKT_MONTH_START('fe.posted_date');
 
-    const dailyRevenue = db.prepare(`
-      SELECT ${chartGroupExpr} as day, SUM(oi.total_price) as revenue,
-        COALESCE(SUM(oi.cogs_per_unit * oi.quantity), 0) as cogs
+    // Each bar uses the SAME components as the Total Profit card, each one
+    // bucketed on its own date column, so the bars always sum to the card.
+    // The chart used to show revenue − COGS − order fees only, which left out
+    // service fees, refunds, MFN labels, expenses, reimbursements, shipping
+    // credits and COGS relief: 2026 YTD bars were $18K (46%) above the card
+    // (review C2).
+    const bucket = (col: string) => chartGrouping === 'daily' ? MKT_DATE(col)
+      : chartGrouping === 'weekly' ? MKT_WEEK_START(col)
+      : MKT_MONTH_START(col);
+    const buckets = new Map<string, { revenue: number; profit: number }>();
+    const addTo = (rows: { b: string | null; revenue?: number; profit?: number }[]) => {
+      for (const r of rows) {
+        if (!r.b) continue;
+        const cur = buckets.get(r.b) || { revenue: 0, profit: 0 };
+        cur.revenue += r.revenue || 0;
+        cur.profit += r.profit || 0;
+        buckets.set(r.b, cur);
+      }
+    };
+    const R = [startDate, endDateNext];
+    // Sales, MFN shipping credits, COGS and MFN label costs
+    addTo(db.prepare(`
+      SELECT ${bucket('fe.posted_date')} as b,
+        SUM(oi.total_price + ${mfnShippingCreditExpr()}) as revenue,
+        SUM(oi.total_price + ${mfnShippingCreditExpr()} - oi.cogs_per_unit * oi.quantity - ${mfnShippingCostExpr()}) as profit
       FROM order_items oi
       JOIN ${FE} fe ON oi.order_id = fe.order_id
       JOIN orders o ON oi.order_id = o.order_id
       WHERE ${IN_RANGE} ${MF}
-      GROUP BY ${chartGroupExpr} ORDER BY day
-    `).all(startDate, endDateNext) as ChartRow[];
-
-    const dailyOrderFees = db.prepare(`
-      SELECT ${chartGroupExpr} as day, -SUM(fd.amount) as fees
+      GROUP BY b
+    `).all(...R) as { b: string; revenue: number; profit: number }[]);
+    // Non-MFN shipping credits that Amazon charged back (shared rule)
+    addTo((db.prepare(`
+      SELECT x.b as b, SUM(MIN(x.sc, x.cb)) as amt
+      FROM (${chargedBackShippingInner(FE, `${IN_RANGE} ${MF}`, `${bucket('fe.posted_date')} as b, `)}) x
+      WHERE x.sc > 0 AND x.cb > 0
+      GROUP BY x.b
+    `).all(...R) as { b: string; amt: number }[]).map(r => ({ b: r.b, revenue: r.amt, profit: r.amt })));
+    // Order fees
+    addTo((db.prepare(`
+      SELECT ${bucket('fe.posted_date')} as b, ${SIGNED_FEE_TOTAL} as fees
       FROM fee_details fd
       JOIN ${FE} fe ON fd.order_id = fe.order_id
       JOIN orders o ON fd.order_id = o.order_id
-      WHERE ${ORDER_FEE_ROWS}
-        AND ${IN_RANGE} ${MF}
-      GROUP BY ${chartGroupExpr}
-    `).all(startDate, endDateNext) as { day: string; fees: number }[];
+      WHERE ${ORDER_FEE_ROWS} AND ${IN_RANGE} ${MF}
+      GROUP BY b
+    `).all(...R) as { b: string; fees: number }[]).map(r => ({ b: r.b, profit: -r.fees })));
+    // Service fees, on their own posted date
+    addTo((db.prepare(`
+      SELECT ${bucket('fd.posted_date')} as b, ${SIGNED_FEE_TOTAL} as fees
+      FROM fee_details fd
+      JOIN financial_events fe ON fd.financial_event_id = fe.id
+      WHERE ${SERVICE_FEE_ROWS}
+        AND ${MKT_DATE('fd.posted_date')} >= ? AND ${MKT_DATE('fd.posted_date')} < ?
+        ${marketplace ? "AND fe.marketplace = '" + marketplace + "'" : ''}
+      GROUP BY b
+    `).all(...R) as { b: string; fees: number }[]).map(r => ({ b: r.b, profit: -r.fees })));
+    // Cross-year COGS relief, on the refund date
+    addTo((db.prepare(`
+      SELECT ${bucket('refund_date')} as b, SUM(amount) as amt FROM cogs_reversals
+      WHERE ${MKT_DATE('refund_date')} >= ? AND ${MKT_DATE('refund_date')} < ? ${MF_R}
+      GROUP BY b
+    `).all(...R) as { b: string; amt: number }[]).map(r => ({ b: r.b, profit: r.amt })));
+    // Refunds (Walmart only once settled), on the refund date
+    addTo((db.prepare(`
+      SELECT ${bucket('refund_date')} as b, SUM(refund_amount) as amt FROM refunds
+      WHERE ${MKT_DATE('refund_date')} >= ? AND ${MKT_DATE('refund_date')} < ? ${MF_R} ${SETTLED_FILTER}
+      GROUP BY b
+    `).all(...R) as { b: string; amt: number }[]).map(r => ({ b: r.b, profit: -r.amt })));
+    // Reimbursements
+    addTo((db.prepare(`
+      SELECT ${bucket('reimbursement_date')} as b, SUM(amount) as amt FROM reimbursements
+      WHERE ${MKT_DATE('reimbursement_date')} >= ? AND ${MKT_DATE('reimbursement_date')} < ? ${MF_R}
+      GROUP BY b
+    `).all(...R) as { b: string; amt: number }[]).map(r => ({ b: r.b, profit: r.amt })));
+    // Business expenses: All-Marketplaces view only, like the card
+    if (!marketplace) {
+      addTo((db.prepare(`
+        SELECT ${bucket('date')} as b, SUM(amount) as amt FROM expenses
+        WHERE date >= ? AND date < ?
+        GROUP BY b
+      `).all(...R) as { b: string; amt: number }[]).map(r => ({ b: r.b, profit: -r.amt })));
+    }
 
-    const feesByDay: Record<string, number> = {};
-    for (const row of dailyOrderFees) feesByDay[row.day] = row.fees;
-
-    const chartData = dailyRevenue.map((d) => ({
-      day: d.day, revenue: d.revenue,
-      profit: d.revenue - d.cogs - (feesByDay[d.day] || 0),
-      grouping: chartGrouping,
-    }));
+    const chartData = [...buckets.entries()]
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([day, v]) => ({ day, revenue: v.revenue, profit: v.profit, grouping: chartGrouping }));
 
     // ─── Top/Bottom products ──────────────────────────────────────────
     const topProducts = db.prepare(`

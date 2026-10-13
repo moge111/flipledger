@@ -116,34 +116,34 @@ export default function RefundsPage() {
   }, [fetchData]);
 
   const columns = useMemo<ColumnDef<RefundRow, any>[]>(() => [
-    { id: 'refundDate', header: 'Date', accessorKey: 'refundDate', cell: ({ getValue }) => <span className="font-mono text-sm text-text-secondary">{formatDate(getValue() as string)}</span>, size: 110 },
+    { id: 'refundDate', header: 'Date', accessorKey: 'refundDate', cell: ({ getValue }) => <span className="text-sm text-text-secondary tabular-nums">{formatDate(getValue() as string)}</span>, size: 110 },
     {
       id: 'marketplace', header: '', accessorKey: 'marketplace',
       cell: ({ getValue }) => {
         const m = getValue() as string;
         return m === 'walmart'
-          ? <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded bg-blue-500/15 text-blue-400">WMT</span>
-          : <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded bg-amazon/15 text-amazon">AMZ</span>;
+          ? <span className="mkt mkt-walmart text-[10px]">WMT</span>
+          : <span className="mkt mkt-amazon text-[10px]">AMZ</span>;
       }, size: 45,
     },
-    { id: 'orderId', header: 'Order ID', accessorKey: 'orderId', cell: ({ getValue }) => <span className="font-mono text-sm text-accent">{getValue() as string}</span>, size: 180 },
+    { id: 'orderId', header: 'Order ID', accessorKey: 'orderId', cell: ({ getValue }) => <span className="font-mono text-sm text-text-primary">{getValue() as string}</span>, size: 180 },
     {
       id: 'product', header: 'Product', accessorFn: (row) => row.productName || row.asin,
       cell: ({ row }) => (
         <div><div className="text-sm text-text-primary truncate max-w-[200px]">{row.original.productName || row.original.asin}</div><div className="text-xs text-text-tertiary font-mono">{row.original.asin}</div></div>
       ), size: 230,
     },
-    { id: 'refundAmount', header: 'Refund Amount', accessorKey: 'refundAmount', cell: ({ getValue }) => <span className="font-mono text-negative">{formatCurrency(getValue() as number)}</span>, size: 120 },
+    { id: 'refundAmount', header: 'Refund Amount', accessorKey: 'refundAmount', cell: ({ getValue }) => <span className="text-negative tabular-nums">{formatCurrency(getValue() as number)}</span>, size: 120 },
     { id: 'reason', header: 'Reason', accessorKey: 'reason', cell: ({ getValue }) => <span className="text-sm text-text-secondary">{getValue() as string}</span>, size: 150 },
     {
       id: 'itemReturned', header: 'Returned?', accessorKey: 'itemReturned',
-      cell: ({ getValue }) => getValue() ? <span className="text-xs font-medium px-2 py-0.5 rounded bg-positive-muted text-positive">Yes</span> : <span className="text-xs font-medium px-2 py-0.5 rounded bg-negative-muted text-negative">No</span>,
+      cell: ({ getValue }) => getValue() ? <span className="tag text-positive">Yes</span> : <span className="tag text-negative">No</span>,
       size: 80,
     },
-    { id: 'feeClawback', header: 'Fee Clawback', accessorKey: 'feeClawback', cell: ({ getValue }) => <span className="font-mono text-positive">{formatCurrency(getValue() as number)}</span>, size: 110 },
+    { id: 'feeClawback', header: 'Fee Clawback', accessorKey: 'feeClawback', cell: ({ getValue }) => <span className="text-positive tabular-nums">{formatCurrency(getValue() as number)}</span>, size: 110 },
     {
       id: 'netImpact', header: 'Net Impact', accessorKey: 'netImpact',
-      cell: ({ getValue }) => <span className="font-mono font-medium text-negative">{formatCurrency(getValue() as number)}</span>,
+      cell: ({ getValue }) => <span className="font-medium text-negative tabular-nums">{formatCurrency(getValue() as number)}</span>,
       size: 110,
     },
     {
@@ -153,12 +153,12 @@ export default function RefundsPage() {
         // Walmart never deducted the seller (yet) — it is NOT in the P&L.
         if (row.original.marketplace === 'walmart') {
           return row.original.settled ? (
-            <span className="text-[10px] font-semibold px-2 py-0.5 rounded bg-negative-muted text-negative"
+            <span className="tag text-negative"
               title="Walmart deducted this refund in a settlement (recon). Counted in P&L.">
               SETTLED
             </span>
           ) : (
-            <span className="text-[10px] font-semibold px-2 py-0.5 rounded bg-amber-500/15 text-amber-400"
+            <span className="tag text-warning"
               title="Walmart has NOT deducted you for this return — it's excluded from your P&L and Net Impact. ~30% of Walmart return records never settle (Walmart covers them). If Walmart does deduct it, this flips to SETTLED within 1-3 weeks.">
               NOT SETTLED
             </span>
@@ -167,7 +167,7 @@ export default function RefundsPage() {
         const c = row.original.cashImpact;
         if (c === 'held-fund') {
           return (
-            <span className="text-[10px] font-semibold px-2 py-0.5 rounded bg-positive-muted text-positive"
+            <span className="tag text-positive"
               title={`Refund cancelled held funds — no real cash out. Shipment was still DEFERRED (DD7) when refunded${row.original.shipmentMaturity ? `, maturity ${row.original.shipmentMaturity.slice(0,10)}` : ''}.`}>
               HELD-FUND
             </span>
@@ -175,7 +175,7 @@ export default function RefundsPage() {
         }
         if (c === 'real') {
           return (
-            <span className="text-[10px] font-semibold px-2 py-0.5 rounded bg-negative-muted text-negative"
+            <span className="tag text-negative"
               title="Real cash deduction. Original shipment funds had already released/disbursed before the refund posted.">
               REAL CASH
             </span>
@@ -191,7 +191,7 @@ export default function RefundsPage() {
         const d = row.original.disposition;
         if (d === 'rtv') {
           return (
-            <span className="text-[10px] font-semibold px-2 py-0.5 rounded bg-blue-500/15 text-blue-400"
+            <span className="tag text-link"
               title="Walmart deemed this return unsellable and shipped it back to you (RTV fee found for this GTIN near the refund date).">
               RTV → YOU
             </span>
@@ -207,7 +207,7 @@ export default function RefundsPage() {
         }
         if (d === 'in-pipeline') {
           return (
-            <span className="text-[10px] font-semibold px-2 py-0.5 rounded bg-blue-500/15 text-blue-400"
+            <span className="tag text-link"
               title="Settled, but the unit hasn't reappeared in your stock and no RTV fee exists. Walmart's policy: lost returns auto-reimburse if not processed within 60 days. Flips to CLAIM DUE if still missing (and unreimbursed) 60 days after the refund.">
               IN PIPELINE
             </span>
@@ -215,7 +215,7 @@ export default function RefundsPage() {
         }
         if (d === 'claim-due') {
           return (
-            <span className="text-[10px] font-semibold px-2 py-0.5 rounded bg-negative/20 text-negative"
+            <span className="tag tag-attn"
               title="Settled 60+ days ago — past Walmart's own auto-reimbursement window for lost returns — and the unit never reappeared in stock, sales, RTV, or reimbursements. Open a Seller Support case referencing the return's RMA. Also listed on the Walmart Disputes page.">
               CLAIM DUE
             </span>
@@ -223,7 +223,7 @@ export default function RefundsPage() {
         }
         if (d === 'reimbursed') {
           return (
-            <span className="text-[10px] font-semibold px-2 py-0.5 rounded bg-positive-muted text-positive"
+            <span className="tag text-positive"
               title="Walmart already paid you for this loss (lost-return adjustment, WFS lost inventory, or a dispute settlement). Claiming again would be a duplicate.">
               REIMBURSED
             </span>
@@ -234,7 +234,7 @@ export default function RefundsPage() {
           // sellable stock is the next return waiting to happen — flag it.
           const risky = /DEFECTIVE|NOT_AS_DESCRIBED|MISSING_PARTS|DAMAGED/.test(row.original.reason || '');
           return (
-            <span className={`text-[10px] font-semibold px-2 py-0.5 rounded ${risky ? 'bg-amber-500/15 text-amber-400' : 'bg-bg-elevated text-text-tertiary'}`}
+            <span className={`tag ${risky ? 'text-warning' : 'text-text-tertiary'}`}
               title={`Back in sellable stock (the SKU has current WFS inventory or sold again after this refund).${risky ? ' ⚠ Buyer reported a defect — this unit may resell as new and bounce again.' : ''} Note: RTV data comes from your Seller Center service-fee CSV imports; rows can flip to RTV after a fresh import.`}>
               {risky ? 'RESTOCKED ⚠' : 'RESTOCKED'}
             </span>
@@ -262,12 +262,12 @@ export default function RefundsPage() {
       {/* Unsettled Walmart return records: shown for visibility, NOT counted in
           P&L or the Net Impact card — Walmart hasn't actually deducted these. */}
       {totals?.unsettledWalmartCount > 0 && (
-        <div className="mb-6 bg-bg-surface border border-amber-500/30 rounded-lg p-4">
+        <div className="mb-6 bg-bg-surface border border-warning/30 rounded-lg p-4">
           <div className="flex items-center justify-between mb-1">
-            <div className="text-[11px] uppercase tracking-wider text-amber-400">Walmart returns not settled — excluded from P&L</div>
+            <div className="text-[11px] label-caps text-warning">Walmart returns not settled — excluded from P&L</div>
             <div className="text-[10px] text-text-tertiary">{totals.unsettledWalmartCount} record{totals.unsettledWalmartCount === 1 ? '' : 's'}</div>
           </div>
-          <div className="text-2xl font-mono text-amber-400">{formatCurrency(totals?.unsettledWalmartImpact || 0)}</div>
+          <div className="text-2xl text-warning tabular-nums">{formatCurrency(totals?.unsettledWalmartImpact || 0)}</div>
           <div className="text-xs text-text-tertiary mt-1">
             Customer return records where Walmart has not deducted you. Roughly 30% of these never settle (Walmart covers the refund itself). If a deduction shows up in recon, the record flips to SETTLED and starts counting.
           </div>
@@ -276,32 +276,32 @@ export default function RefundsPage() {
       {/* Cash-flow split: did the refund cancel held funds, or hit your bank? */}
       {(totals?.heldFundImpact || totals?.realCashImpact) && (
         <div className="mb-6 grid grid-cols-1 lg:grid-cols-3 gap-4">
-          <div className="bg-bg-surface border border-border-subtle rounded-lg p-4">
+          <div className="panel p-4">
             <div className="flex items-center justify-between mb-1">
-              <div className="text-[11px] uppercase tracking-wider text-text-tertiary">Held-fund refunds</div>
+              <div className="text-[11px] label-caps text-text-tertiary">Held-fund refunds</div>
               <div className="text-[10px] text-text-tertiary">No cash impact</div>
             </div>
-            <div className="text-2xl font-mono text-positive">{formatCurrency(totals?.heldFundImpact || 0)}</div>
+            <div className="text-2xl text-positive tabular-nums">{formatCurrency(totals?.heldFundImpact || 0)}</div>
             <div className="text-xs text-text-tertiary mt-1">
               Refunds that cancelled DD7-held funds before they released. Amazon balanced internally — no money left your account.
             </div>
           </div>
-          <div className="bg-bg-surface border border-border-subtle rounded-lg p-4">
+          <div className="panel p-4">
             <div className="flex items-center justify-between mb-1">
-              <div className="text-[11px] uppercase tracking-wider text-text-tertiary">Real cash deductions</div>
+              <div className="text-[11px] label-caps text-text-tertiary">Real cash deductions</div>
               <div className="text-[10px] text-text-tertiary">Disbursed → reversed</div>
             </div>
-            <div className="text-2xl font-mono text-negative">{formatCurrency(totals?.realCashImpact || 0)}</div>
+            <div className="text-2xl text-negative tabular-nums">{formatCurrency(totals?.realCashImpact || 0)}</div>
             <div className="text-xs text-text-tertiary mt-1">
               Refunds of orders whose funds had already released (and likely disbursed). Real cash out of your bank.
             </div>
           </div>
-          <div className="bg-bg-surface border border-border-subtle rounded-lg p-4">
+          <div className="panel p-4">
             <div className="flex items-center justify-between mb-1">
-              <div className="text-[11px] uppercase tracking-wider text-text-tertiary">Unknown (non-Amazon)</div>
+              <div className="text-[11px] label-caps text-text-tertiary">Unknown (non-Amazon)</div>
               <div className="text-[10px] text-text-tertiary">WMT/eBay/PP</div>
             </div>
-            <div className="text-2xl font-mono text-text-tertiary">{formatCurrency(totals?.unknownImpact || 0)}</div>
+            <div className="text-2xl text-text-tertiary tabular-nums">{formatCurrency(totals?.unknownImpact || 0)}</div>
             <div className="text-xs text-text-tertiary mt-1">
               DD7 cash-flow classification is Amazon-only. Walmart/eBay/PayPal refunds have their own timing rules.
             </div>
@@ -309,15 +309,15 @@ export default function RefundsPage() {
         </div>
       )}
       {totals?.claimDueCount > 0 && (
-        <div className="mb-6 bg-bg-surface border border-negative/40 rounded-lg overflow-hidden">
+        <div className="mb-6 attn-banner overflow-hidden">
           <button
             type="button"
             onClick={() => setShowClaimDue(v => !v)}
-            className="w-full text-left p-4 hover:bg-bg-elevated/40 transition-colors"
+            className="w-full text-left p-4 hover:bg-black/5 transition-colors"
             aria-expanded={showClaimDue}
           >
             <div className="flex items-center justify-between mb-1">
-              <div className="text-[11px] uppercase tracking-wider text-negative">WFS claims to file — returns never returned to you</div>
+              <div className="text-[11px] label-caps text-text-primary">WFS claims to file — returns never returned to you</div>
               <div className="text-[10px] text-text-tertiary">
                 {claimOutstanding.length} to file{claimFiled.length > 0 ? ` · ${claimFiled.length} filed` : ''}
               </div>
@@ -326,15 +326,15 @@ export default function RefundsPage() {
               {/* Headline counts only what's still outstanding — a filed claim
                   is no longer a to-do, so leaving it in the number would keep
                   the banner shouting after the work is done. */}
-              <div className="text-2xl font-mono text-negative">
+              <div className="stat-num text-xl sm:text-2xl text-text-primary">
                 {formatCurrency(claimOutstanding.reduce((a, r) => a + r.refundAmount, 0))}
               </div>
               {claimFiled.length > 0 && (
-                <span className="text-[10px] font-semibold px-2 py-0.5 rounded bg-positive-muted text-positive">
+                <span className="tag">
                   {formatCurrency(claimFiled.reduce((a, r) => a + r.refundAmount, 0))} FILED
                 </span>
               )}
-              <span className="text-[10px] font-semibold px-2 py-0.5 rounded bg-negative/20 text-negative">
+              <span className="tag text-text-primary">
                 {showClaimDue ? 'HIDE' : 'SHOW'} {claimDueRows.length} RETURN{claimDueRows.length === 1 ? '' : 'S'}
                 <span className="ml-1">{showClaimDue ? '\u25B2' : '\u25BC'}</span>
               </span>
@@ -342,7 +342,7 @@ export default function RefundsPage() {
             <div className="text-xs text-text-tertiary mt-1">
               Walmart deducted you for these returns 60+ days ago and the unit never came back: no return-to-vendor, no restock, no resale, and no matching loss reimbursement. Returned units are matched per-GTIN and allocated one-to-one, so if Walmart sent back 1 of 2 returns of the same item, only the other one is listed. Tracked with file/dismiss status on the Walmart Disputes page.
             </div>
-            <div className="text-[11px] text-amber-400/80 mt-1">
+            <div className="text-[11px] text-warning/80 mt-1">
               RTV evidence comes from the Seller Center → Payments → Services Fees export (RC_InventoryRTVFee) in data/walmart-service-fees/ — the recon feed&apos;s RTV rows are period totals with no item attribution. Re-export and re-import before filing; a return sent back after your last export still shows here. Recon-sourced WFS Refund / Lost Inventory credits carry no SKU either, so they cannot clear a claim automatically.
             </div>
           </button>
@@ -351,16 +351,16 @@ export default function RefundsPage() {
               <div className="overflow-x-auto">
                 <table className="w-full text-sm">
                   <thead>
-                    <tr className="text-[11px] uppercase tracking-wider text-text-tertiary border-b border-border-subtle">
-                      <th className="text-left font-medium px-3 py-2 w-10">Filed</th>
-                      <th className="text-left font-medium px-4 py-2">Refund date</th>
-                      <th className="text-left font-medium px-4 py-2">Order</th>
-                      <th className="text-left font-medium px-4 py-2">RMA / Customer order #</th>
-                      <th className="text-left font-medium px-4 py-2">Product</th>
-                      <th className="text-left font-medium px-4 py-2">Reason</th>
-                      <th className="text-right font-medium px-4 py-2">Refund</th>
-                      <th className="text-right font-medium px-4 py-2">Days</th>
-                      <th className="text-right font-medium px-4 py-2">File case</th>
+                    <tr className="text-[11px] label-caps text-text-tertiary">
+                      <th className="text-left px-3 py-2 w-10">Filed</th>
+                      <th className="text-left px-4 py-2">Refund date</th>
+                      <th className="text-left px-4 py-2">Order</th>
+                      <th className="text-left px-4 py-2">RMA / Customer order #</th>
+                      <th className="text-left px-4 py-2">Product</th>
+                      <th className="text-left px-4 py-2">Reason</th>
+                      <th className="text-right px-4 py-2">Refund</th>
+                      <th className="text-right px-4 py-2">Days</th>
+                      <th className="text-right px-4 py-2">File case</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -383,10 +383,10 @@ export default function RefundsPage() {
                               className="w-4 h-4 accent-current text-negative cursor-pointer disabled:cursor-not-allowed"
                             />
                           </td>
-                          <td className={`px-4 py-2 font-mono whitespace-nowrap ${filed ? 'text-text-tertiary line-through' : 'text-text-secondary'}`}>{formatDate(r.refundDate)}</td>
+                          <td className={`px-4 py-2 whitespace-nowrap tabular-nums ${filed ? 'text-text-tertiary line-through' : 'text-text-secondary'}`}>{formatDate(r.refundDate)}</td>
                           <td className="px-4 py-2 font-mono whitespace-nowrap">
                             <a href={sellerCenterOrderUrl(r.orderId)} target="_blank" rel="noopener noreferrer"
-                              className="text-accent hover:underline" title="Open this order in Walmart Seller Center">
+                              className="text-link hover:underline" title="Open this order in Walmart Seller Center">
                               {r.orderId} ↗
                             </a>
                             <div>
@@ -406,8 +406,8 @@ export default function RefundsPage() {
                             <div className="text-xs text-text-tertiary font-mono">{r.sku}</div>
                           </td>
                           <td className="px-4 py-2 text-text-secondary">{r.reason}</td>
-                          <td className="px-4 py-2 text-right font-mono text-negative whitespace-nowrap">{formatCurrency(r.refundAmount)}</td>
-                          <td className="px-4 py-2 text-right font-mono text-text-secondary whitespace-nowrap">{days}d</td>
+                          <td className="px-4 py-2 text-right text-negative whitespace-nowrap tabular-nums">{formatCurrency(r.refundAmount)}</td>
+                          <td className="px-4 py-2 text-right text-text-secondary whitespace-nowrap tabular-nums">{days}d</td>
                           <td className="px-4 py-2 text-right whitespace-nowrap">
                             <button
                               type="button"
@@ -415,7 +415,7 @@ export default function RefundsPage() {
                               title="Show the exact values for Walmart's case form fields"
                               className={`text-[10px] font-semibold px-2 py-1 rounded transition-colors ${
                                 openCase === rowKey
-                                  ? 'bg-negative/20 text-negative'
+                                  ? 'bg-accent text-text-inverse'
                                   : 'bg-bg-elevated text-text-secondary hover:text-text-primary'
                               }`}
                             >
@@ -426,7 +426,7 @@ export default function RefundsPage() {
                               target="_blank"
                               rel="noopener noreferrer"
                               title="Open Walmart Seller Support to create the case"
-                              className="ml-1 text-[10px] font-semibold px-2 py-1 rounded bg-negative/15 text-negative hover:bg-negative/25 transition-colors inline-block"
+                              className="ml-1 inline-block text-[10px] font-bold px-2 py-1 rounded-md border-[1.5px] border-border-strong bg-bg-surface text-text-primary hover:bg-bg-hover transition-colors"
                             >
                               OPEN ↗
                             </a>
@@ -435,7 +435,7 @@ export default function RefundsPage() {
                         {openCase === rowKey && (
                           <tr className="border-b border-border-subtle/60 bg-bg-elevated/20">
                             <td colSpan={9} className="px-4 py-3">
-                              <div className="text-[11px] uppercase tracking-wider text-text-tertiary mb-2">
+                              <div className="text-[11px] label-caps text-text-tertiary mb-2">
                                 Walmart case form — &quot;Seller Has Not Received Return&quot;
                               </div>
                               <div className="space-y-2">
@@ -456,7 +456,7 @@ export default function RefundsPage() {
                                         onClick={() => copyField(id, f.value)}
                                         className={`text-[10px] font-semibold px-2 py-1 rounded shrink-0 transition-colors ${
                                           empty ? 'bg-bg-elevated/50 text-text-tertiary cursor-not-allowed'
-                                            : copiedField === id ? 'bg-positive-muted text-positive'
+                                            : copiedField === id ? 'text-positive ring-1 ring-current'
                                             : 'bg-bg-elevated text-text-secondary hover:text-text-primary'
                                         }`}
                                       >
@@ -478,7 +478,7 @@ export default function RefundsPage() {
                   </tbody>
                   <tfoot>
                     <tr className="border-t border-negative/30">
-                      <td className="px-4 py-2 text-[11px] uppercase tracking-wider text-text-tertiary" colSpan={6}>
+                      <td className="px-4 py-2 text-[11px] label-caps text-text-tertiary" colSpan={6}>
                         {claimOutstanding.length} still to file
                         {claimFiled.length > 0 && (
                           <span className="ml-2 text-positive normal-case tracking-normal">
@@ -486,7 +486,7 @@ export default function RefundsPage() {
                           </span>
                         )}
                       </td>
-                      <td className="px-4 py-2 text-right font-mono text-negative">
+                      <td className="px-4 py-2 text-right text-negative tabular-nums">
                         {formatCurrency(claimOutstanding.reduce((a, r) => a + r.refundAmount, 0))}
                       </td>
                       <td colSpan={2} />
@@ -496,19 +496,19 @@ export default function RefundsPage() {
               </div>
               <div className="px-4 py-3 border-t border-border-subtle">
                 <div className="flex flex-wrap items-center gap-2">
-                  <a href="/bookkeep/walmart-disputes" className="text-xs px-3 py-1.5 rounded bg-bg-elevated text-text-secondary hover:text-text-primary transition-colors">
+                  <a href="/bookkeep/walmart-disputes" className="text-xs px-3 py-1.5 rounded text-text-primary hover:text-text-primary transition-colors font-semibold hover:bg-bg-hover bg-bg-surface border-[1.5px] border-border-strong">
                     Track file/dismiss status →
                   </a>
                   <a href="https://seller.walmart.com/help" target="_blank" rel="noopener noreferrer"
-                    className="text-xs px-3 py-1.5 rounded bg-negative/15 text-negative hover:bg-negative/25 transition-colors">
+                    className="text-xs px-3 py-1.5 rounded-md border-[1.5px] border-border-strong bg-bg-surface font-semibold text-text-primary hover:bg-bg-hover transition-colors">
                     Help → Contact Support ↗
                   </a>
                   <a href="https://seller.walmart.com/wfsLite/reports" target="_blank" rel="noopener noreferrer"
-                    className="text-xs px-3 py-1.5 rounded bg-bg-elevated text-text-secondary hover:text-text-primary transition-colors">
+                    className="text-xs px-3 py-1.5 rounded text-text-primary hover:text-text-primary transition-colors font-semibold hover:bg-bg-hover bg-bg-surface border-[1.5px] border-border-strong">
                     Customer Returns Report ↗
                   </a>
                   <a href="https://seller.walmart.com/returns-reimbursements/dashboard" target="_blank" rel="noopener noreferrer"
-                    className="text-xs px-3 py-1.5 rounded bg-bg-elevated text-text-secondary hover:text-text-primary transition-colors">
+                    className="text-xs px-3 py-1.5 rounded text-text-primary hover:text-text-primary transition-colors font-semibold hover:bg-bg-hover bg-bg-surface border-[1.5px] border-border-strong">
                     Returns dashboard ↗
                   </a>
                 </div>

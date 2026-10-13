@@ -181,6 +181,203 @@ export function initializeDatabase() {
       ON wfs_rtv_units(gtin, rtv_date, COALESCE(wfs_reference_id, ''));
     CREATE INDEX IF NOT EXISTS idx_wfs_rtv_gtin ON wfs_rtv_units(gtin, rtv_date);
 
+    -- Walmart LostReturnAdjustment payouts: Walmart lost a customer return and
+    -- paid the seller for it. ATTRIBUTION ONLY — the money already arrives as
+    -- the recon "WFS Refund" roll-up (WMT-WFSSVC-*), so nothing here is ever
+    -- summed into the books. Read by FIFO (the unit did NOT come back, so the
+    -- sale keeps its COGS) and by the dispute detector (already reimbursed —
+    -- do not file). Filled from the Services Fees Refund_*.csv exports.
+    CREATE TABLE IF NOT EXISTS wfs_lost_returns (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      po TEXT NOT NULL,
+      rma TEXT,
+      gtin TEXT,
+      credit_date TEXT NOT NULL,
+      quantity INTEGER NOT NULL DEFAULT 1,
+      credit_cents INTEGER NOT NULL,
+      wfs_reference_id TEXT NOT NULL UNIQUE,
+      source_file TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_wfs_lost_returns_rma ON wfs_lost_returns(rma);
+    CREATE INDEX IF NOT EXISTS idx_wfs_lost_returns_po ON wfs_lost_returns(po);
+
+    -- Every row of Amazon's FBA customer returns report. Refund rows already
+    -- carry the disposition via item_returned; this table is what FIFO and the
+    -- replacement detector read for returns that have NO refund — the free-
+    -- replacement case, where the original (or the replacement) comes back to
+    -- the FC and nobody is refunded. Never summed into the books.
+    CREATE TABLE IF NOT EXISTS fba_customer_returns (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      order_id TEXT NOT NULL,
+      sku TEXT NOT NULL DEFAULT '',
+      asin TEXT,
+      return_date TEXT NOT NULL,
+      quantity INTEGER NOT NULL DEFAULT 1,
+      disposition TEXT,
+      reason TEXT,
+      fulfillment_center_id TEXT,
+      license_plate_number TEXT NOT NULL DEFAULT '',
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_fba_customer_returns_unique
+      ON fba_customer_returns(order_id, sku, return_date, license_plate_number);
+    CREATE INDEX IF NOT EXISTS idx_fba_customer_returns_order ON fba_customer_returns(order_id);
+
+    -- Amazon Multi-Channel Fulfillment shipments paired with the Walmart/eBay
+    -- sale they fulfilled. A paired MCF line carries no COGS: the unit's cost
+    -- is already on the sale (review A4). Maintained by src/lib/sp-api/mcf.ts.
+    -- Units Amazon reimbursed as lost that actually arrived (e.g. left out of
+    -- one shipment and sent in the next). lostInventoryOffsets subtracts them,
+    -- like units a Reimbursement_Reversal says were found. Entered by hand.
+    CREATE TABLE IF NOT EXISTS lost_inventory_arrived (
+      reimbursement_id TEXT PRIMARY KEY,
+      units INTEGER NOT NULL,
+      note TEXT,
+      created_at TEXT NOT NULL
+    );
+
+    -- Amazon's per-SKU shipped/received counts for sent FBA batches (lib/batch-results).
+    CREATE TABLE IF NOT EXISTS batch_receipts (
+      batch_id INTEGER NOT NULL,
+      shipment_confirmation_id TEXT NOT NULL,
+      sku TEXT NOT NULL,
+      shipped INTEGER NOT NULL,
+      received INTEGER NOT NULL,
+      shipment_status TEXT,
+      fetched_at TEXT NOT NULL,
+      PRIMARY KEY (shipment_confirmation_id, sku)
+    );
+    CREATE INDEX IF NOT EXISTS idx_batch_receipts_batch ON batch_receipts(batch_id);
+
+    -- Card/bank statement lines and the rules that classify them (lib/statements).
+    -- Only bucket='business' lines book an expenses row (expense_id).
+    CREATE TABLE IF NOT EXISTS statement_transactions (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      account TEXT NOT NULL,
+      txn_date TEXT NOT NULL,
+      description TEXT NOT NULL,
+      amount_cents INTEGER NOT NULL,
+      order_ref TEXT,
+      dedup_key TEXT NOT NULL UNIQUE,
+      source_file TEXT,
+      bucket TEXT,
+      category TEXT,
+      expense_id INTEGER,
+      rule_id INTEGER,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_statement_txn_date ON statement_transactions(txn_date);
+    CREATE TABLE IF NOT EXISTS statement_rules (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      pattern TEXT NOT NULL UNIQUE,
+      bucket TEXT NOT NULL,
+      category TEXT,
+      created_at TEXT NOT NULL
+    );
+
+    -- Every eBay shipping-label transaction seen by the Finances API sync.
+    -- An order's label cost = the sum of its rows, so a short sync window can
+    -- never drop a label bought before it (payoutCosts.ts).
+    CREATE TABLE IF NOT EXISTS ebay_label_transactions (
+      transaction_id TEXT PRIMARY KEY,
+      order_id TEXT NOT NULL,
+      amount_cents INTEGER NOT NULL,
+      transaction_date TEXT NOT NULL,
+      memo TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_ebay_label_txn_order ON ebay_label_transactions(order_id);
+
+    CREATE TABLE IF NOT EXISTS mcf_fulfillments (
+      mcf_order_id TEXT PRIMARY KEY,
+      sale_order_id TEXT NOT NULL UNIQUE,
+      method TEXT NOT NULL,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
+    -- Cash (ported from ~/cashflow, Sept 2026; lib/cash): SimpleFIN bank and
+    -- card feed + card details the feed lacks. Prefixed so nothing collides
+    -- with FlipLedger's settings/sync_log. Never feeds the P&L directly.
+    -- cash_settings.simplefin_access_url is a bank credential.
+    CREATE TABLE IF NOT EXISTS cash_settings (key TEXT PRIMARY KEY, value TEXT);
+    CREATE TABLE IF NOT EXISTS bank_accounts (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      org TEXT,
+      currency TEXT,
+      balance_cents INTEGER NOT NULL DEFAULT 0,
+      available_cents INTEGER,
+      balance_date TEXT,
+      last_seen TEXT,
+      kind TEXT NOT NULL DEFAULT 'bank',          -- 'bank' | 'credit' | 'ignore' (user-set)
+      owner TEXT NOT NULL DEFAULT 'business',     -- 'business' | 'personal'
+      nickname TEXT,
+      limit_cents INTEGER,
+      close_day INTEGER,
+      due_day INTEGER,
+      promo_end TEXT,
+      promo_payment_cents INTEGER,
+      apr_percent REAL,
+      include_in_forecast INTEGER NOT NULL DEFAULT 1,
+      carry_cents INTEGER,
+      carry_until TEXT
+    );
+    -- posted = local YYYY-MM-DD; amount_cents positive = money in (SimpleFIN sign).
+    CREATE TABLE IF NOT EXISTS bank_transactions (
+      account_id TEXT NOT NULL,
+      id TEXT NOT NULL,
+      posted TEXT NOT NULL,
+      amount_cents INTEGER NOT NULL,
+      description TEXT,
+      PRIMARY KEY (account_id, id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_bank_txn_posted ON bank_transactions(account_id, posted);
+    -- Replaced on every sync; pending rows get new ids once they post.
+    CREATE TABLE IF NOT EXISTS bank_pending_transactions (
+      account_id TEXT NOT NULL,
+      id TEXT NOT NULL,
+      date TEXT NOT NULL,
+      amount_cents INTEGER NOT NULL,
+      description TEXT,
+      PRIMARY KEY (account_id, id)
+    );
+    -- Stock outside FlipLedger (e.g. cards out for grading).
+    CREATE TABLE IF NOT EXISTS cash_assets (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL,
+      cost_cents INTEGER NOT NULL,
+      payout_multiple REAL NOT NULL DEFAULT 1,
+      expected_date TEXT NOT NULL,
+      include_in_forecast INTEGER NOT NULL DEFAULT 1
+    );
+    -- Purchase lines (Order Tracker order_items.id) whose cost is inside a cash_assets row,
+    -- so the stock pages don't count them a second time as bought-not-in-FlipLedger.
+    -- Order Tracker line → the purchase lot it created, with its cancelled count at that moment,
+    -- so later cancellations shrink the lot by the change only (a hand-raised lot is left alone).
+    CREATE TABLE IF NOT EXISTS purchase_lot_links (
+      purchase_item_id INTEGER PRIMARY KEY,
+      lot_id INTEGER NOT NULL,
+      qty_cancelled INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE TABLE IF NOT EXISTS cash_asset_items (
+      purchase_item_id INTEGER PRIMARY KEY,
+      asset_id INTEGER NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS cash_bills (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL,
+      amount_cents INTEGER NOT NULL,
+      day_of_month INTEGER NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS bank_sync_log (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      at TEXT NOT NULL,
+      ok INTEGER NOT NULL,
+      message TEXT
+    );
+
     -- Cross-period COGS reversals, managed entirely by the FIFO engine.
     -- When an item sells in one year and is returned (item_returned=1, full
     -- qty, Walmart settlement-gated) in a LATER year, the sale keeps its
@@ -846,11 +1043,27 @@ export function initializeDatabase() {
     "ALTER TABLE listing_batch_items ADD COLUMN preflight_status TEXT",
     "ALTER TABLE listing_batch_items ADD COLUMN preflight_detail TEXT",
     "ALTER TABLE listing_batch_items ADD COLUMN preflight_checked_at TEXT",
+    // MFN "Qty → Amazon" switch (Oct 4 2026). 1: FlipLedger sets the Amazon
+    // quantity to the SKU's stock in FlipLedger (bought minus sold). 0: it
+    // never touches the Amazon quantity (a new offer is created at 0; stock is
+    // managed in Seller Central). The cost lot is written either way.
+    "ALTER TABLE listing_batch_items ADD COLUMN send_qty_to_amazon INTEGER DEFAULT 1",
     "ALTER TABLE listing_batches ADD COLUMN closed_at TEXT",
+    // FBA Reimbursements Report links (review A3): a Reimbursement_Reversal
+    // names the reimbursement it reverses, and a post-order reimbursement
+    // carries its Amazon order id. Both were parsed and dropped.
+    "ALTER TABLE reimbursements ADD COLUMN original_reimbursement_id TEXT",
+    "ALTER TABLE reimbursements ADD COLUMN amazon_order_id TEXT",
     "ALTER TABLE refunds ADD COLUMN return_order_id TEXT",
     "ALTER TABLE refunds ADD COLUMN customer_order_id TEXT",
     "ALTER TABLE orders ADD COLUMN order_total INTEGER DEFAULT 0",
     "ALTER TABLE orders ADD COLUMN order_total_currency TEXT",
+    // Amazon replacement orders: flag + original order from the Orders API,
+    // reason code from the FBA Replacements report.
+    "ALTER TABLE orders ADD COLUMN is_replacement INTEGER DEFAULT 0",
+    "ALTER TABLE orders ADD COLUMN replaced_order_id TEXT",
+    "ALTER TABLE orders ADD COLUMN replacement_reason_code INTEGER",
+    "CREATE INDEX IF NOT EXISTS idx_orders_replaced_order ON orders(replaced_order_id)",
     "ALTER TABLE products ADD COLUMN catalog_last_enriched TEXT",
     "ALTER TABLE merchant_listings ADD COLUMN listing_id TEXT",
     "ALTER TABLE merchant_listings ADD COLUMN fulfillment_channel TEXT",
@@ -859,6 +1072,63 @@ export function initializeDatabase() {
     "ALTER TABLE merchant_listings ADD COLUMN open_date TEXT",
     "ALTER TABLE merchant_listings ADD COLUMN source_report_type TEXT",
     "CREATE INDEX IF NOT EXISTS idx_inventory_ledger_batch ON inventory_ledger(batch_id)",
+    // WFS batches (Oct 7 2026): Walmart item + barcode on each batch item, the
+    // batch's Walmart inbound order, and one row per shipment Walmart creates.
+    "ALTER TABLE listing_batch_items ADD COLUMN walmart_item_id TEXT",
+    "ALTER TABLE listing_batch_items ADD COLUMN gtin TEXT",
+    "ALTER TABLE listing_batches ADD COLUMN inbound_order_id TEXT",
+    // "Walmart stock to send" (Oct 7 2026): one standing draft WFS batch that holds
+    // bought units (SKU created, cost lot recorded) until they move into a shipment.
+    "ALTER TABLE listing_batches ADD COLUMN is_holding INTEGER DEFAULT 0",
+    `CREATE TABLE IF NOT EXISTS wfs_batch_shipments (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      batch_id INTEGER NOT NULL,
+      inbound_order_id TEXT NOT NULL,
+      shipment_id TEXT NOT NULL UNIQUE,
+      fc_name TEXT,
+      ship_to TEXT,                    -- JSON address Walmart sends the boxes to
+      items TEXT,                      -- JSON [{sku, quantity}] Walmart put in this shipment
+      expected_delivery_date TEXT,
+      boxes TEXT,                      -- JSON [{lengthIn,widthIn,heightIn,weightLb,loadType}]
+      quotes TEXT,                     -- JSON parcel quotes (Walmart Preferred Carrier)
+      quoted_at TEXT,
+      booked_quote_id TEXT,
+      booked_charge_cents INTEGER,
+      booked_at TEXT,
+      carrier_name TEXT,
+      tracking TEXT,                   -- JSON [tracking numbers] for an own-carrier shipment
+      tracking_sent_at TEXT,
+      status TEXT NOT NULL DEFAULT 'CREATED',  -- CREATED | BOOKED | TRACKING_SENT | CANCELLED
+      error TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      FOREIGN KEY (batch_id) REFERENCES listing_batches(id) ON DELETE CASCADE
+    )`,
+    "CREATE INDEX IF NOT EXISTS idx_wfs_batch_shipments_batch ON wfs_batch_shipments(batch_id)",
+    // Walmart SKU setup from a batch (Oct 7 2026): one feed per item
+    // (MP_WFS_ITEM / OMNI_WFS / MP_ITEM_MATCH). NULL status = an existing SKU;
+    // else PENDING | READY | FAILED, with the feed and Walmart's messages in
+    // walmart_setup (JSON).
+    "ALTER TABLE listing_batch_items ADD COLUMN walmart_setup_status TEXT",
+    "ALTER TABLE listing_batch_items ADD COLUMN walmart_setup TEXT",
+    // Answers the user gave for Walmart setup fields FlipLedger couldn't fill
+    // (e.g. material, small-parts warning), reused for the next item of the
+    // same product type.
+    `CREATE TABLE IF NOT EXISTS walmart_field_memory (
+      product_type TEXT NOT NULL,
+      field_key TEXT NOT NULL,
+      value TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      PRIMARY KEY (product_type, field_key)
+    )`,
+    `CREATE TABLE IF NOT EXISTS walmart_item_specs (
+      feed_type TEXT NOT NULL,
+      version TEXT NOT NULL,
+      product_type TEXT NOT NULL,
+      spec TEXT NOT NULL,
+      fetched_at TEXT NOT NULL,
+      PRIMARY KEY (feed_type, version, product_type)
+    )`,
   ]) {
     try { sqlite.exec(stmt); } catch { /* already applied */ }
   }

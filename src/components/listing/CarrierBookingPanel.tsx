@@ -128,7 +128,7 @@ export function CarrierBookingPanel({ batchId }: { batchId: number }) {
           onClick={() => load(true)}
           disabled={loading || regenerating}
           title="Re-fetch carrier options from Amazon (chases the Partnered UPS rate, which can take a moment to appear)"
-          className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded border border-border-subtle bg-bg-surface text-[11px] text-text-secondary hover:border-border-default disabled:opacity-40 disabled:cursor-not-allowed transition-colors shrink-0"
+          className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded text-[11px] text-text-primary disabled:opacity-40 disabled:cursor-not-allowed transition-colors shrink-0 font-semibold hover:bg-bg-hover bg-bg-surface border-[1.5px] border-border-strong"
         >
           <RefreshCw size={12} className={regenerating ? 'animate-spin' : ''} />
           {regenerating ? 'Refreshing…' : 'Refresh'}
@@ -145,7 +145,7 @@ export function CarrierBookingPanel({ batchId }: { batchId: number }) {
         <div className="text-[11px] text-text-tertiary italic">No carrier options returned by Amazon. Try Refresh.</div>
       )}
       {!loading && !regenerating && sorted.length > 0 && !sorted.some((c) => c.isPartnered) && (
-        <div className="text-[11px] text-amber-400/90 italic">
+        <div className="text-[11px] text-warning/90 italic">
           No Amazon Partnered rate yet — it&apos;s computed a moment after placement and may need another Refresh to appear.
         </div>
       )}
@@ -165,7 +165,7 @@ export function CarrierBookingPanel({ batchId }: { batchId: number }) {
                 onClick={() => setSelected(c.repOptionId)}
                 className={`text-left border rounded p-2.5 transition-colors ${
                   isSelected
-                    ? 'border-accent bg-accent/15 ring-1 ring-accent'
+                    ? 'border-accent bg-accent/15 ring-1 ring-link'
                     : c.isPartnered
                       ? 'border-positive/40 bg-positive/5 hover:border-positive/60'
                       : 'border-border-subtle bg-bg-surface hover:border-border-default'
@@ -176,16 +176,16 @@ export function CarrierBookingPanel({ batchId }: { batchId: number }) {
                     {c.carrierName}
                   </div>
                   {c.isPartnered && (
-                    <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-positive/20 text-positive uppercase tracking-wider shrink-0">
+                    <span className="tag text-[9px] text-positive shrink-0">
                       Partnered
                     </span>
                   )}
                 </div>
-                <div className="text-[10px] text-text-tertiary uppercase tracking-wider">
+                <div className="text-[10px] text-text-tertiary label-caps">
                   {c.shippingMode.replace(/_/g, ' ')}
                 </div>
                 {c.totalCost != null ? (
-                  <div className="text-sm font-mono text-positive mt-1 font-medium">
+                  <div className="text-sm text-positive mt-1 font-medium tabular-nums">
                     ${c.totalCost.toFixed(2)}
                     {c.shipmentCount > 1 && <span className="text-[10px] text-text-tertiary font-sans"> total · {c.shipmentCount} shipments</span>}
                   </div>
@@ -210,7 +210,7 @@ export function CarrierBookingPanel({ batchId }: { batchId: number }) {
             type="button"
             onClick={handleConfirm}
             disabled={!selected || confirming}
-            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded bg-accent text-white text-xs font-medium hover:bg-accent/90 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded bg-accent text-text-inverse text-xs font-bold hover:bg-accent/90 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
           >
             {confirming ? <Loader2 size={12} className="animate-spin" /> : <CheckCircle size={12} />}
             {confirming ? 'Confirming…' : 'Confirm carrier'}

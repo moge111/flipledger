@@ -7,6 +7,11 @@
  * Can recalculate a single SKU/ASIN (after editing a buy price) or all items.
  */
 import { openDb } from '@/lib/db-conn';
+import { pairMcfOrders } from './sp-api/mcf';
+import { autoCostMissingLots } from './auto-cost';
+import { createLogger } from '@/lib/log';
+
+const log = createLogger('fifo');
 
 interface InventoryBatch {
   id: number;
@@ -27,6 +32,7 @@ interface SaleItem {
   purchaseDate: string;
   currentCogs: number;
   isReturned: number; // 1 if the full quantity was returned to inventory
+  isMcfPaired: number; // 1 = Amazon MCF shipment for a sale made elsewhere (its cost is on that sale)
   refundDate: string | null; // earliest qualifying return refund date
   recognitionDate: string; // cash-basis sale date (MIN ShipmentEvent, fallback purchase_date)
   marketplace: string;
@@ -64,6 +70,12 @@ export function recalculateFIFO(options: {
   };
 
   try {
+    // Pair new MCF shipments with their sales before costing anything.
+    if (recalcAll) pairMcfOrders(db);
+    // Give uncosted SKUs a cost (same-named product, else the SKU's price), so the
+    // walk below costs their sales instead of booking $0.
+    if (recalcAll) autoCostMissingLots(db);
+
     // Determine which SKUs to process
     let skusToProcess: { sku: string; asin: string }[] = [];
 
@@ -139,14 +151,49 @@ export function recalculateFIFO(options: {
               AND json_extract(fe.raw_data, '$."Amount Type"') = 'Product Price'
           )
         )
+        -- A settled Walmart refund does not mean the unit came back. When
+        -- Walmart lost the return (it pays a LostReturnAdjustment months later)
+        -- or the order was lost in transit / after delivery, the unit is gone:
+        -- the sale keeps its COGS. Sept 22 2026: returns.ts writes
+        -- item_returned=1 on every Walmart refund, which erased ~$730 of COGS.
+        AND NOT (
+          COALESCE(r.marketplace, 'amazon') = 'walmart'
+          AND (
+            r.reason IN ('LOST_IN_TRANSIT', 'LOST_AFTER_DELIVERY')
+            OR EXISTS (
+              SELECT 1 FROM wfs_lost_returns l
+              WHERE l.rma = r.return_order_id OR (l.rma IS NULL AND l.po = r.order_id)
+            )
+          )
+        )
     `;
-    const RETURNED_FLAG = `EXISTS (SELECT 1 ${RETURNED_MATCH}) as isReturned`;
+    // Free-replacement returns: Amazon sent a replacement instead of refunding,
+    // and the original (or the replacement) came back to the FC SELLABLE. No
+    // refund exists, so RETURNED_MATCH can't see it and the unit's cost was
+    // charged twice (Oct 11 2026: Topps NBA, LEGO Porsche, Razer Viper —
+    // $174.05). Limited to orders in a replacement pair, so an ordinary return
+    // whose refund hasn't synced yet never zeroes COGS ahead of the refund.
+    const NO_REFUND_RETURN = `(
+      (SELECT COALESCE(SUM(u.quantity), 0) FROM fba_customer_returns u
+       WHERE u.order_id = oi.order_id AND u.disposition = 'SELLABLE'
+         AND (u.sku = oi.sku OR u.asin = oi.asin OR u.sku = oi.asin)) >= oi.quantity
+      AND (COALESCE(o.is_replacement, 0) = 1
+           OR EXISTS (SELECT 1 FROM orders ro WHERE ro.replaced_order_id = oi.order_id))
+    )`;
+    const RETURNED_FLAG = `(EXISTS (SELECT 1 ${RETURNED_MATCH}) OR ${NO_REFUND_RETURN}) as isReturned,
+      EXISTS (SELECT 1 FROM mcf_fulfillments m WHERE m.mcf_order_id = oi.order_id) as isMcfPaired`;
     // Extra columns for period-aware return handling: when the refund lands in
     // a DIFFERENT calendar year than the sale's cash-basis recognition date,
     // zeroing the sale's COGS would rewrite an already-filed year. Those sales
     // keep their COGS and get a cogs_reversals credit dated at the refund.
     const RETURN_PERIOD_COLS = `
-      (SELECT MIN(r.refund_date) ${RETURNED_MATCH}) as refundDate,
+      COALESCE(
+        (SELECT MIN(r.refund_date) ${RETURNED_MATCH}),
+        CASE WHEN ${NO_REFUND_RETURN} THEN
+          (SELECT MIN(u.return_date) FROM fba_customer_returns u
+           WHERE u.order_id = oi.order_id AND u.disposition = 'SELLABLE')
+        END
+      ) as refundDate,
       COALESCE(
         (SELECT MIN(fe2.posted_date) FROM financial_events fe2
          WHERE fe2.event_type = 'ShipmentEvent' AND fe2.order_id = oi.order_id),
@@ -249,6 +296,18 @@ export function recalculateFIFO(options: {
               (sale.purchaseDate && refundYear !== sale.purchaseDate.slice(0, 4)))
           );
 
+          // Amazon MCF shipment paired with the Walmart/eBay sale it fulfilled:
+          // that sale already carries the unit's cost, so this $0 line carries
+          // none and consumes no lot (review A4: $161.16 counted twice).
+          if (sale.isMcfPaired) {
+            deleteReversal.run(sale.id);
+            if (sale.currentCogs !== 0) {
+              updateCogs.run(0, sale.id);
+              result.itemsUpdated++;
+            }
+            continue;
+          }
+
           // Same-year returned sale: the physical unit came back to sellable
           // inventory, so it doesn't permanently consume a batch and carries
           // no COGS — the cost flows to whatever sale consumes that unit next.
@@ -339,5 +398,22 @@ export function recalculateFIFO(options: {
     db.close();
     result.errors.push(String(err));
     return result;
+  }
+}
+
+/**
+ * Cost the sales a marketplace sync just wrote. Called at the end of each
+ * sync (Amazon, Walmart, eBay — auto or manual) so a new sale never sits at
+ * $0 COGS until the auto-sync tick reaches its own FIFO pass, which can be
+ * many minutes later. That gap is what lit up false DEPLETED LOT badges.
+ */
+export function costNewSales(source: string): void {
+  try {
+    const r = recalculateFIFO({ recalcAll: true });
+    if (r.itemsUpdated > 0) {
+      log.info(`after ${source} sync: costed ${r.itemsUpdated} item(s)`);
+    }
+  } catch (err) {
+    log.error(`after ${source} sync failed:`, err);
   }
 }

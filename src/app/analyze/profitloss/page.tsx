@@ -112,25 +112,28 @@ export default function ProfitLossPage() {
       </div>
 
       {/* P&L Table */}
-      <div className="bg-bg-surface border border-border-subtle rounded-lg overflow-hidden">
+      <div className="panel overflow-hidden">
         {/* Controls */}
-        <div className="flex items-center gap-2 px-4 py-3 border-b border-border-subtle">
-          <button onClick={expandAll} className="text-xs text-text-tertiary hover:text-text-secondary transition-colors">Expand All</button>
-          <span className="text-text-tertiary">|</span>
-          <button onClick={collapseAll} className="text-xs text-text-tertiary hover:text-text-secondary transition-colors">Collapse All</button>
+        <div className="panel-bar">
+          <span>Profit &amp; loss statement</span>
+          <span className="flex items-center gap-2">
+            <button onClick={expandAll} className="opacity-70 hover:opacity-100 transition-opacity">Expand all</button>
+            <span className="opacity-40">|</span>
+            <button onClick={collapseAll} className="opacity-70 hover:opacity-100 transition-opacity">Collapse all</button>
+          </span>
         </div>
 
         <table className="w-full">
           <thead>
-            <tr className="bg-bg-elevated">
-              <th className="px-4 py-2.5 text-left text-[11px] font-medium tracking-widest uppercase text-text-tertiary border-b border-border-subtle">Category</th>
-              <th className="px-4 py-2.5 text-right text-[11px] font-medium tracking-widest uppercase text-text-tertiary border-b border-border-subtle w-40">Amount</th>
+            <tr className="bg-bg-surface">
+              <th className="px-4 py-2.5 text-left text-[11px] label-caps text-text-tertiary">Category</th>
+              <th className="px-4 py-2.5 text-right text-[11px] label-caps text-text-tertiary w-40">Amount</th>
             </tr>
           </thead>
           <tbody>
             {/* ─── INCOME SECTION ─── */}
             <tr className="bg-bg-elevated/50">
-              <td colSpan={2} className="px-4 py-2 text-xs font-semibold tracking-widest uppercase text-accent">Income</td>
+              <td colSpan={2} className="px-4 py-2 text-xs label-caps text-text-primary">Income</td>
             </tr>
             <PLRow label="Sales" amount={data.income.sales} />
             <PLRow label="Shipping Credits" amount={data.income.shippingCredits} />
@@ -139,7 +142,7 @@ export default function ProfitLossPage() {
 
             {/* ─── EXPENSES SECTION ─── */}
             <tr className="bg-bg-elevated/50">
-              <td colSpan={2} className="px-4 py-2 text-xs font-semibold tracking-widest uppercase text-negative">Expenses</td>
+              <td colSpan={2} className="px-4 py-2 text-xs label-caps text-negative">Expenses</td>
             </tr>
             <PLRow label="Cost of Goods Sold" amount={-data.expenses.cogs} />
 
@@ -148,8 +151,8 @@ export default function ProfitLossPage() {
               <Fragment key={group.label}>
                 {group.label && (
                   <tr className="border-b border-border-subtle/50">
-                    <td className="px-4 pt-3 pb-1 text-[11px] font-semibold tracking-widest uppercase text-text-tertiary">{group.label}</td>
-                    <td className="px-4 pt-3 pb-1 text-right font-mono text-xs text-text-tertiary tabular-nums">{formatCurrencyParens(-group.total)}</td>
+                    <td className="px-4 pt-3 pb-1 text-[11px] label-caps text-text-tertiary">{group.label}</td>
+                    <td className="px-4 pt-3 pb-1 text-right text-xs text-text-tertiary tabular-nums">{formatCurrencyParens(-group.total)}</td>
                   </tr>
                 )}
                 {group.entries.map(([category, { total, children }]) => (
@@ -179,7 +182,7 @@ export default function ProfitLossPage() {
 
             {/* ─── ADJUSTMENTS ─── */}
             <tr className="bg-bg-elevated/50">
-              <td colSpan={2} className="px-4 py-2 text-xs font-semibold tracking-widest uppercase text-text-tertiary">Adjustments</td>
+              <td colSpan={2} className="px-4 py-2 text-xs label-caps text-text-tertiary">Adjustments</td>
             </tr>
             <PLRow label="Refunds Issued" amount={-data.refunds.total} negative />
             <PLRow label="Fee Clawbacks (on refunds)" amount={data.refunds.clawback} />
@@ -187,15 +190,15 @@ export default function ProfitLossPage() {
 
             {/* ─── SALES TAX ─── */}
             <tr className="bg-bg-elevated/50">
-              <td colSpan={2} className="px-4 py-2 text-xs font-semibold tracking-widest uppercase text-text-tertiary">Sales Tax</td>
+              <td colSpan={2} className="px-4 py-2 text-xs label-caps text-text-tertiary">Sales Tax</td>
             </tr>
             <PLRow label="Tax Collected" amount={data.salesTax.collected} />
             <PLRow label="Marketplace Facilitator Tax" amount={-data.salesTax.facilitator} />
 
             {/* ─── NET PROFIT ─── */}
-            <tr className="border-t-2 border-border-strong bg-bg-elevated">
-              <td className="px-4 py-3 text-md font-bold text-text-primary">Net Profit</td>
-              <td className={`px-4 py-3 text-right text-md font-bold font-mono ${data.netProfit >= 0 ? 'text-positive' : 'text-negative'}`}>
+            <tr className="border-t-[1.5px] border-border-strong bg-bg-surface">
+              <td className="px-4 py-3 text-md font-extrabold text-text-primary">Net Profit</td>
+              <td className={`px-4 py-3 text-right stat-num text-lg ${data.netProfit >= 0 ? 'text-positive' : 'text-negative'}`}>
                 {formatCurrency(data.netProfit)}
               </td>
             </tr>
@@ -205,28 +208,25 @@ export default function ProfitLossPage() {
 
       {/* Sales Detail */}
       {data.salesDetail && data.salesDetail.length > 0 && (
-        <div className="mt-6 bg-bg-surface border border-border-subtle rounded-lg overflow-hidden">
-          <div className="flex items-center justify-between px-4 py-3 border-b border-border-subtle">
-            <div className="flex items-center gap-2">
-              <Package size={14} className="text-accent" />
-              <span className="text-sm font-semibold text-text-primary">Sales Detail</span>
-              <span className="text-xs text-text-tertiary">({data.salesDetail.length} items)</span>
-            </div>
+        <div className="panel mt-6 overflow-hidden">
+          <div className="panel-bar">
+            <span className="flex items-center gap-2"><Package size={13} />Sales detail</span>
+            <span className="panel-bar-caption">{data.salesDetail.length} items</span>
           </div>
           <div className="overflow-x-auto">
             <table className="w-full">
               <thead>
-                <tr className="bg-bg-elevated">
-                  <th className="px-4 py-2.5 text-left text-[11px] font-medium tracking-widest uppercase text-text-tertiary border-b border-border-subtle">Product</th>
-                  <th className="px-4 py-2.5 text-left text-[11px] font-medium tracking-widest uppercase text-text-tertiary border-b border-border-subtle w-20">Mkt</th>
-                  <th className="px-4 py-2.5 text-right text-[11px] font-medium tracking-widest uppercase text-text-tertiary border-b border-border-subtle w-16">Qty</th>
-                  <th className="px-4 py-2.5 text-right text-[11px] font-medium tracking-widest uppercase text-text-tertiary border-b border-border-subtle w-24">Revenue</th>
-                  <th className="px-4 py-2.5 text-right text-[11px] font-medium tracking-widest uppercase text-text-tertiary border-b border-border-subtle w-24">COGS</th>
-                  <th className="px-4 py-2.5 text-right text-[11px] font-medium tracking-widest uppercase text-text-tertiary border-b border-border-subtle w-24">Fees</th>
-                  <th className="px-4 py-2.5 text-right text-[11px] font-medium tracking-widest uppercase text-text-tertiary border-b border-border-subtle w-24">Ship</th>
-                  <th className="px-4 py-2.5 text-right text-[11px] font-medium tracking-widest uppercase text-text-tertiary border-b border-border-subtle w-24">Net Profit</th>
-                  <th className="px-4 py-2.5 text-right text-[11px] font-medium tracking-widest uppercase text-text-tertiary border-b border-border-subtle w-20">Margin</th>
-                  <th className="px-4 py-2.5 text-right text-[11px] font-medium tracking-widest uppercase text-text-tertiary border-b border-border-subtle w-28">Settled</th>
+                <tr className="bg-bg-surface">
+                  <th className="px-4 py-2.5 text-left text-[11px] label-caps text-text-tertiary">Product</th>
+                  <th className="px-4 py-2.5 text-left text-[11px] label-caps text-text-tertiary w-20">Mkt</th>
+                  <th className="px-4 py-2.5 text-right text-[11px] label-caps text-text-tertiary w-16">Qty</th>
+                  <th className="px-4 py-2.5 text-right text-[11px] label-caps text-text-tertiary w-24">Revenue</th>
+                  <th className="px-4 py-2.5 text-right text-[11px] label-caps text-text-tertiary w-24">COGS</th>
+                  <th className="px-4 py-2.5 text-right text-[11px] label-caps text-text-tertiary w-24">Fees</th>
+                  <th className="px-4 py-2.5 text-right text-[11px] label-caps text-text-tertiary w-24">Ship</th>
+                  <th className="px-4 py-2.5 text-right text-[11px] label-caps text-text-tertiary w-24">Net Profit</th>
+                  <th className="px-4 py-2.5 text-right text-[11px] label-caps text-text-tertiary w-20">Margin</th>
+                  <th className="px-4 py-2.5 text-right text-[11px] label-caps text-text-tertiary w-28">Settled</th>
                 </tr>
               </thead>
               <tbody>
@@ -237,7 +237,7 @@ export default function ProfitLossPage() {
                   const timeStr = settledTime.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true });
                   const dateStr = settledTime.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
                   const mktLabel = item.marketplace === 'amazon' ? 'AMZ' : item.marketplace === 'walmart' ? 'WMT' : item.marketplace === 'ebay' ? 'EBAY' : item.marketplace === 'paypal' ? 'PP' : (item.marketplace || '').toUpperCase();
-                  const mktColor = item.marketplace === 'amazon' ? 'bg-orange-500/10 text-orange-400' : item.marketplace === 'walmart' ? 'bg-blue-500/10 text-blue-400' : item.marketplace === 'ebay' ? 'bg-green-500/10 text-green-400' : item.marketplace === 'paypal' ? 'bg-cyan-500/10 text-cyan-400' : 'bg-text-tertiary/10 text-text-tertiary';
+                  const mktColor = item.marketplace === 'amazon' ? 'mkt mkt-amazon' : item.marketplace === 'walmart' ? 'mkt mkt-walmart' : item.marketplace === 'ebay' ? 'mkt mkt-ebay' : item.marketplace === 'paypal' ? 'mkt mkt-paypal' : 'mkt';
                   return (
                     <tr key={`${item.order_id}-${item.sku}-${i}`} className="border-b border-border-subtle/50 hover:bg-bg-hover transition-colors">
                       <td className="px-4 py-2 text-sm">
@@ -245,12 +245,12 @@ export default function ProfitLossPage() {
                         <div className="text-[11px] text-text-tertiary font-mono">{item.sku}</div>
                       </td>
                       <td className="px-4 py-2">
-                        <span className={`inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold uppercase tracking-wider ${mktColor}`}>
+                        <span className={mktColor}>
                           {mktLabel}
                         </span>
                       </td>
-                      <td className="px-4 py-2 text-right text-sm font-mono text-text-secondary">{item.quantity}</td>
-                      <td className="px-4 py-2 text-right text-sm font-mono text-text-primary">
+                      <td className="px-4 py-2 text-right text-sm text-text-secondary tabular-nums">{item.quantity}</td>
+                      <td className="px-4 py-2 text-right text-sm text-text-primary tabular-nums">
                         <div>{formatCurrency(item.revenue)}</div>
                         {item.shippingCredit > 0 && (
                           <div className="text-[11px] text-text-tertiary" title="Shipping the buyer paid, counted as income">
@@ -258,13 +258,13 @@ export default function ProfitLossPage() {
                           </div>
                         )}
                       </td>
-                      <td className="px-4 py-2 text-right text-sm font-mono text-negative">{item.cogs > 0 ? formatCurrency(-item.cogs) : '-'}</td>
-                      <td className="px-4 py-2 text-right text-sm font-mono text-negative">{fees > 0 ? formatCurrency(-fees) : '-'}</td>
-                      <td className="px-4 py-2 text-right text-sm font-mono text-negative">{item.shippingCost > 0 ? formatCurrency(-item.shippingCost) : '-'}</td>
-                      <td className={`px-4 py-2 text-right text-sm font-mono font-medium ${item.net_profit >= 0 ? 'text-positive' : 'text-negative'}`}>
+                      <td className="px-4 py-2 text-right text-sm text-negative tabular-nums">{item.cogs > 0 ? formatCurrency(-item.cogs) : '-'}</td>
+                      <td className="px-4 py-2 text-right text-sm text-negative tabular-nums">{fees > 0 ? formatCurrency(-fees) : '-'}</td>
+                      <td className="px-4 py-2 text-right text-sm text-negative tabular-nums">{item.shippingCost > 0 ? formatCurrency(-item.shippingCost) : '-'}</td>
+                      <td className={`px-4 py-2 text-right text-sm font-medium tabular-nums ${item.net_profit >= 0 ? 'text-positive' : 'text-negative'}`}>
                         {formatCurrency(item.net_profit)}
                       </td>
-                      <td className={`px-4 py-2 text-right text-sm font-mono ${margin >= 20 ? 'text-positive' : margin >= 0 ? 'text-text-secondary' : 'text-negative'}`}>
+                      <td className={`px-4 py-2 text-right text-sm tabular-nums ${margin >= 20 ? 'text-positive' : margin >= 0 ? 'text-text-secondary' : 'text-negative'}`}>
                         {margin.toFixed(1)}%
                       </td>
                       <td className="px-4 py-2 text-right text-xs text-text-tertiary">
@@ -282,24 +282,22 @@ export default function ProfitLossPage() {
 
       {/* Refund Detail */}
       {data?.refundDetail && data.refundDetail.length > 0 && (
-        <div className="bg-bg-surface border border-border-subtle rounded-lg overflow-hidden">
-          <div className="px-4 py-3 border-b border-border-subtle">
-            <div className="flex items-center gap-2">
-              <span className="text-sm font-medium text-negative">Returns</span>
-              <span className="text-xs text-text-tertiary">({data.refundDetail.length} items)</span>
-            </div>
+        <div className="panel overflow-hidden">
+          <div className="panel-bar">
+            <span>Returns</span>
+            <span className="panel-bar-caption">{data.refundDetail.length} items</span>
           </div>
           <div className="overflow-x-auto">
             <table className="w-full">
               <thead>
-                <tr className="bg-bg-elevated">
-                  <th className="px-4 py-2.5 text-left text-[11px] font-medium tracking-widest uppercase text-text-tertiary border-b border-border-subtle">Product</th>
-                  <th className="px-4 py-2.5 text-left text-[11px] font-medium tracking-widest uppercase text-text-tertiary border-b border-border-subtle w-20">Mkt</th>
-                  <th className="px-4 py-2.5 text-right text-[11px] font-medium tracking-widest uppercase text-text-tertiary border-b border-border-subtle w-16">Qty</th>
-                  <th className="px-4 py-2.5 text-right text-[11px] font-medium tracking-widest uppercase text-text-tertiary border-b border-border-subtle w-24">Refund</th>
-                  <th className="px-4 py-2.5 text-right text-[11px] font-medium tracking-widest uppercase text-text-tertiary border-b border-border-subtle w-24">Fee Clawback</th>
-                  <th className="px-4 py-2.5 text-left text-[11px] font-medium tracking-widest uppercase text-text-tertiary border-b border-border-subtle w-40">Reason</th>
-                  <th className="px-4 py-2.5 text-right text-[11px] font-medium tracking-widest uppercase text-text-tertiary border-b border-border-subtle w-28">Date</th>
+                <tr className="bg-bg-surface">
+                  <th className="px-4 py-2.5 text-left text-[11px] label-caps text-text-tertiary">Product</th>
+                  <th className="px-4 py-2.5 text-left text-[11px] label-caps text-text-tertiary w-20">Mkt</th>
+                  <th className="px-4 py-2.5 text-right text-[11px] label-caps text-text-tertiary w-16">Qty</th>
+                  <th className="px-4 py-2.5 text-right text-[11px] label-caps text-text-tertiary w-24">Refund</th>
+                  <th className="px-4 py-2.5 text-right text-[11px] label-caps text-text-tertiary w-24">Fee Clawback</th>
+                  <th className="px-4 py-2.5 text-left text-[11px] label-caps text-text-tertiary w-40">Reason</th>
+                  <th className="px-4 py-2.5 text-right text-[11px] label-caps text-text-tertiary w-28">Date</th>
                 </tr>
               </thead>
               <tbody>
@@ -308,7 +306,7 @@ export default function ProfitLossPage() {
                   const timeStr = refundTime.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true });
                   const dateStr = refundTime.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
                   const mktLabel = item.marketplace === 'amazon' ? 'AMZ' : item.marketplace === 'walmart' ? 'WMT' : item.marketplace === 'ebay' ? 'EBAY' : item.marketplace === 'paypal' ? 'PP' : (item.marketplace || '').toUpperCase();
-                  const mktColor = item.marketplace === 'amazon' ? 'bg-orange-500/10 text-orange-400' : item.marketplace === 'walmart' ? 'bg-blue-500/10 text-blue-400' : item.marketplace === 'ebay' ? 'bg-green-500/10 text-green-400' : item.marketplace === 'paypal' ? 'bg-cyan-500/10 text-cyan-400' : 'bg-text-tertiary/10 text-text-tertiary';
+                  const mktColor = item.marketplace === 'amazon' ? 'mkt mkt-amazon' : item.marketplace === 'walmart' ? 'mkt mkt-walmart' : item.marketplace === 'ebay' ? 'mkt mkt-ebay' : item.marketplace === 'paypal' ? 'mkt mkt-paypal' : 'mkt';
                   return (
                     <tr key={`refund-${item.order_id}-${i}`} className="border-b border-border-subtle/50 hover:bg-bg-hover transition-colors">
                       <td className="px-4 py-2 text-sm">
@@ -316,13 +314,13 @@ export default function ProfitLossPage() {
                         <div className="text-[11px] text-text-tertiary font-mono">{item.sku}</div>
                       </td>
                       <td className="px-4 py-2">
-                        <span className={`inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold uppercase tracking-wider ${mktColor}`}>
+                        <span className={mktColor}>
                           {mktLabel}
                         </span>
                       </td>
-                      <td className="px-4 py-2 text-right text-sm font-mono text-text-secondary">{item.quantity}</td>
-                      <td className="px-4 py-2 text-right text-sm font-mono text-negative">{formatCurrency(-item.refund_amount)}</td>
-                      <td className="px-4 py-2 text-right text-sm font-mono text-positive">{item.fee_clawback > 0 ? formatCurrency(item.fee_clawback) : '-'}</td>
+                      <td className="px-4 py-2 text-right text-sm text-text-secondary tabular-nums">{item.quantity}</td>
+                      <td className="px-4 py-2 text-right text-sm text-negative tabular-nums">{formatCurrency(-item.refund_amount)}</td>
+                      <td className="px-4 py-2 text-right text-sm text-positive tabular-nums">{item.fee_clawback > 0 ? formatCurrency(item.fee_clawback) : '-'}</td>
                       <td className="px-4 py-2 text-left text-sm text-text-secondary">{item.reason || '-'}</td>
                       <td className="px-4 py-2 text-right text-xs text-text-tertiary">
                         <div>{dateStr}</div>
@@ -385,7 +383,7 @@ function PLRow({ label, amount, bold, negative, indent }: {
       <td className={`px-4 py-2 text-sm ${bold ? 'font-semibold text-text-primary' : 'text-text-secondary'} ${indent ? 'pl-10' : ''}`}>
         {label}
       </td>
-      <td className={`px-4 py-2 text-right text-sm font-mono ${
+      <td className={`px-4 py-2 text-right text-sm tabular-nums ${
         bold ? 'font-semibold' : ''
       } ${isNeg ? 'text-negative' : 'text-text-primary'}`}>
         {isNeg ? formatCurrencyParens(amount) : formatCurrency(amount)}
@@ -412,7 +410,7 @@ function ExpandableSection({ label, total, rows, expanded, onToggle }: {
             {label}
           </div>
         </td>
-        <td className={`px-4 py-2 text-right text-sm font-mono font-medium ${isNeg ? 'text-negative' : 'text-text-primary'}`}>
+        <td className={`px-4 py-2 text-right text-sm font-medium tabular-nums ${isNeg ? 'text-negative' : 'text-text-primary'}`}>
           {isNeg ? formatCurrencyParens(total) : formatCurrency(total)}
         </td>
       </tr>
@@ -432,12 +430,12 @@ function PLSkeleton() {
       </div>
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
         {Array.from({ length: 4 }).map((_, i) => (
-          <div key={i} className="bg-bg-surface border border-border-subtle rounded-lg p-5">
+          <div key={i} className="panel p-5">
             <div className="skeleton h-3 w-20 mb-3" /><div className="skeleton h-8 w-28" />
           </div>
         ))}
       </div>
-      <div className="bg-bg-surface border border-border-subtle rounded-lg p-4">
+      <div className="panel p-4">
         {Array.from({ length: 12 }).map((_, i) => <div key={i} className="skeleton h-8 w-full mb-1" />)}
       </div>
     </div>

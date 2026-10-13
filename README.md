@@ -30,6 +30,14 @@ an accurate cash-basis P&L per marketplace and across your whole business.
   reimbursements you may want to re-evaluate.
 - **Listing tool** — multi-marketplace listing creation (Amazon + MFN), inbound
   plan creation, FNSKU / box label printing.
+- **Walmart listing + WFS shipping** — scan a walmart.com link, item ID or UPC;
+  restock an existing SKU, convert a seller-fulfilled SKU to WFS, or create a
+  new WFS / seller-fulfilled SKU from Walmart's live item spec (validated
+  against Walmart's own JSON schema before sending, optional Claude suggestions
+  for empty fields); then create the WFS inbound order, enter boxes, print
+  receiving labels, and book Walmart's FedEx rate or add your own tracking.
+  How it works and the Walmart API quirks behind it:
+  [`docs/WFS_LISTING_TOOL_GUIDE.md`](docs/WFS_LISTING_TOOL_GUIDE.md).
 
 The numbers reconcile to within a few dollars per marketplace against Walmart
 Seller Center, Amazon Seller Central, and Sellerboard — see [`CLAUDE.md`](CLAUDE.md)
@@ -76,8 +84,9 @@ npm run dev
 3. Click "Sync Now" — first sync may take 5-15 minutes depending on order
    volume.
 4. Once data is in, fill in COGS for your SKUs on the Products page.
-5. If you sell on Walmart, do the **manual CSV imports** below — some Walmart
-   fees exist in no API and your P&L is wrong without them.
+5. Optional: the **manual CSV imports** below fill gaps the APIs leave.
+6. Optional: add an Anthropic API key under **Settings → Claude (AI
+   suggestions)** to have Walmart item-setup fields suggested for you.
 
 ### If you're shipping to Amazon FBA
 
@@ -125,65 +134,26 @@ cp data/flipledger.db data/flipledger.db.bak-$(date +%Y%m%d-%H%M%S)
 
 ---
 
-## Manual data imports (required for accurate Walmart numbers)
+## Manual data imports
 
-Not everything is available over an API. Two categories of data have to be
-exported by hand from the seller portals and dropped into `data/`. **The
-Walmart one is not optional if you use WFS** — without it your Walmart P&L is
-missing real costs and real reimbursement income.
+Not everything is available over an API.
 
-### 1. Walmart WFS service fees — REQUIRED for WFS sellers
+### 1. Walmart WFS service fees — automatic now
 
-Walmart's WFS service fees are **not in the recon/settlement API feed and not in
-any public Marketplace API.** This was verified exhaustively: recon report v1
-(all categories, all-time), `/fulfillment/inbound-shipments` and its detail
-endpoints, the entire `/reports/reportRequests` catalog, and a dozen candidate
-`payments` / `servicefees` / `wfs/billing` endpoints — all either 404 or return
-nothing for these fee types. They're deducted from your payout but itemized only
-in the Seller Center UI, which offers a CSV export.
-
-**What's missing without this import**
-
-| Export | What it is | Effect on P&L |
-|---|---|---|
-| `StorageFee` | Monthly WFS storage | cost |
-| `InboundTransportationFee` | Inbound freight to WFS | cost |
-| `InventoryRemovalOrder` | Removal orders | cost |
-| `RC_InventoryRTVFee` | Return-to-vendor fees | cost |
-| `Refund` | Refund reimbursements | income |
-| `LostInventory` | Lost-inventory reimbursements | income |
-
-**How to do it**
-
-1. Seller Center → **Payments → Services Fees**.
-2. Export each fee type above (each downloads as a zip).
-3. Unzip the CSVs into `data/walmart-service-fees/` (create the folder if needed).
-4. In the app: **Settings → Walmart WFS Service Fees → Import Service Fees**.
-
-The import is **idempotent** — it deletes the previous import and re-inserts, so
-re-running with a fresh export is always safe and never double-counts.
-
-**Cadence:** monthly, or before you close out a quarter / file taxes. There is
-no API to automate this — Walmart simply does not publish the data.
-
-### 2. Walmart Settlement Report — recommended
-
-The full Settlement Report export (same `data/walmart-service-fees/` folder,
-same import button) carries **reimbursements** the per-fee-type exports miss —
-most importantly `InboundQuantityDispute`, which is how Walmart pays you back
-for a shipment lost during receiving. That can be a four-figure line item.
-
-Only its **reimbursement rows** are read. Its `FulfillmentFee` rows are
-deliberately ignored because the recon API already syncs the same per-unit
-pick/pack fees — importing them would double-count. Reconciliation report and
-Item Sales Report exports are detected and skipped automatically.
+Earlier versions needed a manual Seller Center "Services Fees" CSV import.
+That's retired: the recon report sync now books WFS storage, inbound
+transportation, removal and RTV fees, plus WFS Refund / LostInventory
+reimbursements, straight from the API. (The rows were always in the recon
+report; they have no Purchase Order #, and the old parser skipped them.)
+The old import endpoint now returns 410 — don't re-enable it alongside the
+recon path, or the fees are counted twice.
 
 > **Reminder on lost/damaged inventory:** a reimbursement for stock lost
 > *before it sold* is income, but that stock's cost never flowed through COGS
 > (FIFO only releases cost on a sale). Book an offsetting expense for the lost
 > units' cost, or you'll overstate profit. See `RECOVERY_PLAYBOOK.md`.
 
-### 3. Amazon Unified Transaction Report — recommended
+### 2. Amazon Unified Transaction Report — recommended
 
 Amazon's Financial Events API returns pending service fees with a `PostedDate`
 that **rolls forward to today on every sync**, so storage / subscription /
@@ -291,9 +261,6 @@ debited you). Same pattern as cash-basis revenue.
   back ~18 months. So months older than 6mo will have all the fees but no
   order revenue, making them look severely negative. File those via your
   prior tool / Sellerboard.
-- **Walmart WFS service fees require a manual CSV import** — see
-  [Manual data imports](#manual-data-imports-required-for-accurate-walmart-numbers).
-  This is a Walmart limitation, not a FlipLedger one: the data is in no API.
 - **Walmart WFS shipments mid-receiving are invisible.**
   `/fulfillment/inbound-shipments` only returns `AWAITING_DELIVERY` and
   `CLOSED`. A shipment that has arrived but is still being checked in returns

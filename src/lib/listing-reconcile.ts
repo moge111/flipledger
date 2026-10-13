@@ -18,6 +18,7 @@ import { getInboundOperation } from '@/lib/sp-api/inboundPlansV2';
 import type { SPAPICredentials } from '@/lib/sp-api/types';
 import { openDb } from '@/lib/db-conn';
 import { createLogger } from '@/lib/log';
+import { isItemListingReady, offeredQuantity } from '@/lib/listing-send-policy';
 
 const log = createLogger('listing-reconcile');
 
@@ -78,7 +79,7 @@ export async function reconcileSendingBatch(batchId: number): Promise<ReconcileR
       return { reconciled: false, status: batch.status, operationStatus: null, reason: `Batch is '${batch.status}', not 'sending'` };
     }
     items = db.prepare(`
-      SELECT id, sku, listing_status as listingStatus, listing_error as listingError
+      SELECT id, sku, quantity, send_qty_to_amazon as sendQty, (SELECT COALESCE(SUM(il.quantity_remaining), 0) FROM inventory_ledger il WHERE il.sku = listing_batch_items.sku) AS skuStock, listing_status as listingStatus, listing_error as listingError
       FROM listing_batch_items WHERE batch_id = ?
       ORDER BY id ASC
     `).all(batchId) as any[];
@@ -95,7 +96,8 @@ export async function reconcileSendingBatch(batchId: number): Promise<ReconcileR
   //   FBA: FNSKU populated = listing is FBA-registered, ready for inbound.
   //        BUYABLE only happens after physical inventory arrives at Amazon —
   //        waiting for BUYABLE here would hang the batch indefinitely.
-  //   MFN: summary.status contains 'BUYABLE' = customer can buy now.
+  //   MFN: summary.status contains 'BUYABLE' = customer can buy now; an item
+  //        with quantity 0 is done once its out-of-stock offer is registered.
   // ERROR-severity issues are surfaced as non-fatal warnings (most clear on
   // their own — fresh MFN listings can take 30+ min before BUYABLE).
   const sellerId = await getSellerId(creds).catch(() => null);
@@ -106,11 +108,8 @@ export async function reconcileSendingBatch(batchId: number): Promise<ReconcileR
         const listing = await getListing(creds, sellerId, item.sku);
         if (!listing) continue; // still being registered, leave as PROCESSING
 
-        const summary = listing.summaries?.[0];
-        const summaryStatus: string[] = summary?.status || [];
-        const fnSku: string | undefined = summary?.fnSku;
-
-        const isReady = batch.channel === 'FBA' ? !!fnSku : summaryStatus.includes('BUYABLE');
+        // MFN quantity 0 never goes BUYABLE: ready once registered out of stock.
+        const isReady = isItemListingReady(batch.channel, offeredQuantity(!!item.sendQty, item.skuStock), listing);
 
         const issues: any[] = listing.issues || [];
         const errorIssues = issues.filter((i: any) => (i?.severity || '').toUpperCase() === 'ERROR');

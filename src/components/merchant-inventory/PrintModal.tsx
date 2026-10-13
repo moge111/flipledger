@@ -119,22 +119,22 @@ export function PrintModal({ selected, onClose }: PrintModalProps) {
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60" onClick={onClose}>
       <div
-        className="bg-bg-surface border border-border-subtle rounded-xl shadow-2xl w-[440px] max-h-[90vh] overflow-y-auto"
+        className="panel shadow-2xl w-[440px] max-h-[90vh] overflow-y-auto"
         onClick={e => e.stopPropagation()}
       >
-        <div className="flex items-center justify-between px-5 py-4 border-b border-border-subtle">
-          <h2 className="text-sm font-semibold text-text-primary flex items-center gap-2">
-            <Printer size={15} className="text-text-tertiary" />
-            Print Labels
+        <div className="panel-bar">
+          <h2 className="flex items-center gap-2">
+            <Printer size={13} />
+            Print labels
           </h2>
-          <button onClick={onClose} className="p-1 rounded hover:bg-bg-hover text-text-tertiary">
-            <X size={16} />
+          <button onClick={onClose} className="p-0.5 rounded opacity-70 hover:opacity-100" aria-label="Close">
+            <X size={15} />
           </button>
         </div>
 
         <div className="px-5 py-4 space-y-4">
           <div>
-            <div className="text-[11px] uppercase tracking-widest text-text-tertiary mb-2">Label Type</div>
+            <div className="text-[11px] label-caps text-text-tertiary mb-2">Label Type</div>
             <div className="space-y-1.5">
               {LABEL_MODES.map(({ mode, label, desc }) => {
                 const disabled = mode === 'fnsku' && !hasFnsku;
@@ -170,14 +170,14 @@ export function PrintModal({ selected, onClose }: PrintModalProps) {
           </div>
 
           <div>
-            <div className="text-[11px] uppercase tracking-widest text-text-tertiary mb-2">Label Size</div>
+            <div className="text-[11px] label-caps text-text-tertiary mb-2">Label Size</div>
             <div className="flex gap-2">
               {(['2x1', '4x6'] as const).map(s => (
                 <button
                   key={s} onClick={() => setSize(s)}
                   className={`px-3 py-1.5 rounded-md text-xs font-medium border transition-colors ${
                     size === s
-                      ? 'bg-accent/10 text-accent border-accent/40'
+                      ? 'bg-accent text-text-inverse border-accent'
                       : 'bg-bg-elevated text-text-secondary border-border-subtle hover:border-border-default'
                   }`}
                 >
@@ -215,7 +215,7 @@ export function PrintModal({ selected, onClose }: PrintModalProps) {
                 <input type="text" value={custom.title}
                   onChange={e => setCustom(c => ({ ...c, title: e.target.value }))}
                   placeholder={size === '4x6' ? 'S1-B3' : 'Label title'}
-                  className="w-full h-8 px-3 bg-bg-elevated border border-border-default rounded-md text-sm text-text-primary placeholder:text-text-tertiary focus:border-accent focus:outline-none"
+                  className="w-full h-8 px-3 bg-bg-elevated border border-border-default rounded-md text-sm text-text-primary placeholder:text-text-tertiary focus:border-link focus:outline-none"
                 />
               </div>
               <div>
@@ -223,7 +223,7 @@ export function PrintModal({ selected, onClose }: PrintModalProps) {
                 <input type="text" value={custom.subtitle}
                   onChange={e => setCustom(c => ({ ...c, subtitle: e.target.value }))}
                   placeholder="Optional subtitle"
-                  className="w-full h-8 px-3 bg-bg-elevated border border-border-default rounded-md text-sm text-text-primary placeholder:text-text-tertiary focus:border-accent focus:outline-none"
+                  className="w-full h-8 px-3 bg-bg-elevated border border-border-default rounded-md text-sm text-text-primary placeholder:text-text-tertiary focus:border-link focus:outline-none"
                 />
               </div>
               <div>
@@ -231,7 +231,7 @@ export function PrintModal({ selected, onClose }: PrintModalProps) {
                 <input type="text" value={custom.notes}
                   onChange={e => setCustom(c => ({ ...c, notes: e.target.value }))}
                   placeholder="Optional notes"
-                  className="w-full h-8 px-3 bg-bg-elevated border border-border-default rounded-md text-sm text-text-primary placeholder:text-text-tertiary focus:border-accent focus:outline-none"
+                  className="w-full h-8 px-3 bg-bg-elevated border border-border-default rounded-md text-sm text-text-primary placeholder:text-text-tertiary focus:border-link focus:outline-none"
                 />
               </div>
               <div className="grid grid-cols-2 gap-2">
@@ -240,7 +240,7 @@ export function PrintModal({ selected, onClose }: PrintModalProps) {
                   <input type="text" value={custom.bin}
                     onChange={e => setCustom(c => ({ ...c, bin: e.target.value }))}
                     placeholder="e.g. S1-B3"
-                    className="w-full h-8 px-3 bg-bg-elevated border border-border-default rounded-md text-sm font-mono text-text-primary placeholder:text-text-tertiary focus:border-accent focus:outline-none"
+                    className="w-full h-8 px-3 bg-bg-elevated border border-border-default rounded-md text-sm font-mono text-text-primary placeholder:text-text-tertiary focus:border-link focus:outline-none"
                   />
                 </div>
                 <div>
@@ -248,7 +248,7 @@ export function PrintModal({ selected, onClose }: PrintModalProps) {
                   <input type="text" value={custom.sku}
                     onChange={e => setCustom(c => ({ ...c, sku: e.target.value }))}
                     placeholder="SKU for barcode"
-                    className="w-full h-8 px-3 bg-bg-elevated border border-border-default rounded-md text-sm font-mono text-text-primary placeholder:text-text-tertiary focus:border-accent focus:outline-none"
+                    className="w-full h-8 px-3 bg-bg-elevated border border-border-default rounded-md text-sm font-mono text-text-primary placeholder:text-text-tertiary focus:border-link focus:outline-none"
                   />
                 </div>
               </div>
@@ -257,7 +257,7 @@ export function PrintModal({ selected, onClose }: PrintModalProps) {
 
           {labelMode !== 'custom' && selected.length > 0 && (
             <div className="space-y-1 max-h-36 overflow-y-auto">
-              <div className="text-[11px] uppercase tracking-widest text-text-tertiary mb-1.5">
+              <div className="text-[11px] label-caps text-text-tertiary mb-1.5">
                 {selected.length} item{selected.length !== 1 ? 's' : ''} selected
               </div>
               {selected.map(r => (
@@ -271,7 +271,7 @@ export function PrintModal({ selected, onClose }: PrintModalProps) {
                   </div>
                   <div className="flex items-center gap-1 shrink-0">
                     {r.bin_location && (
-                      <span className="text-[10px] font-mono font-medium text-accent bg-accent/10 px-1.5 py-0.5 rounded">
+                      <span className="text-[10px] font-mono font-medium text-text-primary bg-accent/10 px-1.5 py-0.5 rounded">
                         {r.bin_location}
                       </span>
                     )}
@@ -290,14 +290,14 @@ export function PrintModal({ selected, onClose }: PrintModalProps) {
         <div className="flex gap-2 px-5 pb-4">
           <button
             onClick={onClose}
-            className="flex-1 h-9 rounded-md border border-border-subtle text-sm text-text-secondary hover:bg-bg-hover transition-colors"
+            className="flex-1 h-9 rounded-md text-sm text-text-primary hover:bg-bg-hover transition-colors font-semibold bg-bg-surface border-[1.5px] border-border-strong"
           >
             Cancel
           </button>
           <button
             onClick={handlePrint}
             disabled={!canPrint}
-            className="flex-1 h-9 rounded-md bg-accent text-white text-sm font-medium hover:bg-accent/90 transition-colors disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center gap-1.5"
+            className="flex-1 h-9 rounded-md bg-accent text-text-inverse text-sm font-bold hover:bg-accent/90 transition-colors disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center gap-1.5"
           >
             <Printer size={14} />
             Print

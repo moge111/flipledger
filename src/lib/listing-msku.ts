@@ -50,6 +50,13 @@ const SUPPLIER_ABBREVIATIONS: Record<string, string> = {
 };
 
 /** Abbreviate a supplier name, falling back to first 4 lowercase alpha chars. */
+/** Reverse of abbreviateSupplier for the known retailers: 'wm' → 'walmart'. */
+export function supplierFromAbbreviation(abbr: string): string | null {
+  const a = abbr.toLowerCase();
+  for (const [name, ab] of Object.entries(SUPPLIER_ABBREVIATIONS)) if (ab === a) return name;
+  return null;
+}
+
 export function abbreviateSupplier(supplier: string | null | undefined): string {
   if (!supplier) return '';
   const trimmed = supplier.trim().toLowerCase();

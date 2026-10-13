@@ -4,9 +4,19 @@
  * POST /api/list/batches/[id]/items
  *   - Adds an item to a batch. Also writes to inventory_ledger (for COGS/FIFO).
  *   - Auto-triggers FIFO recalculation for the affected SKU/ASIN.
+ *   - MFN batches accept quantity 0 (Oct 4 2026): the SKU is registered on
+ *     Amazon out of stock before anything is bought. No lot is written and
+ *     FIFO is not run; the lot appears when the quantity is raised (PATCH).
+ *   - MFN `sendQtyToAmazon` (default true): the "Qty → Amazon" switch. false
+ *     = FlipLedger never sets the Amazon quantity (new offer created at 0,
+ *     stock managed in Seller Central). The lot is written either way, so COGS
+ *     and inventory are right from purchase. Legacy `awaitingDelivery: true`
+ *     (older FBA Scout builds) means false.
  */
+import { refreshItemFee, liveOfferPriceCents, isAmazonChannel } from '@/lib/listing-fees';
 import { NextRequest, NextResponse } from 'next/server';
 import { recalculateFIFO } from '@/lib/fifo';
+import { insertItemLot } from '@/lib/listing-ledger';
 import { openDb } from '@/lib/db-conn';
 
 const getDb = () => openDb();
@@ -32,6 +42,8 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     purchaseDate,
     estimatedFeeCents,   // already in cents (optional)
     estimatedShipCents,  // already in cents (optional) — MFN seller shipping estimate
+    sendQtyToAmazon,          // MFN only: false = don't set the Amazon quantity
+    awaitingDelivery,         // legacy alias: true = sendQtyToAmazon false
   } = body;
   // `sku` is mutable: the duplicate-SKU safeguard below may append a
   // differentiator before any insert. All downstream writes use this value.
@@ -39,11 +51,12 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
 
   if (!asin) return NextResponse.json({ error: 'asin is required' }, { status: 400 });
   if (!sku) return NextResponse.json({ error: 'sku is required' }, { status: 400 });
-  if (!Number.isFinite(quantity) || quantity < 1) {
+  // The range is checked once the batch channel is known: MFN allows 0.
+  if (!Number.isFinite(quantity)) {
     return NextResponse.json({ error: 'quantity must be >= 1' }, { status: 400 });
   }
 
-  const listPriceCents = Math.round((Number(listPrice) || 0) * 100);
+  let listPriceCents = Math.round((Number(listPrice) || 0) * 100);
   const buyPriceCents = Math.round((Number(buyPrice) || 0) * 100);
 
   const db = getDb();
@@ -53,6 +66,16 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     if (!batch) return NextResponse.json({ error: 'Batch not found' }, { status: 404 });
     if (batch.status !== 'draft') {
       return NextResponse.json({ error: `Cannot add items to batch in status: ${batch.status}` }, { status: 400 });
+    }
+    const isMfnBatch = String(batch.channel || 'FBA').toUpperCase() === 'MFN';
+    const minQty = isMfnBatch ? 0 : 1;
+    if (quantity < minQty) {
+      return NextResponse.json({ error: `quantity must be >= ${minQty}` }, { status: 400 });
+    }
+    const zeroQty = quantity === 0;
+    const sendQty = !(sendQtyToAmazon === false || awaitingDelivery === true);
+    if (!sendQty && !isMfnBatch) {
+      return NextResponse.json({ error: 'sendQtyToAmazon is only for MFN batches (FBA stock is counted by Amazon\'s warehouse)' }, { status: 400 });
     }
 
     // ── Cross-channel MSKU safeguard ─────────────────────────────────────
@@ -124,14 +147,22 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
 
     const now = new Date().toISOString();
 
+    // No price given for a SKU that's already on Amazon (FBA Scout, imports,
+    // a blank price box): use what that SKU sells for there now.
+    let priceFromAmazon = false;
+    if (listPriceCents <= 0 && isAmazonChannel(batch.channel)) {
+      const live = await liveOfferPriceCents(db, sku);
+      if (live) { listPriceCents = live; priceFromAmazon = true; }
+    }
+
     const addItem = db.transaction(() => {
       // 1. Insert into listing_batch_items
       const result = db.prepare(`
         INSERT INTO listing_batch_items (
           batch_id, asin, sku, msku, product_name, image_url, condition,
           quantity, list_price_cents, buy_price_cents, supplier, purchase_date,
-          estimated_fee_cents, estimated_ship_cents, created_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          estimated_fee_cents, estimated_ship_cents, send_qty_to_amazon, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).run(
         batchId,
         asin,
@@ -147,39 +178,26 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
         purchaseDate || null,
         estimatedFeeCents || 0,
         estimatedShipCents || 0,
+        sendQty ? 1 : 0,
         now
       );
 
-      // 2. Ensure supplier exists in suppliers table
-      let supplierId: number | null = null;
-      if (supplier) {
-        db.prepare('INSERT OR IGNORE INTO suppliers (name, created_at) VALUES (?, ?)').run(supplier, now);
-        const sRow = db.prepare('SELECT id FROM suppliers WHERE name = ?').get(supplier) as any;
-        supplierId = sRow?.id ?? null;
-      }
-
-      // 3. Write to inventory_ledger so FIFO can assign COGS to future sales.
-      //    Same SKU + same buy price → restock the existing lot (add quantity).
-      //    Same SKU + DIFFERENT buy price → new lot row, so the historical
-      //    cost basis is never overwritten (multi-lot FIFO, same pattern as
-      //    /api/data/inventory-lots).
-      const existing = db.prepare(
-        'SELECT id, quantity, quantity_remaining FROM inventory_ledger WHERE sku = ? AND buy_price = ? ORDER BY date_purchased DESC LIMIT 1'
-      ).get(sku, buyPriceCents) as any;
-      if (existing) {
-        db.prepare(`
-          UPDATE inventory_ledger SET
-            quantity = quantity + ?,
-            quantity_remaining = quantity_remaining + ?,
-            supplier_id = COALESCE(?, supplier_id),
-            date_purchased = COALESCE(?, date_purchased)
-          WHERE id = ?
-        `).run(quantity, quantity, supplierId, purchaseDate || now, existing.id);
-      } else {
-        db.prepare(`
-          INSERT INTO inventory_ledger (asin, sku, buy_price, quantity, quantity_remaining, supplier_id, date_purchased, created_at)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        `).run(asin, sku, buyPriceCents, quantity, quantity, supplierId, purchaseDate || now, now);
+      // 2–3. Write this item's OWN inventory_ledger lot (supplier resolved
+      //    inside), linked on the item, so edits and deletes can act on exactly
+      //    that lot. Restocks used to merge into an existing same-price lot and
+      //    re-date it, which both reordered FIFO and made rollback guess which
+      //    lot to shrink (Sept 22 2026 review, A-latent-2).
+      //    A 0-qty MFN item owns no lot: nothing was bought yet.
+      if (!zeroQty) {
+        insertItemLot(db, {
+          id: Number(result.lastInsertRowid),
+          asin,
+          sku,
+          quantity,
+          buy_price_cents: buyPriceCents,
+          supplier: supplier || null,
+          purchase_date: purchaseDate || null,
+        }, now);
       }
 
       // 4. Upsert into products so the name/image get reused next time
@@ -201,12 +219,17 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     });
 
     const itemId = addItem();
+    // Adds that skip the scan form (FBA Scout, imports) arrive without a fee.
+    if ((priceFromAmazon || !(Number(estimatedFeeCents) > 0)) && listPriceCents > 0 && itemId != null) {
+      await refreshItemFee(db, batchId, Number(itemId));
+    }
     db.close();
 
-    // 6. Auto-recalculate FIFO for this SKU (matches Products page behavior)
-    const fifo = recalculateFIFO({ sku });
+    // 6. Auto-recalculate FIFO for this SKU (matches Products page behavior).
+    //    Skipped for a 0-qty item: no lot was written, so nothing can move.
+    const fifo = zeroQty ? null : recalculateFIFO({ sku });
 
-    return NextResponse.json({ id: itemId, success: true, fifo, sku });
+    return NextResponse.json({ id: itemId, success: true, fifo, sku, quantity, listPriceCents, priceFromAmazon, lotCreated: !zeroQty, sendQtyToAmazon: sendQty });
   } catch (err) {
     db.close();
     return NextResponse.json({ error: String(err) }, { status: 500 });

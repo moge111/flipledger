@@ -256,9 +256,9 @@ export default function MerchantInventoryPage() {
         label: status === 'pending' ? 'Receive' : status === 'received' ? 'Inspect' : 'Edit Local',
         cls:
           status === 'pending'
-            ? 'text-accent border-accent/40 hover:bg-accent/10'
+            ? 'text-text-primary border-border-strong hover:bg-bg-hover'
             : status === 'received'
-              ? 'text-amber-400 border-amber-400/40 hover:bg-amber-400/10'
+              ? 'text-warning border-warning/40 hover:bg-warning-muted'
               : 'text-text-tertiary border-border-subtle hover:bg-bg-hover',
         modalTitle: 'Update Stock',
       };
@@ -269,9 +269,9 @@ export default function MerchantInventoryPage() {
         label: !status || status === 'pending' ? 'Receive' : status === 'received' ? 'Inspect' : 'Edit Local',
         cls:
           !status || status === 'pending'
-            ? 'text-amber-400 border-amber-400/40 hover:bg-amber-400/10'
+            ? 'text-warning border-warning/40 hover:bg-warning-muted'
             : status === 'received'
-              ? 'text-amber-400 border-amber-400/40 hover:bg-amber-400/10'
+              ? 'text-warning border-warning/40 hover:bg-warning-muted'
               : 'text-text-tertiary border-border-subtle hover:bg-bg-hover',
         modalTitle: 'Restock Item',
       };
@@ -282,9 +282,9 @@ export default function MerchantInventoryPage() {
         label: !status || status === 'pending' ? 'Receive' : status === 'received' ? 'Inspect' : 'Edit Local',
         cls:
           !status || status === 'pending'
-            ? 'text-accent border-accent/40 hover:bg-accent/10'
+            ? 'text-text-primary border-border-strong hover:bg-bg-hover'
             : status === 'received'
-              ? 'text-amber-400 border-amber-400/40 hover:bg-amber-400/10'
+              ? 'text-warning border-warning/40 hover:bg-warning-muted'
               : 'text-text-tertiary border-border-subtle hover:bg-bg-hover',
         modalTitle: 'Update Stock',
       };
@@ -296,9 +296,9 @@ export default function MerchantInventoryPage() {
       label: status === 'pending' ? 'Receive' : status === 'received' ? 'Inspect' : 'Edit Local',
       cls:
         status === 'pending'
-          ? 'text-accent border-accent/40 hover:bg-accent/10'
+          ? 'text-text-primary border-border-strong hover:bg-bg-hover'
           : status === 'received'
-            ? 'text-amber-400 border-amber-400/40 hover:bg-amber-400/10'
+            ? 'text-warning border-warning/40 hover:bg-warning-muted'
             : 'text-text-tertiary border-border-subtle hover:bg-bg-hover',
       modalTitle: 'Receive Inventory',
     };
@@ -309,32 +309,32 @@ export default function MerchantInventoryPage() {
   return (
     <div>
       {/* Page header */}
-      <div className="flex items-center justify-between mb-6">
+      <div className="flex flex-wrap items-center justify-between gap-3 mb-6">
         <div>
-          <h1 className="text-xl font-semibold tracking-tight">Merchant Inventory</h1>
+          <h1 className="page-title">Merchant Inventory</h1>
           <p className="text-sm text-text-tertiary mt-0.5">
-            Read-only visibility · Amazon MFN listings (LV_ SKUs) enriched with local lot data · receive and push happen in <Link href="/list" className="text-accent hover:underline">Batches</Link>
+            Read-only visibility · Amazon MFN listings (LV_ SKUs) enriched with local lot data · receive and push happen in <Link href="/list" className="text-link hover:underline">Batches</Link>
           </p>
         </div>
-        <div className="flex items-center gap-3">
+        <div className="flex flex-wrap items-center gap-3">
           {/* Sync */}
           <div className="flex flex-col items-end gap-0.5">
             <button
               onClick={handleSync}
               disabled={syncing}
-              className="flex items-center gap-1.5 h-9 px-3 rounded-md border border-border-subtle text-sm text-text-secondary hover:bg-bg-hover transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              className="flex items-center gap-1.5 h-9 px-3 rounded-md text-sm text-text-primary hover:bg-bg-hover transition-colors disabled:opacity-50 disabled:cursor-not-allowed font-semibold bg-bg-surface border-[1.5px] border-border-strong"
             >
               <RefreshCw size={13} className={syncing ? 'animate-spin' : ''} />
               {syncing ? 'Syncing…' : 'Sync Amazon'}
             </button>
             {syncError && (
-              <p className="text-[10px] text-red-400 max-w-[180px] text-right">{syncError}</p>
+              <p className="text-[10px] text-negative max-w-[180px] text-right">{syncError}</p>
             )}
             {lastSynced && !syncError && (() => {
               const ageMs = Date.now() - new Date(lastSynced).getTime();
               const stale = ageMs > 2 * 3600 * 1000;
               return (
-                <p className={`text-[10px] ${stale ? 'text-amber-400' : 'text-text-tertiary'}`}>
+                <p className={`text-[10px] ${stale ? 'text-warning' : 'text-text-tertiary'}`}>
                   {stale && '⚠ Stale — '}Synced {new Date(lastSynced).toLocaleDateString()} {new Date(lastSynced).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                 </p>
               );
@@ -346,7 +346,7 @@ export default function MerchantInventoryPage() {
           {readyForExport.length > 0 && (
             <a
               href="/mfn/batch"
-              className="flex items-center gap-1.5 h-9 px-3 rounded-md border border-blue-500/50 text-blue-400 text-sm font-medium hover:bg-blue-500/10 transition-colors"
+              className="flex items-center gap-1.5 h-9 px-3 rounded-md border border-link/50 text-link text-sm font-medium hover:bg-link/10 transition-colors"
               title="Preview & push moved to MFN Batch Receive"
             >
               <Send size={14} />
@@ -356,7 +356,7 @@ export default function MerchantInventoryPage() {
           {readyForExport.length > 0 && (
             <button
               onClick={() => exportActivationCsv(readyForExport)}
-              className="flex items-center gap-1.5 h-9 px-3 rounded-md border border-green-500/50 text-green-400 text-sm font-medium hover:bg-green-500/10 transition-colors"
+              className="flex items-center gap-1.5 h-9 px-3 rounded-md border border-positive/50 text-positive text-sm font-medium hover:bg-positive/10 transition-colors"
             >
               <Download size={14} />
               Export Activation CSV ({readyForExport.length})
@@ -365,7 +365,7 @@ export default function MerchantInventoryPage() {
           {selected.size > 0 && (
             <button
               onClick={() => setShowPrintModal(true)}
-              className="flex items-center gap-1.5 h-9 px-3 rounded-md bg-accent text-white text-sm font-medium hover:bg-accent/90 transition-colors"
+              className="flex items-center gap-1.5 h-9 px-3 rounded-md bg-accent text-text-inverse text-sm font-bold hover:bg-accent/90 transition-colors"
             >
               <Printer size={14} />
               Print Labels ({selected.size})
@@ -374,7 +374,7 @@ export default function MerchantInventoryPage() {
           <button
             onClick={handleBackfillImages}
             disabled={backfilling}
-            className="flex items-center gap-1.5 h-9 px-3 rounded-md border border-border-subtle text-sm text-text-secondary hover:bg-bg-hover transition-colors disabled:opacity-60"
+            className="flex items-center gap-1.5 h-9 px-3 rounded-md text-sm text-text-primary hover:bg-bg-hover transition-colors disabled:opacity-60 font-semibold bg-bg-surface border-[1.5px] border-border-strong"
             title="Fetch missing product images from Amazon's catalog"
           >
             {backfilling ? <Loader2 size={14} className="animate-spin" /> : <Download size={14} />}
@@ -384,7 +384,7 @@ export default function MerchantInventoryPage() {
           </button>
           <button
             onClick={() => { setSelected(new Set()); setShowPrintModal(true); }}
-            className="flex items-center gap-1.5 h-9 px-3 rounded-md border border-border-subtle text-sm text-text-secondary hover:bg-bg-hover transition-colors"
+            className="flex items-center gap-1.5 h-9 px-3 rounded-md text-sm text-text-primary hover:bg-bg-hover transition-colors font-semibold bg-bg-surface border-[1.5px] border-border-strong"
           >
             <Printer size={14} />
             Custom Label
@@ -396,7 +396,7 @@ export default function MerchantInventoryPage() {
               value={search}
               onChange={e => setSearch(e.target.value)}
               placeholder="Search title, ASIN, SKU, or bin…"
-              className="h-9 pl-9 pr-4 w-64 bg-bg-elevated border border-border-default rounded-md text-sm text-text-primary placeholder:text-text-tertiary focus:border-accent focus:outline-none"
+              className="h-9 pl-9 pr-4 w-64 bg-bg-elevated border border-border-default rounded-md text-sm text-text-primary placeholder:text-text-tertiary focus:border-link focus:outline-none"
             />
           </div>
         </div>
@@ -404,32 +404,31 @@ export default function MerchantInventoryPage() {
 
       {/* Filter / stat cards — clicking selects the filter; clicking again returns to Live */}
       {hasData && (
-        <div className="grid grid-cols-6 gap-2.5 mb-6">
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2.5 mb-6">
           {([
-            { id: null         as FilterView, label: 'All Listings',      count: listedRows.length, activeColor: 'border-text-tertiary/40 bg-bg-elevated shadow-sm',  numColor: 'text-text-primary'   },
-            { id: 'live'       as FilterView, label: 'Live on Amazon',    count: liveCount,          activeColor: 'border-green-500 bg-green-500/10 shadow-sm',        numColor: 'text-green-400'      },
-            { id: 'oos'        as FilterView, label: 'OOS',               count: oosCount,           activeColor: 'border-amber-500 bg-amber-500/10 shadow-sm',        numColor: 'text-amber-400'      },
-            { id: 'inactive'   as FilterView, label: 'Inactive',          count: inactiveCount,      activeColor: 'border-red-500 bg-red-500/10 shadow-sm',            numColor: 'text-red-400'        },
-            { id: 'local_only' as FilterView, label: 'Local Not Listed',  count: localOnlyCount,     activeColor: 'border-border-default bg-bg-elevated shadow-sm',    numColor: 'text-text-secondary' },
-            { id: 'ready'      as FilterView, label: 'Ready to Activate', count: readyCount,         activeColor: 'border-green-500 bg-green-500/10 shadow-sm',        numColor: 'text-green-400'      },
+            { id: null         as FilterView, label: 'All Listings',      count: listedRows.length, numColor: 'text-text-primary'   },
+            { id: 'live'       as FilterView, label: 'Live on Amazon',    count: liveCount,         numColor: 'text-positive'      },
+            { id: 'oos'        as FilterView, label: 'OOS',               count: oosCount,          numColor: 'text-warning'      },
+            { id: 'inactive'   as FilterView, label: 'Inactive',          count: inactiveCount,     numColor: 'text-negative'        },
+            { id: 'local_only' as FilterView, label: 'Local Not Listed',  count: localOnlyCount,    numColor: 'text-text-secondary' },
+            { id: 'ready'      as FilterView, label: 'Ready to Activate', count: readyCount,        numColor: 'text-positive'      },
           ] as const).map(card => {
             const isActive = filterView === card.id;
             return (
               <button
                 key={String(card.id)}
                 onClick={() => setFilter(card.id)}
-                className={`text-left p-3.5 rounded-lg transition-all ${
-                  isActive
-                    ? `border-2 ${card.activeColor}`
-                    : 'border border-border-subtle bg-bg-surface hover:border-border-default hover:bg-bg-hover'
+                aria-pressed={isActive}
+                className={`panel text-left px-3.5 py-3 transition-colors ${
+                  isActive ? 'bg-accent' : 'hover:bg-bg-hover'
                 }`}
               >
-                <div className="text-[10px] uppercase tracking-widest text-text-tertiary mb-1 truncate">{card.label}</div>
-                <div className={`text-2xl font-semibold font-mono ${isActive ? card.numColor : 'text-text-primary'}`}>
+                <div className={`text-[10px] label-caps mb-1 truncate ${isActive ? 'text-text-inverse/70' : 'text-text-tertiary'}`}>{card.label}</div>
+                <div className={`stat-num text-xl sm:text-2xl ${isActive ? 'text-text-inverse' : card.numColor}`}>
                   {lastSynced || card.id === 'local_only' || card.id === 'ready' || card.id === null ? card.count : '—'}
                 </div>
                 {isActive && (
-                  <div className="text-[10px] text-text-tertiary mt-1">active</div>
+                  <div className="text-[10px] text-text-inverse/70 mt-1">active</div>
                 )}
               </button>
             );
@@ -439,12 +438,12 @@ export default function MerchantInventoryPage() {
 
       {/* OOS restock banner */}
       {filterView === 'oos' && !loading && (
-        <div className="mb-4 flex items-start gap-2.5 px-3.5 py-2.5 bg-amber-500/5 border border-amber-500/20 rounded-lg text-xs text-text-secondary">
-          <RefreshCw size={13} className="text-amber-400 shrink-0 mt-0.5" />
+        <div className="mb-4 flex items-start gap-2.5 px-3.5 py-2.5 attn-banner text-xs text-text-secondary">
+          <RefreshCw size={13} className="text-warning shrink-0 mt-0.5" />
           <span>
             <span className="font-medium text-text-primary">Out of Stock on Amazon</span>{' '}
             — these listings are Active but Amazon quantity is 0.
-            Click <span className="font-medium text-amber-400">Restock</span> to enter received quantity, bin location, condition, and list price.
+            Click <span className="font-medium text-warning">Restock</span> to enter received quantity, bin location, condition, and list price.
             Once all fields are set, the row moves to <span className="font-medium text-text-primary">Ready to Activate</span>.
           </span>
         </div>
@@ -453,13 +452,13 @@ export default function MerchantInventoryPage() {
       {/* Activation workflow banner — shown only in Ready filter */}
       {filterView === 'ready' && !loading && (
         <div className="mb-4 flex items-start gap-2.5 px-3.5 py-2.5 bg-bg-elevated border border-border-subtle rounded-lg text-xs text-text-secondary">
-          <Download size={13} className="text-green-400 shrink-0 mt-0.5" />
+          <Download size={13} className="text-positive shrink-0 mt-0.5" />
           <span>
             <span className="font-medium text-text-primary">Ready to Activate</span>{' '}
             means received, inspected, binned, and priced locally —{' '}
             <span className="text-text-tertiary">Seller Central has not been updated yet.</span>{' '}
             Select rows and click{' '}
-            <span className="font-medium text-green-400">Export Activation CSV</span>{' '}
+            <span className="font-medium text-positive">Export Activation CSV</span>{' '}
             to generate a file you upload to Seller Central. The CSV sets{' '}
             quantity, price, handling time, and shipping template per row.
             Verify the shipping template name matches your Seller Central account before uploading.
@@ -469,16 +468,16 @@ export default function MerchantInventoryPage() {
 
       {/* Table */}
       {loading ? (
-        <div className="bg-bg-surface border border-border-subtle rounded-lg p-4">
+        <div className="panel p-4">
           {Array.from({ length: 6 }).map((_, i) => (
             <div key={i} className="skeleton h-12 w-full mb-1" />
           ))}
         </div>
       ) : (
-        <div className="bg-bg-surface border border-border-subtle rounded-lg overflow-x-auto">
+        <div className="panel overflow-x-auto">
           <table className="w-full">
             <thead>
-              <tr className="bg-bg-elevated border-b border-border-subtle">
+              <tr className="bg-bg-surface">
                 <th className="px-3 py-2.5 w-8">
                   <input
                     type="checkbox"
@@ -489,16 +488,16 @@ export default function MerchantInventoryPage() {
                   />
                 </th>
                 <th className="px-3 py-2.5 w-20" />
-                <th className="px-4 py-2.5 text-left text-[11px] font-medium tracking-widest uppercase text-text-tertiary">Product</th>
-                <th className="px-4 py-2.5 text-left text-[11px] font-medium tracking-widest uppercase text-text-tertiary w-24">Amazon</th>
-                <th className="px-4 py-2.5 text-left text-[11px] font-medium tracking-widest uppercase text-text-tertiary w-28">Receive</th>
-                <th className="px-4 py-2.5 text-left text-[11px] font-medium tracking-widest uppercase text-text-tertiary w-24">Bin</th>
-                <th className="px-4 py-2.5 text-left text-[11px] font-medium tracking-widest uppercase text-text-tertiary w-28">Condition</th>
-                <th className="px-4 py-2.5 text-right text-[11px] font-medium tracking-widest uppercase text-text-tertiary w-16">Amz Qty</th>
-                <th className="px-4 py-2.5 text-right text-[11px] font-medium tracking-widest uppercase text-text-tertiary w-16">Local</th>
-                <th className="px-4 py-2.5 text-right text-[11px] font-medium tracking-widest uppercase text-text-tertiary w-24">List</th>
-                <th className="px-4 py-2.5 text-right text-[11px] font-medium tracking-widest uppercase text-text-tertiary w-24">Cost</th>
-                <th className="px-4 py-2.5 text-right text-[11px] font-medium tracking-widest uppercase text-text-tertiary w-24">Action</th>
+                <th className="px-4 py-2.5 text-left text-[11px] label-caps text-text-tertiary">Product</th>
+                <th className="px-4 py-2.5 text-left text-[11px] label-caps text-text-tertiary w-24">Amazon</th>
+                <th className="px-4 py-2.5 text-left text-[11px] label-caps text-text-tertiary w-28">Receive</th>
+                <th className="px-4 py-2.5 text-left text-[11px] label-caps text-text-tertiary w-24">Bin</th>
+                <th className="px-4 py-2.5 text-left text-[11px] label-caps text-text-tertiary w-28">Condition</th>
+                <th className="px-4 py-2.5 text-right text-[11px] label-caps text-text-tertiary w-16">Amz Qty</th>
+                <th className="px-4 py-2.5 text-right text-[11px] label-caps text-text-tertiary w-16">Local</th>
+                <th className="px-4 py-2.5 text-right text-[11px] label-caps text-text-tertiary w-24">List</th>
+                <th className="px-4 py-2.5 text-right text-[11px] label-caps text-text-tertiary w-24">Cost</th>
+                <th className="px-4 py-2.5 text-right text-[11px] label-caps text-text-tertiary w-24">Action</th>
               </tr>
             </thead>
             <tbody>
@@ -537,7 +536,7 @@ export default function MerchantInventoryPage() {
                       key={row.row_key}
                       onClick={() => toggleRow(row.row_key)}
                       className={`border-b border-border-subtle/50 cursor-pointer transition-colors ${
-                        isSelected ? 'bg-accent/5 hover:bg-accent/10' : 'hover:bg-bg-hover'
+                        isSelected ? 'bg-accent/5 hover:bg-bg-hover' : 'hover:bg-bg-hover'
                       }`}
                     >
                       <td className="px-3 py-2" onClick={e => e.stopPropagation()}>
@@ -565,7 +564,7 @@ export default function MerchantInventoryPage() {
                           target="_blank"
                           rel="noopener noreferrer"
                           onClick={e => e.stopPropagation()}
-                          className="text-sm text-accent font-medium leading-snug line-clamp-2 hover:underline"
+                          className="text-sm text-link font-medium leading-snug line-clamp-2 hover:underline"
                           title={row.product_name || row.asin}
                         >
                           {row.product_name || row.asin}
@@ -588,28 +587,28 @@ export default function MerchantInventoryPage() {
                       </td>
                       <td className="px-4 py-2">
                         {row.bin_location
-                          ? <span className="inline-flex items-center px-2 py-0.5 rounded bg-accent/10 text-accent text-xs font-mono font-medium">{row.bin_location}</span>
+                          ? <span className="inline-flex items-center px-2 py-0.5 rounded bg-accent/10 text-text-primary text-xs font-mono font-medium">{row.bin_location}</span>
                           : <span className="text-text-tertiary text-xs">—</span>}
                       </td>
                       <td className="px-4 py-2 text-xs text-text-secondary">
                         {row.condition || <span className="text-text-tertiary">—</span>}
                       </td>
-                      <td className="px-4 py-2 text-right font-mono text-sm">
+                      <td className="px-4 py-2 text-right text-sm tabular-nums">
                         {row.amazon_qty != null
-                          ? <span className={row.amazon_qty === 0 ? 'text-amber-400' : 'text-text-primary font-medium'}>{row.amazon_qty}</span>
+                          ? <span className={row.amazon_qty === 0 ? 'text-warning' : 'text-text-primary font-medium'}>{row.amazon_qty}</span>
                           : <span className="text-text-tertiary">—</span>}
                       </td>
-                      <td className="px-4 py-2 text-right font-mono text-sm">
+                      <td className="px-4 py-2 text-right text-sm tabular-nums">
                         {row.quantity_remaining != null
                           ? <span className="text-text-secondary">{row.quantity_remaining}</span>
                           : <span className="text-text-tertiary">—</span>}
                       </td>
-                      <td className="px-4 py-2 text-right font-mono text-sm">
+                      <td className="px-4 py-2 text-right text-sm tabular-nums">
                         {listPrice != null
                           ? <span className="text-text-primary">{formatCurrency(listPrice)}</span>
                           : <span className="text-text-tertiary">—</span>}
                       </td>
-                      <td className="px-4 py-2 text-right font-mono text-sm">
+                      <td className="px-4 py-2 text-right text-sm tabular-nums">
                         {displayCost != null
                           ? <span className={`${row.buy_price == null ? 'text-text-tertiary/70' : 'text-text-secondary'}`} title={row.buy_price == null ? 'Estimated from MSKU' : undefined}>
                               {formatCurrency(displayCost)}
@@ -646,7 +645,7 @@ export default function MerchantInventoryPage() {
               {filterView && (
                 <button
                   onClick={() => setFilter(filterView)}
-                  className="text-accent hover:underline"
+                  className="text-link hover:underline"
                 >
                   Clear filter
                 </button>
@@ -677,7 +676,7 @@ export default function MerchantInventoryPage() {
 
       {lightbox && (
         <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4"
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4"
           onClick={() => setLightbox(null)}
         >
           <div
@@ -691,7 +690,7 @@ export default function MerchantInventoryPage() {
                   {lightbox.asin && <span>ASIN {lightbox.asin}</span>}
                   {lightbox.sku && (
                     sellerCentralSkuUrl(lightbox.sku)
-                      ? <a href={sellerCentralSkuUrl(lightbox.sku)!} target="_blank" rel="noopener noreferrer" className="text-accent hover:underline" title={`Open MSKU in Seller Central: ${lightbox.sku}`}>MSKU {lightbox.sku}</a>
+                      ? <a href={sellerCentralSkuUrl(lightbox.sku)!} target="_blank" rel="noopener noreferrer" className="text-link hover:underline" title={`Open MSKU in Seller Central: ${lightbox.sku}`}>MSKU {lightbox.sku}</a>
                       : <span>MSKU {lightbox.sku}</span>
                   )}
                 </div>

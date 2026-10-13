@@ -25,4 +25,15 @@ export async function register() {
     // read-only DB should still get a UI that can explain the problem.
     console.error('[instrumentation] database initialization failed:', err);
   }
+
+  // Start the scheduler (hourly syncs, nightly backup, log rotation) at boot.
+  // Previously it only started when a browser loaded the Sidebar, so after a
+  // launchd restart nothing ran until someone opened the app. startAutoSync is
+  // idempotent and the Sidebar's /api/sync/auto call still works as a backup.
+  try {
+    const { startAutoSync } = await import('./lib/sp-api/auto-sync');
+    startAutoSync();
+  } catch (err) {
+    console.error('[instrumentation] auto-sync start failed:', err);
+  }
 }

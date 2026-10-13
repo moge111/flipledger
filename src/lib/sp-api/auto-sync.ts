@@ -9,7 +9,10 @@ import { runWalmartSync, getWalmartSyncStatus } from '../walmart-api/sync';
 import { getWalmartCredentials } from '../walmart-api/auth';
 import { runEbaySync, getEbaySyncStatus } from '../ebay-api/sync';
 import { getEbayCredentials } from '../ebay-api/auth';
+import { syncEbayPayoutCosts } from '../ebay-api/payoutCosts';
+import { refreshBatchReceipts } from '../batch-results';
 import { syncFbaCustomerReturns } from './customerReturns';
+import { syncReplacementsReport } from './replacementsReport';
 import { syncFinancesV2024Transactions } from './financesV2024';
 import { syncSalesRanks } from './salesRank';
 import { syncReimbursementCandidates } from './reimbursementCandidates';
@@ -19,6 +22,7 @@ import { syncAmazonDisputeCandidates } from './amazonDisputeCandidates';
 import { syncWalmartDisputeCandidates } from '../walmart-api/disputeCandidates';
 import { syncRecoveryDiscrepancies } from '../recovery/discrepancies';
 import { reconcileStaleSendingBatches } from '../listing-reconcile';
+import { advancePendingSetups } from '../wfs-item-setup';
 import { generateRecurringExpenses } from '../recurring-expenses';
 import { recalculateFIFO } from '../fifo';
 import { createBackup } from '../backup';
@@ -55,6 +59,10 @@ const LOOKBACK_DAYS = 14; // Sync last 2 weeks each run
 // running hourly would block the auto-sync loop with no benefit.
 const CUSTOMER_RETURNS_INTERVAL_HOURS = 24;
 const CUSTOMER_RETURNS_LOOKBACK_DAYS = 90;
+const REPLACEMENTS_INTERVAL_HOURS = 24;
+const REPLACEMENTS_LOOKBACK_DAYS = 90;
+const EBAY_PAYOUT_INTERVAL_HOURS = 24;
+const EBAY_PAYOUT_LOOKBACK_DAYS = 120;
 
 // Sales rank sync — daily. Each run touches ~150-300 active ASINs and
 // takes 1-3 minutes (rate-limited by Catalog API). BSR doesn't change
@@ -199,6 +207,26 @@ async function autoSyncTickInner() {
     }
   }
 
+  // Amazon FBA Replacements report (daily) — the only source of WHY a
+  // replacement unit shipped. Rows appear a day or two after the replacement
+  // ships. Annotates existing orders only; never touches P&L tables.
+  const replacementsLastSync = getLastSyncTime('replacements_report_last_sync');
+  if (hoursSince(replacementsLastSync) >= REPLACEMENTS_INTERVAL_HOURS) {
+    const amazonCreds = getAmazonCredentials();
+    if (amazonCreds) {
+      log.info(`Starting FBA replacements report sync (last ${REPLACEMENTS_LOOKBACK_DAYS} days)`);
+      try {
+        const end = new Date().toISOString();
+        const start = new Date(Date.now() - REPLACEMENTS_LOOKBACK_DAYS * 86400000).toISOString();
+        const result = await syncReplacementsReport(amazonCreds, start, end);
+        setLastSyncTime('replacements_report_last_sync', new Date().toISOString());
+        log.info(`Replacements: ${result.reportRows} rows, ${result.updated} orders updated, ${result.unmatched} not in orders`);
+      } catch (err) {
+        log.error('Replacements report error:', err);
+      }
+    }
+  }
+
   // v2024 Finances transactions (daily) — refreshes deferral/maturity data
   // used by the Dashboard in-flight DDP cards. Writes only to
   // finances_transactions_v2; never touches P&L tables.
@@ -237,10 +265,11 @@ async function autoSyncTickInner() {
   try {
     const result = syncRecoveryDiscrepancies();
     setLastSyncTime('recovery_scan_last_sync', new Date().toISOString());
-    if (result.refundNoReturn.eligible > 0 || result.feeOvercharge.flagged > 0) {
+    if (result.refundNoReturn.eligible > 0 || result.feeOvercharge.flagged > 0 || result.replacementNoReturn.eligible > 0) {
       log.info(
         `[AutoSync] Recovery scan: ${result.refundNoReturn.eligible} refund-no-return eligible, ` +
-          `${result.feeOvercharge.flagged} fee overcharges flagged`
+          `${result.feeOvercharge.flagged} fee overcharges flagged, ` +
+          `${result.replacementNoReturn.eligible} replacements claimable`
       );
     }
   } catch (err) {
@@ -354,6 +383,18 @@ async function autoSyncTickInner() {
     }
   }
 
+  // eBay shipping labels + Promoted Listings / insertion fees from the
+  // Finances API (replaces the manual Transaction report CSV).
+  const ebayPayoutLastSync = getLastSyncTime('ebay_payout_costs_last_sync');
+  if (getEbayCredentials() && hoursSince(ebayPayoutLastSync) >= EBAY_PAYOUT_INTERVAL_HOURS) {
+    try {
+      await syncEbayPayoutCosts(EBAY_PAYOUT_LOOKBACK_DAYS);
+      setLastSyncTime('ebay_payout_costs_last_sync', new Date().toISOString());
+    } catch (err) {
+      log.error('eBay payout costs error:', err);
+    }
+  }
+
   // Finish listing batches stuck in 'sending'. The browser only polls
   // /status while the batch page is open — a closed tab used to leave
   // batches in 'sending' forever (observed: 3 MFN batches stuck 3 weeks).
@@ -366,6 +407,32 @@ async function autoSyncTickInner() {
     }
   } catch (err) {
     log.error('Sending-batch sweep error:', err);
+  }
+
+  // Walmart SKU setups started from WFS batches (offer → WFS switch). The batch
+  // page advances them while open; this keeps them moving when it isn't.
+  try {
+    const setups = await advancePendingSetups();
+    if (setups.changed > 0) log.info(`Walmart SKU setups: ${setups.checked} checked, ${setups.changed} advanced`);
+  } catch (err) {
+    log.error('Walmart SKU setup sweep error:', err);
+  }
+
+  // Received quantities for sent FBA batches (Batch Results page). Self-limits
+  // to batches not fully received and not checked in the last 20 hours.
+  {
+    const amazonCreds = getAmazonCredentials();
+    if (amazonCreds) {
+      const db = openDb();
+      try {
+        const r = await refreshBatchReceipts(db, amazonCreds);
+        if (r.checked) log.info(`Batch receipts: ${r.checked} batch(es) checked, ${r.errors} error(s)`);
+      } catch (err) {
+        log.error('Batch receipts error:', err);
+      } finally {
+        db.close();
+      }
+    }
   }
 
   // Generate any new recurring expenses

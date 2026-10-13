@@ -13,6 +13,7 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import { recalculateFIFO } from '@/lib/fifo';
+import { resolveSupplierId } from '@/lib/suppliers';
 import { openDb } from '@/lib/db-conn';
 
 const getDb = () => openDb();
@@ -103,12 +104,7 @@ export async function POST(request: NextRequest) {
     const buyPriceCents = Math.round(buyPrice * 100);
     const dateP = datePurchased || now;
 
-    let supplierId: number | null = null;
-    if (supplier && supplier.trim()) {
-      db.prepare('INSERT OR IGNORE INTO suppliers (name, created_at) VALUES (?, ?)').run(supplier.trim(), now);
-      const row = db.prepare('SELECT id FROM suppliers WHERE name = ?').get(supplier.trim()) as { id?: number } | undefined;
-      supplierId = row?.id ?? null;
-    }
+    const supplierId = resolveSupplierId(db, supplier, now);
 
     const result = db.prepare(`
       INSERT INTO inventory_ledger (asin, sku, buy_price, quantity, quantity_remaining, supplier_id, date_purchased, notes, created_at)
@@ -179,12 +175,7 @@ export async function PATCH(request: NextRequest) {
     }
     if (body.supplier !== undefined) {
       const now = new Date().toISOString();
-      let supplierId: number | null = null;
-      if (body.supplier && body.supplier.trim()) {
-        db.prepare('INSERT OR IGNORE INTO suppliers (name, created_at) VALUES (?, ?)').run(body.supplier.trim(), now);
-        const r = db.prepare('SELECT id FROM suppliers WHERE name = ?').get(body.supplier.trim()) as { id?: number } | undefined;
-        supplierId = r?.id ?? null;
-      }
+      const supplierId = resolveSupplierId(db, body.supplier, now);
       fields.push('supplier_id = ?');
       params.push(supplierId);
     }

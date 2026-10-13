@@ -33,19 +33,19 @@ export default function ReimbursementsPage() {
   const totals: any = data?.totals || null;
 
   const columns = useMemo<ColumnDef<ReimbRow, any>[]>(() => [
-    { id: 'date', header: 'Date', accessorKey: 'date', cell: ({ getValue }) => { const v = getValue() as string; return <span className="font-mono text-sm text-text-secondary whitespace-nowrap">{v ? formatDate(v) : '—'}</span>; }, size: 110 },
+    { id: 'date', header: 'Date', accessorKey: 'date', cell: ({ getValue }) => { const v = getValue() as string; return <span className="text-sm text-text-secondary whitespace-nowrap tabular-nums">{v ? formatDate(v) : '—'}</span>; }, size: 110 },
     {
       id: 'marketplace', header: '', accessorKey: 'marketplace',
       cell: ({ getValue }) => {
         const m = getValue() as string;
         return m === 'walmart'
-          ? <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded bg-blue-500/15 text-blue-400">WMT</span>
-          : <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded bg-amazon/15 text-amazon">AMZ</span>;
+          ? <span className="mkt mkt-walmart text-[10px]">WMT</span>
+          : <span className="mkt mkt-amazon text-[10px]">AMZ</span>;
       }, size: 45,
     },
     { id: 'reimbursementId', header: 'Reimb. ID', accessorKey: 'reimbursementId', cell: ({ getValue }) => {
       const id = getValue() as string;
-      return <span className="font-mono text-sm text-accent">{id}</span>;
+      return <span className="font-mono text-sm text-text-primary">{id}</span>;
     }, size: 120 },
     {
       id: 'product', header: 'Product', accessorFn: (row) => row.productName || row.asin,
@@ -54,14 +54,14 @@ export default function ReimbursementsPage() {
       ), size: 220,
     },
     { id: 'reason', header: 'Reason', accessorKey: 'reason', cell: ({ getValue }) => <span className="text-sm text-text-secondary">{getValue() as string}</span>, size: 180 },
-    { id: 'amount', header: 'Amount', accessorKey: 'amount', cell: ({ getValue }) => <span className="font-mono font-medium text-positive">{formatCurrency(getValue() as number)}</span>, size: 110 },
-    { id: 'quantity', header: 'Qty', accessorKey: 'quantity', cell: ({ getValue }) => <span className="font-mono">{getValue() as number}</span>, size: 60 },
+    { id: 'amount', header: 'Amount', accessorKey: 'amount', cell: ({ getValue }) => <span className="font-medium text-positive tabular-nums">{formatCurrency(getValue() as number)}</span>, size: 110 },
+    { id: 'quantity', header: 'Qty', accessorKey: 'quantity', cell: ({ getValue }) => <span className="tabular-nums">{getValue() as number}</span>, size: 60 },
     {
       id: 'status', header: 'Status', accessorKey: 'status',
       cell: ({ getValue }) => {
         const v = getValue() as string;
-        const styles = v === 'Paid' ? 'bg-positive-muted text-positive' : v === 'Approved' ? 'bg-accent-muted text-accent' : 'bg-warning-muted text-warning';
-        return <span className={`text-xs font-medium px-2 py-0.5 rounded ${styles}`}>{v}</span>;
+        const styles = v === 'Paid' ? 'tag-green' : v === 'Approved' ? 'tag-blue' : '';
+        return <span className={`tag ${styles}`}>{v}</span>;
       }, size: 90,
     },
   ], []);

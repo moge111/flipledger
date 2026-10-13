@@ -58,11 +58,10 @@ export function BackupSettings() {
   }
 
   return (
-    <div className="bg-bg-surface border border-border-subtle rounded-lg p-6 mb-6">
-      <h2 className="text-md font-medium text-text-primary mb-1 flex items-center gap-2">
-        <Shield size={16} className="text-accent" />
-        Backups
-      </h2>
+    <div className="panel mb-6">
+      <h2 className="panel-bar"><span className="flex items-center gap-2"><Shield size={16} className="text-accent" />Backups
+      </span></h2>
+<div className="p-6">
       <p className="text-xs text-text-tertiary mb-4">
         FlipLedger&apos;s entire books live in one local SQLite file. A consistent snapshot is
         taken automatically once a day; you can also take one anytime. To survive a dead laptop,
@@ -72,7 +71,7 @@ export function BackupSettings() {
       <div className="flex items-center justify-between mb-4">
         <div>
           <div className="text-sm text-text-secondary">Last backup</div>
-          <div className="text-sm font-mono text-text-tertiary mt-0.5">
+          <div className="text-sm text-text-tertiary mt-0.5 tabular-nums">
             {status?.lastBackupAt
               ? formatRelativeTime(status.lastBackupAt)
               : 'Never — take one now'}
@@ -81,7 +80,7 @@ export function BackupSettings() {
         <button
           onClick={handleBackupNow}
           disabled={backingUp}
-          className="flex items-center gap-2 h-9 px-4 bg-accent text-white rounded-md text-sm font-medium hover:bg-accent-hover transition-colors disabled:opacity-50"
+          className="flex items-center gap-2 h-9 px-4 bg-accent text-text-inverse rounded-md text-sm font-bold hover:bg-accent-hover transition-colors disabled:opacity-50"
         >
           <HardDrive size={14} className={backingUp ? 'animate-pulse' : ''} />
           {backingUp ? 'Backing up...' : 'Backup Now'}
@@ -89,7 +88,7 @@ export function BackupSettings() {
       </div>
 
       <div className="mb-4">
-        <label className="text-xs font-medium tracking-wide uppercase text-text-tertiary">
+        <label className="text-xs label-caps text-text-tertiary">
           Backup folder
         </label>
         <div className="flex items-center gap-2 mt-1">
@@ -103,7 +102,7 @@ export function BackupSettings() {
           <button
             onClick={handleSaveDir}
             disabled={savingDir}
-            className="flex items-center gap-2 h-9 px-4 bg-bg-elevated border border-border-default rounded-md text-sm text-text-primary hover:bg-bg-hover transition-colors disabled:opacity-50"
+            className="flex items-center gap-2 h-9 px-4 bg-bg-surface border-[1.5px] border-border-strong rounded-md text-sm text-text-primary hover:bg-bg-hover transition-colors disabled:opacity-50"
           >
             {dirSaved ? <CheckCircle size={14} className="text-positive" /> : <Save size={14} />}
             {dirSaved ? 'Saved' : savingDir ? 'Saving...' : 'Save'}
@@ -112,12 +111,12 @@ export function BackupSettings() {
       </div>
 
       {error && (
-        <div className="mb-4 p-3 bg-negative-muted rounded-md text-xs text-negative">{error}</div>
+        <div className="mb-4 p-3 rounded-sm text-xs text-negative border-[1.2px] border-current">{error}</div>
       )}
 
       {status && status.backups.length > 0 && (
         <div>
-          <div className="text-xs font-medium tracking-wide uppercase text-text-tertiary mb-2">
+          <div className="text-xs label-caps text-text-tertiary mb-2">
             {status.count} snapshot{status.count > 1 ? 's' : ''} · {formatBytes(status.totalSizeBytes)} total
           </div>
           <div className="max-h-48 overflow-y-auto space-y-1">
@@ -126,11 +125,11 @@ export function BackupSettings() {
                 key={b.name}
                 className="flex items-center justify-between py-2 px-3 bg-bg-root rounded-md"
               >
-                <span className="text-sm font-mono text-text-secondary">
+                <span className="text-sm text-text-secondary tabular-nums">
                   {formatRelativeTime(b.createdAt)}
                 </span>
                 <div className="flex items-center gap-4">
-                  <span className="text-xs font-mono text-text-tertiary">{formatBytes(b.sizeBytes)}</span>
+                  <span className="text-xs text-text-tertiary tabular-nums">{formatBytes(b.sizeBytes)}</span>
                   <span className="text-xs font-mono text-text-tertiary truncate max-w-[180px]">
                     {b.name}
                   </span>
@@ -141,5 +140,6 @@ export function BackupSettings() {
         </div>
       )}
     </div>
+</div>
   );
 }

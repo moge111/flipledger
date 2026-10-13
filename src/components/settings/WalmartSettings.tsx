@@ -78,11 +78,12 @@ export function WalmartSettings() {
   }
 
   return (
-    <div className="bg-bg-surface border border-border-subtle rounded-lg p-6 mb-6">
-      <h2 className="text-md font-medium text-text-primary mb-4">Walmart Marketplace</h2>
+    <div className="panel mb-6">
+      <h2 className="panel-bar"><span className="flex items-center gap-2">Walmart Marketplace</span></h2>
+<div className="p-6">
       <div className="space-y-4">
         <div>
-          <label className="block text-xs font-medium tracking-wide uppercase text-text-tertiary mb-1.5">
+          <label className="block text-xs label-caps text-text-tertiary mb-1.5">
             Client ID
           </label>
           <input
@@ -90,11 +91,11 @@ export function WalmartSettings() {
             value={clientId}
             onChange={e => setClientId(e.target.value)}
             placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
-            className="w-full h-9 px-3 bg-bg-input border border-border-default rounded-md text-sm text-text-primary placeholder-text-tertiary focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent/25"
+            className="w-full h-9 px-3 bg-bg-input border border-border-default rounded-md text-sm text-text-primary placeholder-text-tertiary focus:border-link focus:outline-none focus:ring-[3px] focus:ring-link-muted"
           />
         </div>
         <div>
-          <label className="block text-xs font-medium tracking-wide uppercase text-text-tertiary mb-1.5">
+          <label className="block text-xs label-caps text-text-tertiary mb-1.5">
             Client Secret
           </label>
           <input
@@ -102,19 +103,19 @@ export function WalmartSettings() {
             value={clientSecret}
             onChange={e => setClientSecret(e.target.value)}
             placeholder="Your Walmart API client secret"
-            className="w-full h-9 px-3 bg-bg-input border border-border-default rounded-md text-sm text-text-primary placeholder-text-tertiary focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent/25"
+            className="w-full h-9 px-3 bg-bg-input border border-border-default rounded-md text-sm text-text-primary placeholder-text-tertiary focus:border-link focus:outline-none focus:ring-[3px] focus:ring-link-muted"
           />
         </div>
       </div>
 
       <div className="flex items-center gap-3 mt-5">
         <button onClick={handleSave} disabled={saving}
-          className="flex items-center gap-2 h-9 px-4 bg-accent text-white rounded-md text-sm font-medium hover:bg-accent-hover transition-colors disabled:opacity-50">
+          className="flex items-center gap-2 h-9 px-4 bg-accent text-text-inverse rounded-md text-sm font-bold hover:bg-accent-hover transition-colors disabled:opacity-50">
           <Save size={14} />
           {saving ? 'Saving...' : 'Save'}
         </button>
         <button onClick={handleSync} disabled={syncing || !clientId}
-          className="flex items-center gap-2 h-9 px-4 bg-bg-elevated border border-border-default text-text-primary rounded-md text-sm font-medium hover:bg-bg-hover transition-colors disabled:opacity-50">
+          className="flex items-center gap-2 h-9 px-4 bg-bg-surface border-[1.5px] border-border-strong text-text-primary rounded-md text-sm font-semibold hover:bg-bg-hover transition-colors disabled:opacity-50">
           <RefreshCw size={14} className={syncing ? 'animate-spin' : ''} />
           {syncing ? 'Syncing...' : 'Sync Walmart'}
         </button>
@@ -134,11 +135,12 @@ export function WalmartSettings() {
           {syncResult.results?.map((r: any, i: number) => (
             <div key={i} className="flex items-center justify-between py-1.5 px-3 bg-bg-root rounded-md text-xs">
               <span className="text-text-primary">{r.syncType.replace('walmart_', '')}</span>
-              <span className="font-mono text-text-secondary">{r.recordsFetched} records ({(r.duration/1000).toFixed(1)}s)</span>
+              <span className="text-text-secondary tabular-nums">{r.recordsFetched} records ({(r.duration/1000).toFixed(1)}s)</span>
             </div>
           ))}
         </div>
       )}
     </div>
+</div>
   );
 }

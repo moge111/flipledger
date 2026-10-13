@@ -2,7 +2,7 @@
 
 import { useEffect, useState, useRef } from 'react';
 import { formatCurrency } from '@/lib/formatters';
-import {Plus, Trash2, ExternalLink, CheckCircle, Loader2, Box as BoxIcon, MapPin, Sparkles } from 'lucide-react';
+import {Plus, Copy, Trash2, ExternalLink, CheckCircle, Loader2, Box as BoxIcon, MapPin, Sparkles } from 'lucide-react';
 import { CarrierBookingPanel } from '@/components/listing/CarrierBookingPanel';
 
 import { BatchItem, Box, BoxingWorkflowProps, PackGroup } from '@/components/listing/types';
@@ -19,6 +19,7 @@ export function BoxingWorkflow({
   confirmingPlacementId,
   onAddBox,
   onRemoveBox,
+  onDuplicateBox,
   onUpdateBoxField,
   onSetBoxItemQty,
   onSaveBoxes,
@@ -41,11 +42,16 @@ export function BoxingWorkflow({
   // generation op on the same plan, and concurrent ops can conflict.
   const [shipEstimates, setShipEstimates] = useState<Record<string, { loading: boolean; totalCents: number | null }>>({});
 
+  // Option IDs already requested. Kept in a ref, not tied to effect cleanup:
+  // the parent loads placement options twice on mount, and cancelling the
+  // first fetch while marking its options "loading" left the spinners stuck.
+  const requestedEstimates = useRef<Set<string>>(new Set());
+
   useEffect(() => {
     if (batch.status !== 'placement' || placementOptions.length === 0) return;
-    const pending = placementOptions.filter((o) => shipEstimates[o.placementOptionId] === undefined);
+    const pending = placementOptions.filter((o) => !requestedEstimates.current.has(o.placementOptionId));
     if (pending.length === 0) return;
-    let cancelled = false;
+    for (const o of pending) requestedEstimates.current.add(o.placementOptionId);
     setShipEstimates((prev) => {
       const next = { ...prev };
       for (const o of pending) next[o.placementOptionId] = { loading: true, totalCents: null };
@@ -53,7 +59,6 @@ export function BoxingWorkflow({
     });
     (async () => {
       for (const opt of pending) {
-        if (cancelled) return;
         let totalCents: number | null = null;
         try {
           const res = await fetch(
@@ -64,11 +69,9 @@ export function BoxingWorkflow({
             totalCents = data.partneredTotalCents ?? null;
           }
         } catch { /* leave null — card shows an em dash */ }
-        if (cancelled) return;
         setShipEstimates((prev) => ({ ...prev, [opt.placementOptionId]: { loading: false, totalCents } }));
       }
     })();
-    return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [batch.status, placementOptions]);
 
@@ -100,29 +103,52 @@ export function BoxingWorkflow({
     return () => { cancelled = true; };
   }, [batch.status, batch.id, shipments.length]);
 
-  async function handlePrintLabels(shipmentId: string, type: 'fnsku' | 'box' | 'shipping') {
-    const key = `${type}-${shipmentId}`;
-    setPrintingLabel(key);
-    const labelName = type === 'fnsku' ? 'FNSKU' : type === 'box' ? 'Box ID' : 'Shipping';
+  const labelNames = { box: 'Box ID', shipping: 'Shipping' } as const;
+
+  async function sendLabelsToPrinter(shipmentId: string, type: 'box' | 'shipping') {
     try {
       const res = await fetch(
         `/api/list/batches/${batch.id}/labels?type=${type}&shipmentId=${encodeURIComponent(shipmentId)}&action=print&_=${Date.now()}`,
         { cache: 'no-store' }
       );
-      const data = await res.json();
-      if (data.success) {
-        alert(`✓ Printed ${labelName} labels for ${shipmentId}\nPrinter: ${data.printer}${data.jobId ? ' (job ' + data.jobId + ')' : ''}`);
-      } else {
-        const hint = data.hint ? `\n\n${data.hint}` : '';
-        alert(`Print failed: ${data.error}${hint}\n\nTry "Download PDF" instead and print manually.`);
-      }
+      return await res.json();
     } catch (err) {
-      alert(`Print error: ${err}`);
+      return { success: false, error: String(err) };
+    }
+  }
+
+  async function handlePrintLabels(shipmentId: string, type: 'box' | 'shipping') {
+    setPrintingLabel(`${type}-${shipmentId}`);
+    const data = await sendLabelsToPrinter(shipmentId, type);
+    if (data.success) {
+      alert(`✓ Printed ${labelNames[type]} labels for ${shipmentId}\nPrinter: ${data.printer}${data.jobId ? ' (job ' + data.jobId + ')' : ''}`);
+    } else {
+      const hint = data.hint ? `\n\n${data.hint}` : '';
+      alert(`Print failed: ${data.error}${hint}\n\nTry "Download PDF" instead and print manually.`);
     }
     setPrintingLabel(null);
   }
 
-  function handleDownloadLabels(shipmentId: string, type: 'fnsku' | 'box' | 'shipping') {
+  // One shipment at a time so the printer jobs come out in shipment order.
+  // Keeps going past a failure and reports every shipment at the end.
+  async function handlePrintAllLabels(type: 'box' | 'shipping') {
+    setPrintingLabel(`${type}-all`);
+    const failures: string[] = [];
+    for (const s of shipments) {
+      setPrintingLabel(`${type}-${s.shipmentId}`);
+      const data = await sendLabelsToPrinter(s.shipmentId, type);
+      if (!data.success) failures.push(`${s.shipmentId}: ${data.error}`);
+    }
+    setPrintingLabel(null);
+    const printed = shipments.length - failures.length;
+    if (failures.length === 0) {
+      alert(`✓ Printed ${labelNames[type]} labels for all ${printed} shipments`);
+    } else {
+      alert(`Printed ${printed} of ${shipments.length} shipments. Failed:\n\n${failures.join('\n')}\n\nUse that shipment's own Print or PDF button to retry.`);
+    }
+  }
+
+  function handleDownloadLabels(shipmentId: string, type: 'box' | 'shipping') {
     // Use a simple link click — the browser handles the PDF download via Content-Disposition
     const url = `/api/list/batches/${batch.id}/labels?type=${type}&shipmentId=${encodeURIComponent(shipmentId)}&action=download`;
     window.open(url, '_blank');
@@ -207,13 +233,13 @@ export function BoxingWorkflow({
   const packingLocked = batch.packingStatus === 'SUCCESS';
 
   return (
-    <div className="bg-bg-surface border border-accent/20 rounded-lg mb-5 overflow-hidden">
+    <div className="panel mb-5 overflow-hidden">
       {/* Workflow header + step indicator */}
-      <div className="px-4 py-3 border-b border-border-subtle bg-accent/5">
+      <div className="px-4 py-3 border-b-[1.5px] border-border-strong">
         <div className="flex items-center justify-between mb-2">
           <div className="flex items-center gap-2">
             <Sparkles size={14} className="text-accent" />
-            <h3 className="text-sm font-medium text-text-primary">Ship to Amazon</h3>
+            <h3 className="label-caps text-[12px] text-text-primary">Ship to Amazon</h3>
           </div>
           <div className="flex items-center gap-2">
             {boxes.length > 0 && (
@@ -239,13 +265,13 @@ export function BoxingWorkflow({
                     setTimeout(() => setCopyBoxesFlash(false), 2000);
                   });
                 }}
-                className="text-[11px] text-text-tertiary hover:text-accent transition-colors"
+                className="text-[11px] text-text-tertiary hover:text-text-primary transition-colors"
                 title="Copy a paste-ready summary of your boxes for Seller Central re-entry"
               >
                 {copyBoxesFlash ? '✓ Copied' : '📋 Copy layout'}
               </button>
             )}
-            <div className="text-xs text-text-tertiary font-mono">
+            <div className="text-xs text-text-tertiary tabular-nums">
               {boxes.length} box{boxes.length === 1 ? '' : 'es'} · {totalBoxWeight.toFixed(1)} lb total
             </div>
           </div>
@@ -285,13 +311,13 @@ export function BoxingWorkflow({
             return (
               <div
                 key={section.group?.packingGroupId || 'single'}
-                className={isMultiGroup ? 'border border-accent/20 rounded-lg overflow-hidden' : ''}
+                className={isMultiGroup ? 'border-[1.5px] border-border-strong rounded-lg overflow-hidden' : ''}
               >
                 {/* Group header (only shown for multi-group) */}
                 {isMultiGroup && section.group && (
-                  <div className="px-3 py-2 bg-accent/10 border-b border-accent/20 flex items-center justify-between">
+                  <div className="panel-bar">
                     <div className="flex items-center gap-2">
-                      <span className="inline-flex items-center justify-center w-5 h-5 rounded-full bg-accent text-white text-[10px] font-semibold">
+                      <span className="inline-flex items-center justify-center w-5 h-5 rounded-full bg-accent text-text-inverse text-[10px] font-semibold">
                         {sectionIdx + 1}
                       </span>
                       <span className="text-xs font-medium text-text-primary">Pack Group {sectionIdx + 1}</span>
@@ -318,6 +344,15 @@ export function BoxingWorkflow({
                           <BoxIcon size={14} className="text-text-tertiary" />
                           <span className="text-xs font-medium text-text-primary">Box {boxIdxInSection + 1}</span>
                           <span className="text-[11px] text-text-tertiary ml-auto">{boxUnits} unit{boxUnits === 1 ? '' : 's'}</span>
+                          {!packingLocked && (
+                            <button
+                              onClick={() => onDuplicateBox(idx)}
+                              className="inline-flex items-center gap-1 px-1.5 py-1 text-[11px] text-text-tertiary hover:text-text-primary hover:bg-bg-hover rounded transition-colors"
+                              title="Add another box with the same size, weight and contents (capped at what's still unassigned)"
+                            >
+                              <Copy size={12} /> Duplicate
+                            </button>
+                          )}
                           {!packingLocked && section.boxIndices.length > 1 && (
                             <button
                               onClick={() => onRemoveBox(idx)}
@@ -335,7 +370,7 @@ export function BoxingWorkflow({
                           <DimensionInput label="Weight (lb)" value={box.weightLb} onChange={(v) => onUpdateBoxField(idx, 'weightLb', v)} disabled={packingLocked} />
                         </div>
                         <div className="px-3 pb-3">
-                          <div className="text-[10px] uppercase tracking-widest text-text-tertiary mb-1.5">Contents</div>
+                          <div className="text-[10px] label-caps text-text-tertiary mb-1.5">Contents</div>
                           {boxItemsInThisBox.length === 0 ? (
                             <div className="text-[11px] text-text-tertiary italic py-1">No items assigned yet</div>
                           ) : (
@@ -349,7 +384,7 @@ export function BoxingWorkflow({
                                     </span>
                                     <span className="text-text-tertiary font-mono">{batchItem.sku}</span>
                                     {packingLocked ? (
-                                      <span className="text-text-secondary font-mono w-10 text-right">× {quantity}</span>
+                                      <span className="text-text-secondary w-10 text-right tabular-nums">× {quantity}</span>
                                     ) : (
                                       <input
                                         autoComplete="off"
@@ -358,7 +393,7 @@ export function BoxingWorkflow({
                                         max={batchItem.quantity}
                                         value={quantity}
                                         onChange={(e) => onSetBoxItemQty(idx, batchItem.id, parseInt(e.target.value) || 0)}
-                                        className="w-12 h-6 px-1 text-right bg-bg-surface border border-border-default rounded text-[11px] font-mono focus:outline-none focus:border-accent"
+                                        className="w-12 h-6 px-1 text-right bg-bg-surface border border-border-default rounded text-[11px] focus:outline-none focus:border-link tabular-nums"
                                       />
                                     )}
                                   </div>
@@ -373,8 +408,8 @@ export function BoxingWorkflow({
 
                   {/* Unallocated items in this group */}
                   {!packingLocked && section.unallocatedInGroup.length > 0 && (
-                    <div className="border border-amber-500/30 bg-amber-500/5 rounded p-3">
-                      <div className="text-[11px] text-amber-400 mb-1.5 font-medium uppercase tracking-widest">
+                    <div className="attn-banner p-3">
+                      <div className="text-[11px] text-warning mb-1.5 label-caps">
                         Unassigned items {isMultiGroup ? `(in this group)` : ''}
                       </div>
                       <div className="space-y-1">
@@ -400,7 +435,7 @@ export function BoxingWorkflow({
                   {!packingLocked && (
                     <button
                       onClick={() => onAddBox(section.group?.packingGroupId)}
-                      className="h-8 px-3 bg-bg-elevated border border-border-default rounded text-xs text-text-secondary hover:text-text-primary hover:bg-bg-hover transition-colors flex items-center gap-1.5"
+                      className="h-8 px-3 bg-bg-surface border-[1.5px] border-border-strong rounded text-xs text-text-secondary hover:text-text-primary hover:bg-bg-hover transition-colors flex items-center gap-1.5"
                     >
                       <Plus size={12} /> Add box {isMultiGroup ? `to group ${sectionIdx + 1}` : ''}
                     </button>
@@ -419,7 +454,7 @@ export function BoxingWorkflow({
               <button
                 onClick={onSaveBoxes}
                 disabled={savingBoxes || packing || boxes.length === 0}
-                className="h-9 px-3 bg-bg-elevated border border-border-default rounded text-xs text-text-secondary hover:text-text-primary hover:bg-bg-hover transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                className="h-9 px-3 bg-bg-surface border-[1.5px] border-border-strong rounded text-xs text-text-secondary hover:text-text-primary hover:bg-bg-hover transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                 title="Save boxes to FlipLedger without pushing to Amazon (partial progress OK)"
               >
                 {savingBoxes ? 'Saving…' : 'Save draft'}
@@ -427,7 +462,7 @@ export function BoxingWorkflow({
               <button
                 onClick={onConfirmPacking}
                 disabled={packing || !fullyAllocated || boxes.length === 0}
-                className="h-9 px-4 bg-accent text-white rounded text-sm font-medium hover:bg-accent/90 disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex items-center gap-1.5"
+                className="h-9 px-4 bg-accent text-text-inverse rounded text-sm font-bold hover:bg-accent/90 disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex items-center gap-1.5"
               >
                 {packing ? <Loader2 size={12} className="animate-spin" /> : <BoxIcon size={12} />}
                 {packing ? 'Confirming with Amazon…' : 'Confirm packing'}
@@ -436,13 +471,13 @@ export function BoxingWorkflow({
           )}
 
           {!fullyAllocated && !packingLocked && totalUnallocated > 0 && (
-            <p className="text-[11px] text-amber-400">
+            <p className="text-[11px] text-warning">
               All items must be fully assigned to boxes before you can confirm packing.
             </p>
           )}
 
           {batch.packingError && (
-            <div className="text-[11px] text-negative bg-negative/5 border border-negative/30 rounded p-2 font-mono">
+            <div className="text-[11px] text-negative rounded-sm p-2 font-mono border-[1.2px] border-current">
               Packing error: {batch.packingError}
             </div>
           )}
@@ -466,7 +501,7 @@ export function BoxingWorkflow({
             (!batch.placementStatus || batch.placementStatus === 'FAILED') && (
             <button
               onClick={onGeneratePlacement}
-              className="h-9 px-4 bg-accent text-white rounded text-sm font-medium hover:bg-accent/90 transition-colors flex items-center gap-1.5"
+              className="h-9 px-4 bg-accent text-text-inverse rounded text-sm font-bold hover:bg-accent/90 transition-colors flex items-center gap-1.5"
             >
               <MapPin size={12} />
               {batch.placementStatus === 'FAILED' ? 'Retry placement options' : 'Generate placement options'}
@@ -500,21 +535,21 @@ export function BoxingWorkflow({
                     <div className="flex items-center justify-between mb-2">
                       <span className="text-xs font-medium text-text-primary">{label}</span>
                       {isConfirmed && (
-                        <span className="text-[10px] text-positive bg-positive/10 px-1.5 py-0.5 rounded">CONFIRMED</span>
+                        <span className="tag text-positive">CONFIRMED</span>
                       )}
                     </div>
-                    <div className="text-2xl font-semibold text-text-primary mb-1">
+                    <div className="stat-num text-xl sm:text-2xl text-text-primary mb-1">
                       {totalKnown ? formatCurrency(feeCents + (est.totalCents as number)) : formatCurrency(feeCents)}
                       {totalKnown && <span className="text-[11px] font-normal text-text-tertiary ml-1.5">total</span>}
                     </div>
                     <div className="space-y-0.5 mb-2 text-[11px]">
                       <div className="flex justify-between text-text-secondary">
                         <span>Placement fee</span>
-                        <span className="font-mono">{formatCurrency(feeCents)}</span>
+                        <span className="tabular-nums">{formatCurrency(feeCents)}</span>
                       </div>
                       <div className="flex justify-between text-text-secondary">
                         <span>Shipping (Partnered UPS)</span>
-                        <span className="font-mono">
+                        <span className="tabular-nums">
                           {est?.loading ? (
                             <Loader2 size={10} className="animate-spin inline" />
                           ) : est?.totalCents !== null && est?.totalCents !== undefined ? (
@@ -533,7 +568,7 @@ export function BoxingWorkflow({
                       <button
                         onClick={() => onConfirmPlacement(opt.placementOptionId)}
                         disabled={!!confirmingPlacementId}
-                        className="w-full h-8 px-3 bg-accent text-white rounded text-xs font-medium hover:bg-accent/90 disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex items-center justify-center gap-1.5"
+                        className="w-full h-8 px-3 bg-accent text-text-inverse rounded text-xs font-bold hover:bg-accent/90 disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex items-center justify-center gap-1.5"
                       >
                         {isConfirming ? <Loader2 size={10} className="animate-spin" /> : null}
                         {isConfirming ? 'Confirming…' : 'Choose this'}
@@ -546,14 +581,14 @@ export function BoxingWorkflow({
           )}
 
           {batch.placementError && (
-            <div className="text-[11px] text-negative bg-negative/5 border border-negative/30 rounded p-2 font-mono">
+            <div className="text-[11px] text-negative rounded-sm p-2 font-mono border-[1.2px] border-current">
               Placement error: {batch.placementError}
             </div>
           )}
 
           {isShippingPhase && (
             <>
-              <div className="border border-positive/30 bg-positive/5 rounded p-3">
+              <div className="flash border-l-positive p-3">
                 <div className="flex items-center gap-2 mb-2">
                   <CheckCircle size={14} className="text-positive" />
                   <span className="text-xs font-medium text-positive">
@@ -564,26 +599,26 @@ export function BoxingWorkflow({
                 <p className="text-[11px] text-text-tertiary">
                   {batch.transportationStatus === 'CONFIRMED'
                     ? (batch.transportationCarrier || '').toLowerCase().includes('ups')
-                      ? <>Carrier booked: <span className="font-medium text-text-secondary">{batch.transportationCarrier}</span> ({batch.transportationShippingMode}). Print FNSKU labels (one per unit, over the original UPC), then shipping labels — Amazon returns the FBA box ID and the UPS label together, one per page.</>
-                      : <>Carrier booked: <span className="font-medium text-text-secondary">{batch.transportationCarrier}</span> ({batch.transportationShippingMode}). Print FNSKU labels (one per unit) and FBA box ID labels below, then generate the carrier label with your own carrier&apos;s tools.</>
-                    : <>Print FNSKU labels (one per unit, applied over original UPC) and box ID labels (one per box, taped to outside) for each shipment below. Choose a carrier in the next section to commit the shipment for transit.</>
+                      ? <>Carrier booked: <span className="font-medium text-text-secondary">{batch.transportationCarrier}</span> ({batch.transportationShippingMode}). Print the shipping labels — Amazon returns the FBA box ID and the UPS label together, one per box. FNSKU stickers are printed from the batch header while scanning.</>
+                      : <>Carrier booked: <span className="font-medium text-text-secondary">{batch.transportationCarrier}</span> ({batch.transportationShippingMode}). Print the FBA box ID labels below, then generate the carrier label with your own carrier&apos;s tools. FNSKU stickers are printed from the batch header while scanning.</>
+                    : <>Print box ID labels (one per box, taped to outside) for each shipment below. Choose a carrier in the next section to commit the shipment for transit.</>
                   }
                 </p>
                 {(batch.placementFeeCents != null || batch.transportationCostCents != null) && (
                   <div className="flex gap-4 mt-2 text-[11px]">
                     {batch.placementFeeCents != null && (
                       <span className="text-text-secondary">
-                        Placement fee: <span className="font-mono font-medium">{formatCurrency(batch.placementFeeCents)}</span>
+                        Placement fee: <span className="font-medium tabular-nums">{formatCurrency(batch.placementFeeCents)}</span>
                       </span>
                     )}
                     {batch.transportationCostCents != null && (
                       <span className="text-text-secondary">
-                        Shipping: <span className="font-mono font-medium">{formatCurrency(batch.transportationCostCents)}</span>
+                        Shipping: <span className="font-medium tabular-nums">{formatCurrency(batch.transportationCostCents)}</span>
                       </span>
                     )}
                     {batch.placementFeeCents != null && batch.transportationCostCents != null && (
                       <span className="text-text-primary font-medium">
-                        Total inbound cost: <span className="font-mono">{formatCurrency(batch.placementFeeCents + batch.transportationCostCents)}</span>
+                        Total inbound cost: <span className="tabular-nums">{formatCurrency(batch.placementFeeCents + batch.transportationCostCents)}</span>
                       </span>
                     )}
                   </div>
@@ -600,6 +635,28 @@ export function BoxingWorkflow({
                 <div className="text-[11px] text-text-tertiary italic">Loading shipments…</div>
               ) : (
                 <div className="space-y-2">
+                  {shipments.length > 1 && (() => {
+                    const partnered =
+                      batch.transportationStatus === 'CONFIRMED' &&
+                      (batch.transportationCarrier || '').toLowerCase().includes('ups');
+                    const cartonType: 'box' | 'shipping' = partnered ? 'shipping' : 'box';
+                    const busy = printingLabel !== null;
+                    const allBusy = (type: string) => busy && printingLabel !== null && printingLabel.startsWith(`${type}-`);
+                    return (
+                      <div className="flex flex-wrap items-center gap-1.5 border border-border-subtle rounded-lg bg-bg-elevated p-3">
+                        <span className="text-[11px] label-caps text-text-tertiary mr-1">All {shipments.length} shipments</span>
+                        <button
+                          onClick={() => handlePrintAllLabels(cartonType)}
+                          disabled={busy}
+                          className="h-7 px-2.5 bg-accent text-text-inverse rounded text-[11px] font-bold hover:bg-accent/90 disabled:opacity-50 transition-colors flex items-center gap-1"
+                          title="Send every shipment's carton labels to the Rollo, one shipment after another"
+                        >
+                          {allBusy(cartonType) ? <Loader2 size={10} className="animate-spin" /> : null}
+                          {partnered ? 'Print all shipping labels' : 'Print all box labels'}
+                        </button>
+                      </div>
+                    );
+                  })()}
                   {shipments.map((s) => {
                     const dest = s.destination;
                     const destLabel = dest?.city
@@ -626,39 +683,21 @@ export function BoxingWorkflow({
                               {s.boxCount != null && <> · {s.boxCount} box{s.boxCount === 1 ? '' : 'es'}</>}
                             </div>
                           </div>
-                          <span className="text-[10px] text-text-tertiary uppercase tracking-wider px-1.5 py-0.5 bg-bg-surface rounded">
+                          <span className="text-[10px] text-text-tertiary label-caps px-1.5 py-0.5 bg-bg-surface rounded">
                             {s.status}
                           </span>
                         </div>
 
                         {/* Print actions */}
                         <div className="flex flex-wrap items-center gap-1.5 pt-2 border-t border-border-subtle">
-                          {/* FNSKU labels */}
-                          <button
-                            onClick={() => handlePrintLabels(s.shipmentId, 'fnsku')}
-                            disabled={printingLabel === `fnsku-${s.shipmentId}`}
-                            className="h-7 px-2.5 bg-accent text-white rounded text-[11px] font-medium hover:bg-accent/90 disabled:opacity-50 transition-colors flex items-center gap-1"
-                            title="Print FNSKU per-unit labels to Rollo"
-                          >
-                            {printingLabel === `fnsku-${s.shipmentId}` ? <Loader2 size={10} className="animate-spin" /> : null}
-                            Print FNSKU labels
-                          </button>
-                          <button
-                            onClick={() => handleDownloadLabels(s.shipmentId, 'fnsku')}
-                            className="h-7 px-2 bg-bg-surface border border-border-default rounded text-[11px] text-text-secondary hover:text-text-primary hover:bg-bg-hover transition-colors"
-                            title="Download FNSKU labels as PDF instead of printing"
-                          >
-                            PDF
-                          </button>
-                          <span className="text-text-tertiary text-[11px]">·</span>
                           {/* Carton labels — combined FBA box ID + UPS when Partnered, box ID alone otherwise */}
                           <button
                             onClick={() => handlePrintLabels(s.shipmentId, cartonType)}
                             disabled={printingLabel === cartonKey}
                             className={
                               partnered
-                                ? 'h-7 px-2.5 bg-positive/15 border border-positive/30 rounded text-[11px] font-medium text-positive hover:bg-positive/25 disabled:opacity-50 transition-colors flex items-center gap-1'
-                                : 'h-7 px-2.5 bg-bg-surface border border-border-default rounded text-[11px] font-medium text-text-primary hover:bg-bg-hover disabled:opacity-50 transition-colors flex items-center gap-1'
+                                ? 'h-7 px-2.5 bg-accent text-text-inverse border-[1.5px] border-accent rounded text-[11px] font-bold hover:bg-accent-hover disabled:opacity-50 transition-colors flex items-center gap-1'
+                                : 'h-7 px-2.5 bg-bg-surface border-[1.5px] border-border-strong rounded text-[11px] font-semibold text-text-primary hover:bg-bg-hover disabled:opacity-50 transition-colors flex items-center gap-1'
                             }
                             title={
                               partnered
@@ -671,7 +710,7 @@ export function BoxingWorkflow({
                           </button>
                           <button
                             onClick={() => handleDownloadLabels(s.shipmentId, cartonType)}
-                            className="h-7 px-2 bg-bg-surface border border-border-default rounded text-[11px] text-text-secondary hover:text-text-primary hover:bg-bg-hover transition-colors"
+                            className="h-7 px-2 bg-bg-surface border-[1.5px] border-border-strong rounded text-[11px] text-text-secondary hover:text-text-primary hover:bg-bg-hover transition-colors"
                             title={partnered ? 'Download carton labels as PDF (FBA box ID + UPS)' : 'Download FBA box ID labels as PDF'}
                           >
                             PDF
@@ -689,7 +728,7 @@ export function BoxingWorkflow({
                   href={`https://sellercentral.amazon.com/fba/sendtoamazon/pack_mixed_unit_step?wf=${batch.inboundPlanId}`}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="inline-flex items-center gap-1.5 text-[11px] text-text-tertiary hover:text-accent hover:underline"
+                  className="inline-flex items-center gap-1.5 text-[11px] text-text-tertiary hover:text-link hover:underline"
                 >
                   <ExternalLink size={10} /> Or open in Seller Central
                 </a>
@@ -749,7 +788,7 @@ function UnassignedItemRow({
         {item.productName || item.asin}
       </span>
       <span className="text-text-tertiary font-mono">{item.sku}</span>
-      <span className="text-amber-400 font-mono w-14 text-right">{remaining} left</span>
+      <span className="text-warning w-14 text-right tabular-nums">{remaining} left</span>
       <input
         autoComplete="off"
         type="number"
@@ -757,13 +796,13 @@ function UnassignedItemRow({
         max={remaining}
         value={qty}
         onChange={(e) => setQty(Math.max(0, Math.min(remaining, parseInt(e.target.value) || 0)))}
-        className="w-14 h-6 px-1 text-right bg-bg-surface border border-border-default rounded text-[11px] font-mono focus:outline-none focus:border-accent"
+        className="w-14 h-6 px-1 text-right bg-bg-surface border border-border-default rounded text-[11px] focus:outline-none focus:border-link tabular-nums"
       />
       {boxIndices.length > 1 ? (
         <select
           value={targetBoxIdx}
           onChange={(e) => setTargetBoxIdx(parseInt(e.target.value))}
-          className="h-6 px-1 bg-bg-surface border border-border-default rounded text-[11px] focus:outline-none focus:border-accent"
+          className="h-6 px-1 bg-bg-surface border border-border-default rounded text-[11px] focus:outline-none focus:border-link"
         >
           {boxIndices.map((idx) => (
             <option key={idx} value={idx}>{boxLabel(idx)}</option>
@@ -775,7 +814,7 @@ function UnassignedItemRow({
       <button
         onClick={() => canAdd && onAdd(targetBoxIdx, qty)}
         disabled={!canAdd}
-        className="h-6 px-2 bg-accent/10 border border-accent/30 rounded text-[10px] text-accent hover:bg-accent/20 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+        className="h-6 px-2 rounded-sm text-[10px] text-accent hover:bg-bg-hover transition-colors disabled:opacity-40 disabled:cursor-not-allowed border-[1.2px] border-current"
       >
         Add
       </button>
@@ -786,11 +825,11 @@ function UnassignedItemRow({
 function StepChip({ label, active, done }: { label: string; active: boolean; done: boolean }) {
   return (
     <span
-      className={`inline-flex items-center px-2 py-0.5 rounded border text-[10px] font-semibold uppercase tracking-wider ${
+      className={`inline-flex items-center px-2 py-0.5 rounded border text-[10px] label-caps ${
         done
-          ? 'border-positive/30 text-positive bg-positive/5'
+          ? 'tag text-positive'
           : active
-            ? 'border-accent/30 text-accent bg-accent/10'
+            ? 'border-accent text-text-inverse bg-accent'
             : 'border-border-subtle text-text-tertiary bg-bg-elevated'
       }`}
     >
@@ -813,7 +852,7 @@ function DimensionInput({
 }) {
   return (
     <div>
-      <label className="text-[10px] uppercase tracking-widest text-text-tertiary">{label}</label>
+      <label className="text-[10px] label-caps text-text-tertiary">{label}</label>
       <input
         autoComplete="off"
         type="number"
@@ -822,7 +861,7 @@ function DimensionInput({
         value={value}
         disabled={disabled}
         onChange={(e) => onChange(parseFloat(e.target.value) || 0)}
-        className="w-full mt-0.5 h-8 px-2 bg-bg-surface border border-border-default rounded text-xs font-mono focus:outline-none focus:border-accent disabled:opacity-50 disabled:cursor-not-allowed"
+        className="w-full mt-0.5 h-8 px-2 bg-bg-surface border border-border-default rounded text-xs focus:outline-none focus:border-link disabled:opacity-50 disabled:cursor-not-allowed tabular-nums"
       />
     </div>
   );

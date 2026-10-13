@@ -11,6 +11,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import path from 'path';
 import fs from 'fs';
 import { openDb } from '@/lib/db-conn';
+import { V2024_SERVICE_FEE_CUTOVER } from '@/lib/sp-api/serviceFeesV2024';
 
 interface ParsedRow {
   dateTime: string;
@@ -211,6 +212,10 @@ export async function POST(request: NextRequest) {
       // Adjustment, Shippinglabelpurchaseforreturn, StorageRenewalBilling, …),
       // leaving orphaned fee_details behind every import (caught by
       // tests/live-invariants.test.ts, July 6 2026).
+      // Service fees on/after the v2024 cutover belong to the v2024 projection
+      // (serviceFeesV2024.ts): this import neither deletes nor writes them.
+      // The window also has a LOWER bound — without it, an import that starts
+      // later than a previous one deleted real fees older than its own rows.
       const deletedFeeDetails = db.prepare(`
         DELETE FROM fee_details
         WHERE (order_id IS NULL OR order_id = '')
@@ -218,9 +223,11 @@ export async function POST(request: NextRequest) {
           SELECT id FROM financial_events
           WHERE event_type IN ('ServiceFeeEvent', 'SettlementServiceFee')
             AND marketplace = 'amazon'
+            AND date(posted_date) >= date(?)
             AND date(posted_date) <= date(?)
+            AND posted_date < ?
         )
-      `).run(csvMaxDate);
+      `).run(csvMinDate, csvMaxDate, V2024_SERVICE_FEE_CUTOVER);
 
       // Delete ServiceFeeEvent financial_events within coverage (replaced by
       // TransactionReport events). Events after the CSV's last date survive —
@@ -229,27 +236,27 @@ export async function POST(request: NextRequest) {
         DELETE FROM financial_events
         WHERE event_type IN ('ServiceFeeEvent', 'SettlementServiceFee')
         AND marketplace = 'amazon'
+        AND date(posted_date) >= date(?)
         AND date(posted_date) <= date(?)
-      `).run(csvMaxDate);
+        AND posted_date < ?
+      `).run(csvMinDate, csvMaxDate, V2024_SERVICE_FEE_CUTOVER);
 
       // Also delete any previous transaction report imports (for idempotency).
       // Scoped to THIS CSV's coverage window — a prior import may cover months
       // this CSV doesn't (e.g. Oct-Dec 2025 from the first import vs a
       // Jan-Jun 2026 export); rows outside the window have nothing to replace
       // them and must survive.
+      // Liquidations keep the full CSV window; service/inventory fees stop at the cutover.
+      const priorImportScope = `
+        (event_type = 'TransactionReportLiquidation'
+          OR (event_type IN ('TransactionReportServiceFee', 'TransactionReportInventoryFee') AND posted_date < ?))
+        AND date(posted_date) >= date(?) AND date(posted_date) <= date(?)`;
       db.prepare(`
         DELETE FROM fee_details
-        WHERE financial_event_id IN (
-          SELECT id FROM financial_events
-          WHERE event_type IN ('TransactionReportServiceFee', 'TransactionReportInventoryFee', 'TransactionReportLiquidation')
-          AND date(posted_date) >= date(?) AND date(posted_date) <= date(?)
-        )
-      `).run(csvMinDate, csvMaxDate);
-      db.prepare(`
-        DELETE FROM financial_events
-        WHERE event_type IN ('TransactionReportServiceFee', 'TransactionReportInventoryFee', 'TransactionReportLiquidation')
-        AND date(posted_date) >= date(?) AND date(posted_date) <= date(?)
-      `).run(csvMinDate, csvMaxDate);
+        WHERE financial_event_id IN (SELECT id FROM financial_events WHERE ${priorImportScope})
+      `).run(V2024_SERVICE_FEE_CUTOVER, csvMinDate, csvMaxDate);
+      db.prepare(`DELETE FROM financial_events WHERE ${priorImportScope}`)
+        .run(V2024_SERVICE_FEE_CUTOVER, csvMinDate, csvMaxDate);
 
       stats.serviceFees.deleted = deletedFeeDetails.changes;
       stats.fbaInventoryFees.deleted = deletedEvents.changes;
@@ -271,6 +278,7 @@ export async function POST(request: NextRequest) {
           if (totalCents === 0) continue; // Skip zero-amount rows (e.g. inbound placement with $0)
 
           const postedDate = parseDateToISO(row.dateTime);
+          if (postedDate >= V2024_SERVICE_FEE_CUTOVER) continue; // owned by the v2024 projection
           const { feeType, feeCategory } = mapDescriptionToFeeType(row.type, row.description);
           const eventType = row.type === 'Service Fee' ? 'TransactionReportServiceFee' : 'TransactionReportInventoryFee';
 

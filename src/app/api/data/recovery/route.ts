@@ -74,7 +74,7 @@ const fmtDate = (d: string) => new Date(d).toLocaleDateString('en-US', { year: '
 function buildQueue(db: Database.Database): QueueItem[] {
   const queue: QueueItem[] = [];
 
-  // ---- 1. Discrepancy detectors (refund-no-return, fee overcharge) ----
+  // ---- 1. Discrepancy detectors (refund-no-return, fee overcharge, replacement-no-return) ----
   const disc = db.prepare(`
     SELECT id, discrepancy_type as t, order_id as orderId, asin, sku, product_name as productName,
            event_date as eventDate, quantity, estimated_value_cents as amount, eligibility,
@@ -83,13 +83,15 @@ function buildQueue(db: Database.Database): QueueItem[] {
   `).all() as any[];
   for (const r of disc) {
     let reasons: string[] = [];
-    let detail: Record<string, number> = {};
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    let detail: Record<string, any> = {};
     try { reasons = JSON.parse(r.reasons || '[]'); } catch { /* keep empty */ }
     try { detail = JSON.parse(r.detail || '{}'); } catch { /* keep empty */ }
     const isRnr = r.t === 'refund_no_return';
+    const isRepl = r.t === 'replacement_no_return';
     queue.push({
       source: 'discrepancy',
-      sourceLabel: isRnr ? 'Refund, no return' : 'FBA fee overcharge',
+      sourceLabel: isRnr ? 'Refund, no return' : isRepl ? 'Replacement, not made whole' : 'FBA fee overcharge',
       id: r.id,
       marketplace: 'amazon',
       productName: r.productName,
@@ -101,7 +103,7 @@ function buildQueue(db: Database.Database): QueueItem[] {
       eventDate: r.eventDate,
       windowUntil: r.windowUntil,
       eligibility: r.eligibility === 'waiting' ? 'waiting' : 'eligible',
-      reason: reasons[0] || (isRnr ? 'Customer was refunded but never returned the item' : 'Per-unit FBA fee jumped vs its own baseline'),
+      reason: reasons[0] || (isRnr ? 'Customer was refunded but never returned the item' : isRepl ? 'Free replacement shipped and never reimbursed' : 'Per-unit FBA fee jumped vs its own baseline'),
       status: r.status,
       filedAt: r.filedAt,
       claimText: isRnr
@@ -111,6 +113,14 @@ function buildQueue(db: Database.Database): QueueItem[] {
             `On ${fmtDate(r.eventDate)}, a refund of ${fmtUsd(r.amount || 0)} was issued to the customer on order ${r.orderId} (${r.productName || r.asin || r.sku}, SKU ${r.sku || '—'}).`, '',
             `More than 60 days have passed and the returned item has never been received at a fulfillment center — there is no entry for this order in the FBA Customer Returns report, and no reimbursement (including a proactive one) has been issued to my account.`, '',
             `Per the FBA Inventory Reimbursement Policy (Customer Return Claims), when a customer is refunded but does not return the item, the seller may claim reimbursement between 60 and 120 days after the refund. This claim is inside that window. I'm requesting reimbursement of ${fmtUsd(r.amount || 0)} for this order (sourcing cost documentation available on request).`, '',
+            `Thank you.`,
+          ].join('\n')
+        : isRepl ? [
+            `Subject: Reimbursement claim — replacement order ${r.orderId}, original item not returned`, '',
+            `Hello,`, '',
+            `On ${fmtDate(r.eventDate)}, Amazon shipped a free replacement (order ${r.orderId}) for original order ${detail.originalOrderId || '—'} (${r.productName || r.asin || r.sku}, SKU ${r.sku || '—'}, quantity ${r.quantity || 1}).${detail.reasonLabel ? ` Amazon's Replacements report records the reason as "${detail.reasonLabel}".` : ''}`, '',
+            `More than 60 days have passed. The original unit has not been returned to my sellable inventory and no reimbursement has been issued to my account for either order, so I have shipped two units and been paid for one.`, '',
+            `Per the FBA Inventory Reimbursement Policy (Customer Return Claims), a claim may be filed between 60 and 120 days after the customer received a replacement. This claim is inside that window. I'm requesting reimbursement of ${fmtUsd(r.amount || 0)} for the unreturned unit (sourcing cost documentation available on request).`, '',
             `Thank you.`,
           ].join('\n')
         : [
@@ -126,7 +136,9 @@ function buildQueue(db: Database.Database): QueueItem[] {
       steps: [
         'Click "Open & mark filed" — Seller Central Get Support opens.',
         'Choose Selling on Amazon → Fulfillment by Amazon.',
-        isRnr ? 'Describe it as a customer return not received reimbursement claim.' : 'Request a remeasurement (cubiscan) and fee reimbursement.',
+        isRnr ? 'Describe it as a customer return not received reimbursement claim.'
+          : isRepl ? 'First check Manage FBA Returns for the ORIGINAL order — if the unit came back, dismiss this instead. Otherwise describe it as a replacement where the original was never returned.'
+          : 'Request a remeasurement (cubiscan) and fee reimbursement.',
         'Paste the claim message as the case description and submit.',
       ],
     });
@@ -177,7 +189,7 @@ function buildQueue(db: Database.Database): QueueItem[] {
 
   // ---- 3. Reimbursement re-evaluations (Amazon underpaid) ----
   const reevals = db.prepare(`
-    SELECT id, reimbursement_id as reimbId, reimbursement_date as eventDate, asin, sku,
+    SELECT id, CASE WHEN instr(reimbursement_id, ':') > 0 THEN substr(reimbursement_id, 1, instr(reimbursement_id, ':') - 1) ELSE reimbursement_id END as reimbId, reimbursement_date as eventDate, asin, sku,
            product_name as productName, quantity, paid_cents as paid, expected_cents as expected,
            gap_cents as amount, reason, date(reimbursement_date, '+60 days') as windowUntil,
            status, filed_at as filedAt
@@ -279,6 +291,7 @@ function buildQueue(db: Database.Database): QueueItem[] {
             ]
           : [
               'Click "Open & mark filed" — Seller Center Returns & Reimbursements opens.',
+              ...(lostInPipeline ? ['First check Payments → Services Fees → Refund for a LostReturnAdjustment on this PO: Walmart may already have paid it.'] : []),
               lostInPipeline ? 'Use "Initiate claim" (the Dispute button is blocked for WFS returns).' : 'Find the return and open a dispute.',
               'Paste the message, attach evidence, submit.',
             ],

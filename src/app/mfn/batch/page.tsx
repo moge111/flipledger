@@ -12,10 +12,10 @@ export default function MfnBatchPage() {
     <div>
       <div className="mb-4 flex items-start justify-between gap-4">
         <div>
-          <h1 className="text-xl font-semibold tracking-tight">MFN Quick Tray</h1>
+          <h1 className="page-title">MFN Quick Tray</h1>
           <p className="text-sm text-text-tertiary mt-0.5">
             Session-only scratch surface · for a persisted batch, use{' '}
-            <Link href="/list" className="text-accent hover:underline">Batches → New Batch → Merchant Fulfilled</Link>
+            <Link href="/list" className="text-link hover:underline">Batches → New Batch → Merchant Fulfilled</Link>
           </p>
         </div>
       </div>

@@ -26,7 +26,7 @@ import {
   createOrUpdateListing,
 } from '@/lib/sp-api/listingsItems';
 import { createInboundPlan, setPrepDetails, getPrepDetails, getInboundOperation, type SourceAddress, type InboundPlanItem } from '@/lib/sp-api/inboundPlansV2';
-import { fnskuMaxAttempts, isPropagationError, parsePrepOwnerFlips } from '@/lib/listing-send-policy';
+import { fnskuMaxAttempts, isPropagationError, parsePrepOwnerFlips, isItemListingReady, skipMfnPut, mfnQuantityToPut, offeredQuantity } from '@/lib/listing-send-policy';
 import type { SPAPICredentials } from '@/lib/sp-api/types';
 import { openDb } from '@/lib/db-conn';
 import { createLogger } from '@/lib/log';
@@ -122,7 +122,9 @@ export async function POST(
 
     // 3. Load items
     const items = db.prepare(`
-      SELECT id, asin, sku, product_name as productName, condition, quantity, list_price_cents as listPriceCents
+      SELECT id, asin, sku, product_name as productName, condition, quantity, list_price_cents as listPriceCents,
+             send_qty_to_amazon as sendQty,
+             (SELECT COALESCE(SUM(il.quantity_remaining), 0) FROM inventory_ledger il WHERE il.sku = listing_batch_items.sku) AS skuStock
       FROM listing_batch_items WHERE batch_id = ?
       ORDER BY id ASC
     `).all(batchId) as any[];
@@ -209,13 +211,23 @@ export async function POST(
             continue itemLoop;
           }
 
+          // Qty → Amazon OFF and the MFN listing already exists: Seller Central
+          // owns its quantity. Don't PUT it at all (a PUT SETS the quantity).
+          if (skipMfnPut(batch.channel, !!item.sendQty, existing)) {
+            listingResults.push({ itemId: item.id, sku: item.sku, status: 'ACTIVE', submissionId: null, error: null });
+            saveListingState(batchId, item.id, { listing_status: 'ACTIVE', listing_submission_id: null, listing_error: null });
+            log.info(`${item.sku} already on Amazon, Qty → Amazon off — skipping re-PUT`);
+            continue itemLoop;
+          }
+
           const productType = existing?.productTypes?.[0]?.productType || await getProductType(creds, item.asin);
 
           const result = await createOrUpdateListing(creds, sellerId, {
             sku: item.sku,
             asin: item.asin,
             condition: item.condition,
-            quantity: item.quantity,
+            // MFN: the SKU's FlipLedger stock when Qty → Amazon is on, else 0.
+            quantity: mfnQuantityToPut({ channel: batch.channel, sendQty: !!item.sendQty, skuStock: item.skuStock }, existing),
             listPriceCents: item.listPriceCents,
             channel: batch.channel,
             productType,
@@ -248,7 +260,7 @@ export async function POST(
 
           // Status is ACCEPTED or VALID. Now poll to see whether the offer is
           // ready (BUYABLE for MFN, FNSKU-assigned for FBA — see classifyListing).
-          const classification = await classifyListing(creds, sellerId, item.sku, batch.channel);
+          const classification = await classifyListing(creds, sellerId, item.sku, batch.channel, offeredQuantity(!!item.sendQty, item.skuStock));
 
           listingResults.push({
             itemId: item.id,
@@ -816,7 +828,8 @@ async function classifyListing(
   creds: any,
   sellerId: string,
   sku: string,
-  channel: 'FBA' | 'MFN' = 'FBA'
+  channel: 'FBA' | 'MFN' = 'FBA',
+  quantity = 1
 ): Promise<{ status: 'ACTIVE' | 'PROCESSING' | 'FAILED'; error: string | null }> {
   try {
     const listing = await getListing(creds, sellerId, sku);
@@ -827,7 +840,6 @@ async function classifyListing(
     }
 
     const summary = listing.summaries?.[0];
-    const summaryStatus: string[] = summary?.status || [];
     const fnSku: string | undefined = summary?.fnSku;
 
     // Capture any ERROR-severity issues as informational — displayed to the
@@ -858,9 +870,9 @@ async function classifyListing(
     }
 
     // MFN: BUYABLE is the right signal — seller manages stock so the listing
-    // should go live immediately once Amazon validates.
-    const isBuyable = summaryStatus.includes('BUYABLE');
-    if (isBuyable) {
+    // should go live immediately once Amazon validates. A 0-qty item never
+    // goes BUYABLE: it is done once its out-of-stock offer is registered.
+    if (isItemListingReady('MFN', quantity, listing)) {
       return { status: 'ACTIVE', error: errorNote };
     }
     return { status: 'PROCESSING', error: errorNote };

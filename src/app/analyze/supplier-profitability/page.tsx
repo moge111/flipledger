@@ -23,6 +23,7 @@ interface ProfitRow {
   unitsPerRefund: number;
   revenue: number;
   fees: number;
+  refunded: number;
   cogs: number;
   costPerUnit: number;
   profit: number;
@@ -39,6 +40,7 @@ interface Totals {
   unitsSold: number;
   revenue: number;
   fees: number;
+  refunded: number;
   cogs: number;
   profit: number;
   refunds: number;
@@ -69,49 +71,56 @@ export default function SupplierProfitabilityPage() {
       id: 'orders',
       header: 'Orders',
       accessorKey: 'orders',
-      cell: ({ getValue }) => <span className="font-mono text-text-primary">{formatNumber(getValue() as number)}</span>,
+      cell: ({ getValue }) => <span className="text-text-primary tabular-nums">{formatNumber(getValue() as number)}</span>,
       size: 80,
     },
     {
       id: 'unitsSold',
       header: 'Units Sold',
       accessorKey: 'unitsSold',
-      cell: ({ getValue }) => <span className="font-mono text-text-primary">{formatNumber(getValue() as number)}</span>,
+      cell: ({ getValue }) => <span className="text-text-primary tabular-nums">{formatNumber(getValue() as number)}</span>,
       size: 90,
     },
     {
       id: 'refunds',
       header: 'Refunds',
       accessorKey: 'refunds',
-      cell: ({ getValue }) => <span className="font-mono text-text-secondary">{getValue() as number}</span>,
+      cell: ({ getValue }) => <span className="text-text-secondary tabular-nums">{getValue() as number}</span>,
       size: 70,
     },
     {
       id: 'revenue',
       header: 'Revenue',
       accessorKey: 'revenue',
-      cell: ({ getValue }) => <span className="font-mono text-text-primary">{formatCurrency(getValue() as number)}</span>,
+      cell: ({ getValue }) => <span className="text-text-primary tabular-nums">{formatCurrency(getValue() as number)}</span>,
       size: 110,
     },
     {
       id: 'costPerUnit',
       header: 'Cost/Unit',
       accessorKey: 'costPerUnit',
-      cell: ({ getValue }) => <span className="font-mono text-text-secondary">{formatCurrency(getValue() as number)}</span>,
+      cell: ({ getValue }) => <span className="text-text-secondary tabular-nums">{formatCurrency(getValue() as number)}</span>,
       size: 100,
     },
     {
       id: 'fees',
       header: 'Fees',
       accessorKey: 'fees',
-      cell: ({ getValue }) => <span className="font-mono text-negative">{formatCurrency(getValue() as number)}</span>,
+      cell: ({ getValue }) => <span className="text-negative tabular-nums">{formatCurrency(getValue() as number)}</span>,
+      size: 100,
+    },
+    {
+      id: 'refunded',
+      header: 'Refunded',
+      accessorKey: 'refunded',
+      cell: ({ getValue }) => { const v = getValue() as number; return v ? <span className="text-negative tabular-nums">{formatCurrency(-v)}</span> : <span className="text-text-tertiary tabular-nums">—</span>; },
       size: 100,
     },
     {
       id: 'onHand',
       header: 'On Hand',
       accessorKey: 'onHand',
-      cell: ({ getValue }) => <span className="font-mono text-text-secondary">{formatNumber(getValue() as number)}</span>,
+      cell: ({ getValue }) => <span className="text-text-secondary tabular-nums">{formatNumber(getValue() as number)}</span>,
       size: 80,
     },
     {
@@ -120,7 +129,7 @@ export default function SupplierProfitabilityPage() {
       accessorKey: 'profit',
       cell: ({ getValue }) => {
         const v = getValue() as number;
-        return <span className={`font-mono font-medium ${v >= 0 ? 'text-positive' : 'text-negative'}`}>{formatCurrency(v)}</span>;
+        return <span className={`font-medium tabular-nums ${v >= 0 ? 'text-positive' : 'text-negative'}`}>{formatCurrency(v)}</span>;
       },
       size: 110,
     },
@@ -130,7 +139,7 @@ export default function SupplierProfitabilityPage() {
       accessorKey: 'roi',
       cell: ({ getValue }) => {
         const v = getValue() as number;
-        return <span className={`font-mono ${v >= 0 ? 'text-positive' : 'text-negative'}`}>{formatPercent(v)}</span>;
+        return <span className={`tabular-nums ${v >= 0 ? 'text-positive' : 'text-negative'}`}>{formatPercent(v)}</span>;
       },
       size: 80,
     },
@@ -140,18 +149,18 @@ export default function SupplierProfitabilityPage() {
       accessorKey: 'margin',
       cell: ({ getValue }) => {
         const v = getValue() as number;
-        return <span className={`font-mono ${v >= 0 ? 'text-positive' : 'text-negative'}`}>{formatPercent(v)}</span>;
+        return <span className={`tabular-nums ${v >= 0 ? 'text-positive' : 'text-negative'}`}>{formatPercent(v)}</span>;
       },
       size: 80,
     },
   ], []);
 
   function handleExport() {
-    const headers = ['Supplier', 'Orders', 'Units Sold', 'Refunds', 'Revenue', 'Cost/Unit', 'Fees', 'On Hand', 'Profit', 'ROI %', 'Margin %'];
+    const headers = ['Supplier', 'Orders', 'Units Sold', 'Refunds', 'Revenue', 'Cost/Unit', 'Fees', 'Refunded', 'On Hand', 'Profit', 'ROI %', 'Margin %'];
     const csvRows = rows.map(r => [
       `"${r.groupKey}"`, r.orders, r.unitsSold, r.refunds,
       (r.revenue / 100).toFixed(2), (r.costPerUnit / 100).toFixed(2), (r.fees / 100).toFixed(2),
-      r.onHand, (r.profit / 100).toFixed(2), r.roi.toFixed(1), r.margin.toFixed(1),
+      (r.refunded / 100).toFixed(2), r.onHand, (r.profit / 100).toFixed(2), r.roi.toFixed(1), r.margin.toFixed(1),
     ].join(','));
     const csv = [headers.join(','), ...csvRows].join('\n');
     const blob = new Blob([csv], { type: 'text/csv' });
@@ -167,16 +176,17 @@ export default function SupplierProfitabilityPage() {
 
   const footerRow = totals ? {
     supplier: <span className="text-text-primary font-semibold">Totals</span>,
-    orders: <span className="font-mono">{formatNumber(totals.orders)}</span>,
-    unitsSold: <span className="font-mono">{formatNumber(totals.unitsSold)}</span>,
-    refunds: <span className="font-mono">{totals.refunds}</span>,
-    revenue: <span className="font-mono">{formatCurrency(totals.revenue)}</span>,
-    costPerUnit: <span className="font-mono">{formatCurrency(totals.costPerUnit)}</span>,
-    fees: <span className="font-mono text-negative">{formatCurrency(totals.fees)}</span>,
-    onHand: <span className="font-mono">{formatNumber(totals.onHand)}</span>,
-    profit: <span className={`font-mono font-medium ${totals.profit >= 0 ? 'text-positive' : 'text-negative'}`}>{formatCurrency(totals.profit)}</span>,
-    roi: <span className={`font-mono ${totals.roi >= 0 ? 'text-positive' : 'text-negative'}`}>{formatPercent(totals.roi)}</span>,
-    margin: <span className={`font-mono ${totals.margin >= 0 ? 'text-positive' : 'text-negative'}`}>{formatPercent(totals.margin)}</span>,
+    orders: <span className="tabular-nums">{formatNumber(totals.orders)}</span>,
+    unitsSold: <span className="tabular-nums">{formatNumber(totals.unitsSold)}</span>,
+    refunds: <span className="tabular-nums">{totals.refunds}</span>,
+    revenue: <span className="tabular-nums">{formatCurrency(totals.revenue)}</span>,
+    costPerUnit: <span className="tabular-nums">{formatCurrency(totals.costPerUnit)}</span>,
+    fees: <span className="text-negative tabular-nums">{formatCurrency(totals.fees)}</span>,
+    refunded: <span className="text-negative tabular-nums">{formatCurrency(-totals.refunded)}</span>,
+    onHand: <span className="tabular-nums">{formatNumber(totals.onHand)}</span>,
+    profit: <span className={`font-medium tabular-nums ${totals.profit >= 0 ? 'text-positive' : 'text-negative'}`}>{formatCurrency(totals.profit)}</span>,
+    roi: <span className={`tabular-nums ${totals.roi >= 0 ? 'text-positive' : 'text-negative'}`}>{formatPercent(totals.roi)}</span>,
+    margin: <span className={`tabular-nums ${totals.margin >= 0 ? 'text-positive' : 'text-negative'}`}>{formatPercent(totals.margin)}</span>,
   } : undefined;
 
   return (
@@ -218,12 +228,12 @@ function ProfitSkeleton() {
       </div>
       <div className="grid grid-cols-2 lg:grid-cols-5 gap-4 mb-6">
         {Array.from({ length: 5 }).map((_, i) => (
-          <div key={i} className="bg-bg-surface border border-border-subtle rounded-lg p-5">
+          <div key={i} className="panel p-5">
             <div className="skeleton h-3 w-20 mb-3" /><div className="skeleton h-8 w-28" />
           </div>
         ))}
       </div>
-      <div className="bg-bg-surface border border-border-subtle rounded-lg p-4">
+      <div className="panel p-4">
         {Array.from({ length: 8 }).map((_, i) => <div key={i} className="skeleton h-10 w-full mb-1" />)}
       </div>
     </div>

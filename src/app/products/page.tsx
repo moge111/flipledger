@@ -22,9 +22,12 @@ interface ProductRow {
   unitsSold: number;          // # sold with no ledger backing
   unitsZeroCogs: number;      // # of historical sales currently sitting at $0 COGS
   intentionalZeroCogs: number; // 1 = $0 COGS is deliberate (self-pulled / gift)
+  autoCostNote: string | null; // set when the cost was copied from a same-named product (unconfirmed)
+  lotId: number | null;        // the inventory_ledger lot this row shows (null = sold, no lot)
 }
 
 interface EditState {
+  lotId: number | null;
   sku: string;
   asin: string;
   buyPrice: string;
@@ -197,10 +200,11 @@ export default function ProductsPage() {
   async function handleSave() {
     if (!editing) return;
     setSaving(true);
-    await fetch('/api/data/products', {
+    const res = await fetch('/api/data/products', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
+        lotId: editing.lotId,
         sku: editing.sku,
         asin: editing.asin,
         buyPrice: parseFloat(editing.buyPrice) || 0,
@@ -209,6 +213,12 @@ export default function ProductsPage() {
         intentionalZeroCogs: editing.intentionalZeroCogs,
       }),
     });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      window.alert(`Cost not saved: ${err.error || `HTTP ${res.status}`}`);
+      setSaving(false);
+      return;
+    }
     setEditing(null);
     setSaving(false);
     fetchData();
@@ -234,7 +244,7 @@ export default function ProductsPage() {
               <div className="text-sm text-text-primary">{p.name || p.asin}</div>
               {missing && (
                 <span
-                  className="text-[9px] text-amber-400 bg-amber-500/10 px-1.5 py-0.5 rounded font-semibold tracking-wider"
+                  className="tag tag-attn text-[9px]"
                   title={
                     p.hasLedger === 0
                       ? `${p.unitsSold} unit${p.unitsSold === 1 ? '' : 's'} sold with no COGS — no inventory entry exists`
@@ -246,9 +256,17 @@ export default function ProductsPage() {
                   {(p.unitsZeroCogs ?? 0) > 0 && p.hasLedger === 1 ? 'DEPLETED LOT' : 'MISSING COGS'}
                 </span>
               )}
+              {p.autoCostNote && (
+                <span
+                  className="tag text-[9px] text-accent"
+                  title={p.autoCostNote.replace('[auto-cost] ', '')}
+                >
+                  COST COPIED
+                </span>
+              )}
               {intentional && (
                 <span
-                  className="text-[9px] text-blue-400 bg-blue-500/10 px-1.5 py-0.5 rounded font-semibold tracking-wider"
+                  className="tag text-[9px] text-link"
                   title="Marked as self-pulled / no-cost-basis. $0 COGS is intentional — full sale price counts as profit."
                 >
                   SELF-PULLED
@@ -270,11 +288,11 @@ export default function ProductsPage() {
       cell: ({ getValue }) => {
         const m = (getValue() as string) || 'amazon';
         const label = m === 'amazon' ? 'AMZ' : m === 'walmart' ? 'WMT' : m === 'ebay' ? 'EBAY' : m.toUpperCase();
-        const color = m === 'amazon' ? 'bg-orange-500/10 text-orange-400'
-          : m === 'walmart' ? 'bg-blue-500/10 text-blue-400'
-          : m === 'ebay' ? 'bg-green-500/10 text-green-400'
-          : 'bg-bg-elevated text-text-tertiary';
-        return <span className={`text-[10px] font-semibold uppercase tracking-wider px-1.5 py-0.5 rounded ${color}`}>{label}</span>;
+        const color = m === 'amazon' ? 'mkt mkt-amazon'
+          : m === 'walmart' ? 'mkt mkt-walmart'
+          : m === 'ebay' ? 'mkt mkt-ebay'
+          : 'mkt';
+        return <span className={color}>{label}</span>;
       },
       size: 60,
     },
@@ -293,7 +311,7 @@ export default function ProductsPage() {
       cell: ({ row }) => {
         const cost = row.original.costPerUnit;
         return cost !== null && cost > 0
-          ? <span className="font-mono text-text-primary">{formatCurrency(Math.round(cost * 100))}</span>
+          ? <span className="text-text-primary tabular-nums">{formatCurrency(Math.round(cost * 100))}</span>
           : <span className="text-text-tertiary text-sm italic">Not set</span>;
       },
       size: 100,
@@ -302,7 +320,7 @@ export default function ProductsPage() {
       id: 'datePurchased', header: 'Purchase Date', accessorKey: 'datePurchased',
       cell: ({ getValue }) => {
         const v = getValue() as string;
-        return v ? <span className="font-mono text-sm text-text-secondary">{formatDate(v)}</span> : <span className="text-text-tertiary">—</span>;
+        return v ? <span className="text-sm text-text-secondary tabular-nums">{formatDate(v)}</span> : <span className="text-text-tertiary">—</span>;
       },
       size: 120,
     },
@@ -312,6 +330,7 @@ export default function ProductsPage() {
         <div className="flex items-center gap-3">
           <button
             onClick={() => setEditing({
+              lotId: row.original.lotId ?? null,
               sku: row.original.sku || '',
               asin: row.original.asin,
               buyPrice: row.original.costPerUnit?.toString() || '',
@@ -319,7 +338,7 @@ export default function ProductsPage() {
               datePurchased: row.original.datePurchased?.split('T')[0] || '',
               intentionalZeroCogs: (row.original.intentionalZeroCogs ?? 0) === 1,
             })}
-            className="text-xs text-accent hover:text-accent-hover transition-colors"
+            className="text-xs text-accent hover:text-text-primary transition-colors"
           >
             Edit
           </button>
@@ -341,7 +360,7 @@ export default function ProductsPage() {
   if (loading) return (
     <div>
       <div className="mb-6"><div className="skeleton h-6 w-32 mb-2" /><div className="skeleton h-4 w-48" /></div>
-      <div className="bg-bg-surface border border-border-subtle rounded-lg p-4">
+      <div className="panel p-4">
         {Array.from({ length: 8 }).map((_, i) => <div key={i} className="skeleton h-10 w-full mb-1" />)}
       </div>
     </div>
@@ -349,23 +368,19 @@ export default function ProductsPage() {
 
   return (
     <div>
-      <div className="flex items-start justify-between mb-6">
+      <div className="flex flex-wrap items-start justify-between gap-3 mb-6">
         <div>
-          <h1 className="text-xl font-semibold tracking-tight">Products & COGS</h1>
+          <h1 className="page-title">Products & COGS</h1>
           <p className="text-sm text-text-tertiary mt-0.5">Manage buy prices, suppliers, and product costs</p>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           {/* Marketplace filter */}
-          <div className="flex h-9 rounded-md border border-border-default overflow-hidden text-sm">
+          <div className="seg" role="group" aria-label="Marketplace">
             {(['all', 'amazon', 'walmart', 'ebay'] as const).map((m) => (
               <button
                 key={m}
                 onClick={() => setMarketplaceFilter(m)}
-                className={`px-3 transition-colors border-r border-border-default last:border-r-0 ${
-                  marketplaceFilter === m
-                    ? 'bg-accent/15 text-accent font-medium'
-                    : 'bg-bg-elevated text-text-secondary hover:bg-bg-hover'
-                }`}
+                aria-current={marketplaceFilter === m ? 'true' : undefined}
               >
                 {m === 'all' ? 'All' : m === 'amazon' ? 'AMZ' : m === 'walmart' ? 'WMT' : 'eBay'}
               </button>
@@ -374,10 +389,11 @@ export default function ProductsPage() {
           {/* Missing-COGS toggle */}
           <button
             onClick={() => setOnlyMissingCogs(!onlyMissingCogs)}
-            className={`flex items-center gap-2 h-9 px-3 rounded-md border transition-colors text-sm ${
+            aria-pressed={onlyMissingCogs}
+            className={`flex items-center gap-2 h-9 px-3 rounded-md border-[1.5px] transition-colors text-sm font-semibold ${
               onlyMissingCogs
-                ? 'bg-amber-500/15 text-amber-400 border-amber-500/40 font-medium'
-                : 'bg-bg-elevated text-text-secondary border-border-default hover:bg-bg-hover'
+                ? 'bg-accent text-text-inverse border-accent'
+                : 'bg-bg-surface text-text-primary border-border-strong hover:bg-bg-hover'
             }`}
           >
             <AlertTriangle size={14} />
@@ -388,11 +404,11 @@ export default function ProductsPage() {
 
       {/* Missing-COGS banner — only visible when there's exposure */}
       {missingCogsCounts.all > 0 && !onlyMissingCogs && (
-        <div className="mb-4 flex items-center justify-between bg-amber-500/5 border border-amber-500/30 rounded-lg p-3">
+        <div className="mb-4 flex items-center justify-between attn-banner p-3">
           <div className="flex items-center gap-2 text-sm">
-            <AlertTriangle size={16} className="text-amber-400 shrink-0" />
+            <AlertTriangle size={16} className="text-warning shrink-0" />
             <span className="text-text-primary">
-              <b className="text-amber-400">{missingCogsCounts.all}</b> product{missingCogsCounts.all === 1 ? '' : 's'} missing COGS
+              <b className="text-warning">{missingCogsCounts.all}</b> product{missingCogsCounts.all === 1 ? '' : 's'} missing COGS
             </span>
             <span className="text-text-tertiary text-xs">
               ({missingCogsCounts.amazon || 0} Amazon · {missingCogsCounts.walmart || 0} Walmart · {missingCogsCounts.ebay || 0} eBay)
@@ -400,7 +416,7 @@ export default function ProductsPage() {
           </div>
           <button
             onClick={() => setOnlyMissingCogs(true)}
-            className="text-xs text-amber-400 hover:text-amber-300 font-medium"
+            className="h-7 px-2.5 rounded-md bg-highlight-fg text-text-inverse text-xs font-bold hover:opacity-90"
           >
             Show them →
           </button>
@@ -410,7 +426,7 @@ export default function ProductsPage() {
       {/* Edit Modal */}
       {editing && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onClick={() => setEditing(null)}>
-          <div className="bg-bg-elevated border border-border-default rounded-lg p-6 w-full max-w-md shadow-lg" onClick={e => e.stopPropagation()}>
+          <div className="bg-bg-elevated border-[1.5px] border-border-strong rounded-lg p-6 w-full max-w-md shadow-lg" onClick={e => e.stopPropagation()}>
             <div className="flex items-center justify-between mb-4">
               <h3 className="text-md font-medium text-text-primary">Edit COGS</h3>
               <button onClick={() => setEditing(null)} className="p-1 hover:bg-bg-hover rounded-md"><X size={16} className="text-text-tertiary" /></button>
@@ -420,12 +436,12 @@ export default function ProductsPage() {
             </div>
             <div className="space-y-3">
               <div>
-                <label className="block text-xs font-medium tracking-wide uppercase text-text-tertiary mb-1">Buy Price ($)</label>
+                <label className="block text-xs label-caps text-text-tertiary mb-1">Buy Price ($)</label>
                 <input
                   type="number" step="0.01" value={editing.buyPrice}
                   onChange={e => setEditing({ ...editing, buyPrice: e.target.value })}
                   disabled={editing.intentionalZeroCogs}
-                  className="w-full h-9 px-3 bg-bg-input border border-border-default rounded-md text-sm text-text-primary focus:border-accent focus:outline-none disabled:opacity-50 disabled:cursor-not-allowed"
+                  className="w-full h-9 px-3 bg-bg-input border border-border-default rounded-md text-sm text-text-primary focus:border-link focus:outline-none disabled:opacity-50 disabled:cursor-not-allowed"
                   autoFocus
                 />
               </div>
@@ -446,11 +462,11 @@ export default function ProductsPage() {
                 </label>
               </div>
               <div>
-                <label className="block text-xs font-medium tracking-wide uppercase text-text-tertiary mb-1">Supplier</label>
+                <label className="block text-xs label-caps text-text-tertiary mb-1">Supplier</label>
                 <input
                   type="text" value={editing.supplier} list="suppliers"
                   onChange={e => setEditing({ ...editing, supplier: e.target.value })}
-                  className="w-full h-9 px-3 bg-bg-input border border-border-default rounded-md text-sm text-text-primary focus:border-accent focus:outline-none"
+                  className="w-full h-9 px-3 bg-bg-input border border-border-default rounded-md text-sm text-text-primary focus:border-link focus:outline-none"
                   placeholder="e.g. Walmart, Target, Best Buy"
                 />
                 <datalist id="suppliers">
@@ -458,17 +474,17 @@ export default function ProductsPage() {
                 </datalist>
               </div>
               <div>
-                <label className="block text-xs font-medium tracking-wide uppercase text-text-tertiary mb-1">Purchase Date</label>
+                <label className="block text-xs label-caps text-text-tertiary mb-1">Purchase Date</label>
                 <input
                   type="date" value={editing.datePurchased}
                   onChange={e => setEditing({ ...editing, datePurchased: e.target.value })}
-                  className="w-full h-9 px-3 bg-bg-input border border-border-default rounded-md text-sm text-text-primary focus:border-accent focus:outline-none"
+                  className="w-full h-9 px-3 bg-bg-input border border-border-default rounded-md text-sm text-text-primary focus:border-link focus:outline-none"
                 />
               </div>
             </div>
             <div className="flex justify-end gap-2 mt-5">
-              <button onClick={() => setEditing(null)} className="h-9 px-4 bg-bg-hover border border-border-default rounded-md text-sm text-text-primary hover:bg-bg-active transition-colors">Cancel</button>
-              <button onClick={handleSave} disabled={saving} className="flex items-center gap-2 h-9 px-4 bg-accent text-white rounded-md text-sm font-medium hover:bg-accent-hover transition-colors disabled:opacity-50">
+              <button onClick={() => setEditing(null)} className="h-9 px-4 rounded-md text-sm text-text-primary hover:bg-bg-hover transition-colors font-semibold bg-bg-surface border-[1.5px] border-border-strong">Cancel</button>
+              <button onClick={handleSave} disabled={saving} className="flex items-center gap-2 h-9 px-4 bg-accent text-text-inverse rounded-md text-sm font-bold hover:bg-accent-hover transition-colors disabled:opacity-50">
                 <Save size={14} />
                 {saving ? 'Saving...' : 'Save'}
               </button>
@@ -481,7 +497,7 @@ export default function ProductsPage() {
       {lotsView && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" onClick={() => setLotsView(null)}>
           <div
-            className="bg-bg-elevated border border-border-default rounded-lg w-full max-w-3xl shadow-lg max-h-[90vh] flex flex-col"
+            className="bg-bg-elevated border-[1.5px] border-border-strong rounded-lg w-full max-w-3xl shadow-lg max-h-[90vh] flex flex-col"
             onClick={e => e.stopPropagation()}
           >
             {/* Header */}
@@ -505,20 +521,20 @@ export default function ProductsPage() {
             {lotsView.summary && (
               <div className="grid grid-cols-4 gap-3 px-6 py-3 border-b border-border-subtle bg-bg-surface/40 shrink-0">
                 <div>
-                  <div className="text-[10px] uppercase tracking-wider text-text-tertiary">Lots</div>
-                  <div className="text-sm font-mono text-text-primary mt-0.5">{lotsView.summary.lotCount}</div>
+                  <div className="text-[10px] label-caps text-text-tertiary">Lots</div>
+                  <div className="text-sm text-text-primary mt-0.5 tabular-nums">{lotsView.summary.lotCount}</div>
                 </div>
                 <div>
-                  <div className="text-[10px] uppercase tracking-wider text-text-tertiary">Bought</div>
-                  <div className="text-sm font-mono text-text-primary mt-0.5">{lotsView.summary.totalUnitsBought}</div>
+                  <div className="text-[10px] label-caps text-text-tertiary">Bought</div>
+                  <div className="text-sm text-text-primary mt-0.5 tabular-nums">{lotsView.summary.totalUnitsBought}</div>
                 </div>
                 <div>
-                  <div className="text-[10px] uppercase tracking-wider text-text-tertiary">Sold</div>
-                  <div className="text-sm font-mono text-text-primary mt-0.5">{lotsView.summary.totalUnitsSold}</div>
+                  <div className="text-[10px] label-caps text-text-tertiary">Sold</div>
+                  <div className="text-sm text-text-primary mt-0.5 tabular-nums">{lotsView.summary.totalUnitsSold}</div>
                 </div>
                 <div>
-                  <div className="text-[10px] uppercase tracking-wider text-text-tertiary">Avg COGS / unit sold</div>
-                  <div className="text-sm font-mono text-positive mt-0.5">
+                  <div className="text-[10px] label-caps text-text-tertiary">Avg COGS / unit sold</div>
+                  <div className="text-sm text-positive mt-0.5 tabular-nums">
                     {lotsView.summary.avgCogsPerUnitSoldCents > 0 ? formatCurrency(lotsView.summary.avgCogsPerUnitSoldCents) : '—'}
                   </div>
                 </div>
@@ -533,25 +549,25 @@ export default function ProductsPage() {
                 <div className="p-6 text-text-tertiary text-sm">No lots yet — add the first one below.</div>
               ) : (
                 <table className="w-full text-sm">
-                  <thead className="text-text-tertiary text-xs uppercase tracking-wider sticky top-0 bg-bg-elevated">
-                    <tr className="border-b border-border-subtle">
-                      <th className="text-left py-2 px-4 font-medium">Date</th>
-                      <th className="text-right py-2 px-3 font-medium">Qty</th>
-                      <th className="text-right py-2 px-3 font-medium">Sold</th>
-                      <th className="text-right py-2 px-3 font-medium">Remaining</th>
-                      <th className="text-right py-2 px-3 font-medium">Cost / unit</th>
-                      <th className="text-left py-2 px-3 font-medium">Supplier</th>
-                      <th className="text-right py-2 px-4 font-medium"></th>
+                  <thead className="text-text-tertiary text-xs label-caps sticky top-0 bg-bg-elevated">
+                    <tr>
+                      <th className="text-left py-2 px-4">Date</th>
+                      <th className="text-right py-2 px-3">Qty</th>
+                      <th className="text-right py-2 px-3">Sold</th>
+                      <th className="text-right py-2 px-3">Remaining</th>
+                      <th className="text-right py-2 px-3">Cost / unit</th>
+                      <th className="text-left py-2 px-3">Supplier</th>
+                      <th className="text-right py-2 px-4"></th>
                     </tr>
                   </thead>
                   <tbody>
                     {lotsView.lots.map((lot) => (
                       <tr key={lot.id} className="border-b border-border-subtle/60 hover:bg-bg-hover">
-                        <td className="py-2 px-4 text-text-secondary whitespace-nowrap font-mono text-xs">{formatDate(lot.date_purchased)}</td>
-                        <td className="py-2 px-3 text-right font-mono">{lot.quantity}</td>
-                        <td className="py-2 px-3 text-right font-mono text-text-secondary">{lot.units_consumed}</td>
-                        <td className={`py-2 px-3 text-right font-mono ${lot.quantity_remaining === 0 ? 'text-text-tertiary' : 'text-text-primary'}`}>{lot.quantity_remaining}</td>
-                        <td className="py-2 px-3 text-right font-mono">{formatCurrency(lot.buy_price)}</td>
+                        <td className="py-2 px-4 text-text-secondary whitespace-nowrap text-xs tabular-nums">{formatDate(lot.date_purchased)}</td>
+                        <td className="py-2 px-3 text-right tabular-nums">{lot.quantity}</td>
+                        <td className="py-2 px-3 text-right text-text-secondary tabular-nums">{lot.units_consumed}</td>
+                        <td className={`py-2 px-3 text-right tabular-nums ${lot.quantity_remaining === 0 ? 'text-text-tertiary' : 'text-text-primary'}`}>{lot.quantity_remaining}</td>
+                        <td className="py-2 px-3 text-right tabular-nums">{formatCurrency(lot.buy_price)}</td>
                         <td className="py-2 px-3 text-text-secondary truncate max-w-[10rem]">{lot.supplier_name || '—'}</td>
                         <td className="py-2 px-4 text-right">
                           <button
@@ -573,49 +589,49 @@ export default function ProductsPage() {
             <div className="px-6 py-4 border-t border-border-subtle bg-bg-surface/40 shrink-0">
               <div className="flex items-center gap-2 mb-2">
                 <Plus size={14} className="text-accent" />
-                <h4 className="text-xs uppercase tracking-wider font-medium text-text-secondary">Add new buy lot</h4>
+                <h4 className="text-xs label-caps text-text-secondary">Add new buy lot</h4>
               </div>
               <div className="grid grid-cols-12 gap-2">
                 <div className="col-span-3">
-                  <label className="block text-[10px] uppercase tracking-wider text-text-tertiary mb-1">Date</label>
+                  <label className="block text-[10px] label-caps text-text-tertiary mb-1">Date</label>
                   <input
                     type="date" value={newLot.datePurchased}
                     onChange={e => setNewLot({ ...newLot, datePurchased: e.target.value })}
-                    className="w-full h-9 px-2 bg-bg-input border border-border-default rounded-md text-sm focus:border-accent focus:outline-none"
+                    className="w-full h-9 px-2 bg-bg-input border border-border-default rounded-md text-sm focus:border-link focus:outline-none"
                   />
                 </div>
                 <div className="col-span-2">
-                  <label className="block text-[10px] uppercase tracking-wider text-text-tertiary mb-1">Qty</label>
+                  <label className="block text-[10px] label-caps text-text-tertiary mb-1">Qty</label>
                   <input
                     type="number" min="1" step="1" value={newLot.quantity}
                     onChange={e => setNewLot({ ...newLot, quantity: e.target.value })}
                     placeholder="e.g. 10"
-                    className="w-full h-9 px-2 bg-bg-input border border-border-default rounded-md text-sm focus:border-accent focus:outline-none"
+                    className="w-full h-9 px-2 bg-bg-input border border-border-default rounded-md text-sm focus:border-link focus:outline-none"
                   />
                 </div>
                 <div className="col-span-2">
-                  <label className="block text-[10px] uppercase tracking-wider text-text-tertiary mb-1">Cost ($)</label>
+                  <label className="block text-[10px] label-caps text-text-tertiary mb-1">Cost ($)</label>
                   <input
                     type="number" step="0.01" min="0" value={newLot.buyPrice}
                     onChange={e => setNewLot({ ...newLot, buyPrice: e.target.value })}
                     placeholder="e.g. 12.50"
-                    className="w-full h-9 px-2 bg-bg-input border border-border-default rounded-md text-sm focus:border-accent focus:outline-none"
+                    className="w-full h-9 px-2 bg-bg-input border border-border-default rounded-md text-sm focus:border-link focus:outline-none"
                   />
                 </div>
                 <div className="col-span-3">
-                  <label className="block text-[10px] uppercase tracking-wider text-text-tertiary mb-1">Supplier</label>
+                  <label className="block text-[10px] label-caps text-text-tertiary mb-1">Supplier</label>
                   <input
                     type="text" value={newLot.supplier} list="suppliers"
                     onChange={e => setNewLot({ ...newLot, supplier: e.target.value })}
                     placeholder="optional"
-                    className="w-full h-9 px-2 bg-bg-input border border-border-default rounded-md text-sm focus:border-accent focus:outline-none"
+                    className="w-full h-9 px-2 bg-bg-input border border-border-default rounded-md text-sm focus:border-link focus:outline-none"
                   />
                 </div>
                 <div className="col-span-2 flex items-end">
                   <button
                     onClick={handleAddLot}
                     disabled={savingLot}
-                    className="w-full h-9 bg-accent text-white rounded-md text-sm font-medium hover:bg-accent-hover transition-colors disabled:opacity-50"
+                    className="w-full h-9 bg-accent text-text-inverse rounded-md text-sm font-bold hover:bg-accent-hover transition-colors disabled:opacity-50"
                   >
                     {savingLot ? 'Saving…' : 'Add lot'}
                   </button>

@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useState, useRef } from 'react';
+import { createPortal } from 'react-dom';
 import { Package, Loader2, ChevronDown } from 'lucide-react';
 
 // ─── PrintRowButton ─────────────────────────────────────────────────────────
@@ -23,8 +24,12 @@ export function PrintRowButton({
   // Smart positioning: flip the popover above the trigger when the row is
   // near the bottom of the viewport and the default below-positioning would
   // get cut off. Decided on open via getBoundingClientRect().
-  const [openAbove, setOpenAbove] = useState(false);
+  // Rendered in a portal with fixed coordinates: the items table sits inside
+  // overflow containers that would otherwise clip the popover (and scroll the
+  // row out of view on short batches).
+  const [pos, setPos] = useState<{ top: number; right: number; above: boolean } | null>(null);
   const ref = useRef<HTMLDivElement | null>(null);
+  const popoverRef = useRef<HTMLDivElement | null>(null);
   const triggerRef = useRef<HTMLButtonElement | null>(null);
 
   // Decide direction on open: flip the popover above the trigger when the row
@@ -32,21 +37,39 @@ export function PrintRowButton({
   function toggleOpen() {
     if (open) { setOpen(false); return; }
     setQty(String(defaultQty));
-    if (triggerRef.current) {
-      const rect = triggerRef.current.getBoundingClientRect();
-      const spaceBelow = window.innerHeight - rect.bottom;
-      const spaceAbove = rect.top;
-      setOpenAbove(spaceBelow < 220 && spaceAbove > spaceBelow);
-    }
+    if (!triggerRef.current) return;
+    const rect = triggerRef.current.getBoundingClientRect();
+    const spaceBelow = window.innerHeight - rect.bottom;
+    const above = spaceBelow < 220 && rect.top > spaceBelow;
+    setPos({
+      top: above ? rect.top - 4 : rect.bottom + 4,
+      right: Math.max(8, window.innerWidth - rect.right),
+      above,
+    });
     setOpen(true);
   }
 
   useEffect(() => {
+    if (!open) return;
     function onDocClick(e: MouseEvent) {
-      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+      const target = e.target as Node;
+      if (ref.current?.contains(target) || popoverRef.current?.contains(target)) return;
+      setOpen(false);
     }
-    if (open) document.addEventListener('mousedown', onDocClick);
-    return () => document.removeEventListener('mousedown', onDocClick);
+    // Fixed coordinates go stale when the page scrolls — close instead of drifting.
+    function onScroll(e: Event) {
+      if (popoverRef.current?.contains(e.target as Node)) return;
+      setOpen(false);
+    }
+    function onResize() { setOpen(false); }
+    document.addEventListener('mousedown', onDocClick);
+    window.addEventListener('scroll', onScroll, true);
+    window.addEventListener('resize', onResize);
+    return () => {
+      document.removeEventListener('mousedown', onDocClick);
+      window.removeEventListener('scroll', onScroll, true);
+      window.removeEventListener('resize', onResize);
+    };
   }, [open]);
 
   function go(action: 'print' | 'download') {
@@ -71,14 +94,18 @@ export function PrintRowButton({
         ref={triggerRef}
         onClick={toggleOpen}
         disabled={isPrinting}
-        className="p-1 text-text-tertiary hover:text-accent hover:bg-accent/10 rounded transition-colors disabled:opacity-50"
+        className="p-1 text-text-tertiary hover:text-text-primary hover:bg-bg-hover rounded transition-colors disabled:opacity-50"
         title={`Print FNSKU label (${defaultQty} unit${defaultQty === 1 ? '' : 's'})`}
       >
         {isPrinting ? <Loader2 size={14} className="animate-spin" /> : <Package size={14} />}
       </button>
-      {open && (
-        <div className={`absolute right-0 z-50 w-64 bg-bg-elevated border border-border-default rounded-md shadow-xl p-3 text-sm ${openAbove ? 'bottom-full mb-1' : 'top-full mt-1'}`}>
-          <div className="text-[11px] uppercase tracking-widest text-text-tertiary mb-2">Print FNSKU labels</div>
+      {open && pos && createPortal(
+        <div
+          ref={popoverRef}
+          style={{ position: 'fixed', top: pos.top, right: pos.right, transform: pos.above ? 'translateY(-100%)' : undefined }}
+          className="z-50 w-64 text-left bg-bg-elevated border-[1.5px] border-border-strong rounded-lg shadow-xl p-3 text-sm"
+        >
+          <div className="text-[11px] label-caps text-text-tertiary mb-2">Print FNSKU labels</div>
           <div className="flex items-center gap-2 mb-2">
             <input
               autoComplete="off"
@@ -89,7 +116,7 @@ export function PrintRowButton({
               onChange={(e) => setQty(e.target.value)}
               onKeyDown={(e) => { if (e.key === 'Enter') go('print'); }}
               autoFocus
-              className="w-20 h-8 px-2 bg-bg-surface border border-border-default rounded text-sm font-mono text-text-primary focus:outline-none focus:border-accent"
+              className="w-20 h-8 px-2 bg-bg-surface border border-border-default rounded text-sm text-text-primary focus:outline-none focus:border-link tabular-nums"
             />
             <span className="text-[11px] text-text-tertiary">label{parseInt(qty) === 1 ? '' : 's'}</span>
           </div>
@@ -97,14 +124,14 @@ export function PrintRowButton({
             <div className="flex items-center gap-1 mb-2">
               <button
                 onClick={() => setQty(String(defaultQty))}
-                className="text-[11px] px-2 py-1 bg-bg-surface border border-border-default rounded hover:bg-bg-hover transition-colors"
+                className="text-[11px] px-2 py-1 bg-bg-surface border-[1.5px] border-border-strong rounded hover:bg-bg-hover transition-colors"
                 title={`Reset to all ${defaultQty} units`}
               >
                 All ({defaultQty})
               </button>
               <button
                 onClick={() => setQty('1')}
-                className="text-[11px] px-2 py-1 bg-bg-surface border border-border-default rounded hover:bg-bg-hover transition-colors"
+                className="text-[11px] px-2 py-1 bg-bg-surface border-[1.5px] border-border-strong rounded hover:bg-bg-hover transition-colors"
                 title="Print just 1 — useful for replacing a damaged label"
               >
                 1 (replacement)
@@ -121,12 +148,13 @@ export function PrintRowButton({
             <button
               onClick={() => go('print')}
               disabled={isPrinting}
-              className="h-7 px-3 bg-accent text-white rounded text-xs font-medium hover:bg-accent/90 disabled:opacity-50 transition-colors"
+              className="h-7 px-3 bg-accent text-text-inverse rounded text-xs font-bold hover:bg-accent/90 disabled:opacity-50 transition-colors"
             >
               Print to Rollo
             </button>
           </div>
-        </div>
+        </div>,
+        document.body,
       )}
     </div>
   );
@@ -166,7 +194,7 @@ export function FnskuPrintButton({
       <button
         onClick={() => onPrint('per-sku')}
         disabled={printing}
-        className="flex items-center gap-2 h-9 pl-3 pr-2 bg-bg-elevated border border-border-default rounded-l-md border-r-0 text-sm text-text-primary hover:bg-bg-hover disabled:opacity-50 transition-colors"
+        className="flex items-center gap-2 h-9 pl-3 pr-2 bg-bg-surface border-[1.5px] border-border-strong rounded-l-md border-r-0 text-sm text-text-primary hover:bg-bg-hover disabled:opacity-50 transition-colors"
         title="Print 1 FNSKU label per unique SKU. Set the copy count at the Rollo print dialog."
       >
         {printing ? <Loader2 size={14} className="animate-spin" /> : <Package size={14} />}
@@ -175,14 +203,14 @@ export function FnskuPrintButton({
       <button
         onClick={() => setOpen((o) => !o)}
         disabled={printing}
-        className="flex items-center justify-center h-9 px-1.5 bg-bg-elevated border border-border-default rounded-r-md text-sm text-text-secondary hover:bg-bg-hover disabled:opacity-50 transition-colors"
+        className="flex items-center justify-center h-9 px-1.5 bg-bg-surface border-[1.5px] border-border-strong rounded-r-md text-sm text-text-secondary hover:bg-bg-hover disabled:opacity-50 transition-colors"
         title="More label options"
         aria-label="More options"
       >
         <ChevronDown size={14} />
       </button>
       {open && (
-        <div className="absolute right-0 top-full mt-1 z-50 w-64 bg-bg-elevated border border-border-default rounded-md shadow-xl py-1 text-sm">
+        <div className="absolute right-0 top-full mt-1 z-50 w-64 bg-bg-elevated border-[1.5px] border-border-strong rounded-lg shadow-xl py-1 text-sm">
           <button
             onClick={() => { setOpen(false); onPrint('per-unit'); }}
             className="w-full text-left px-3 py-2 hover:bg-bg-hover transition-colors"

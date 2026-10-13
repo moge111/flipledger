@@ -32,38 +32,38 @@ export function BatchItemRow({ item, onRemove, onPrintLabel, onEdit, onSaveQty, 
   const receiveProgress = getReceiveProgress(item);
 
   return (
-    <div className="flex items-center gap-3 px-4 py-3 rounded-lg border border-border-subtle border-l-2 border-l-green-500/40">
+    <div className="flex items-center gap-3 px-4 py-3 rounded-lg border border-border-subtle border-l-2 border-l-positive/40">
 
       {/* Zone 1 — image */}
       {item.image_url
         ? (
             <button type="button" onClick={onImageClick}
-              className="shrink-0 rounded-lg overflow-hidden bg-white border border-border-subtle hover:ring-2 hover:ring-blue-500/40 transition-shadow"
+              className="shrink-0 rounded-lg overflow-hidden bg-white border border-border-subtle hover:ring-2 hover:ring-link/40 transition-shadow"
               title="View larger">
               <img src={item.image_url} alt="" className="w-20 h-20 object-contain block p-1.5" />
             </button>
           )
-        : <div className="w-20 h-20 bg-slate-700/40 rounded-lg shrink-0 flex items-center justify-center"><Package size={22} className="text-text-tertiary/40" /></div>}
+        : <div className="w-20 h-20 bg-bg-active rounded-lg shrink-0 flex items-center justify-center"><Package size={22} className="text-text-tertiary/40" /></div>}
 
       {/* Zone 2 — product identity (flex-1, truncates): name + ASIN + MSKU + channel */}
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-1.5">
-          <CheckCircle2 size={15} className="text-green-400 shrink-0" />
+          <CheckCircle2 size={15} className="text-positive shrink-0" />
           <span className="text-base font-medium text-text-primary truncate" title={item.product_name ?? item.asin}>
             {item.product_name || item.asin}
           </span>
         </div>
         <div className="flex items-center gap-2 mt-1.5">
-          <AsinLink asin={item.asin} className="font-mono text-sm text-blue-400/80 shrink-0 hover:text-blue-300 hover:underline" />
+          <AsinLink asin={item.asin} className="font-mono text-sm text-link/80 shrink-0 hover:text-link hover:underline" />
           <ChannelBadge channel={item.fulfillment_channel} />
         </div>
-        <MskuLink sku={item.sku} className="font-mono text-xs text-blue-400/80 truncate block mt-0.5 hover:text-blue-300 hover:underline" />
+        <MskuLink sku={item.sku} className="font-mono text-xs text-link/80 truncate block mt-0.5 hover:text-link hover:underline" />
       </div>
 
       {/* Zone 4 — Qty (w-32 fixed): InlineQtyEdit + optional receive progress */}
       <div className="w-32 shrink-0 flex flex-col items-start gap-0.5 overflow-hidden">
         {locked
-          ? <span className="font-mono text-base text-text-primary px-1">{savedQty}</span>
+          ? <span className="text-base text-text-primary px-1 tabular-nums">{savedQty}</span>
           : <InlineQtyEdit value={savedQty} onSave={onSaveQty} forceOpen={focusQty} onOpened={onQtyFocused} />}
         {receiveProgress && <ReceiveProgressBar progress={receiveProgress} variant="compact" />}
       </div>
@@ -71,22 +71,22 @@ export function BatchItemRow({ item, onRemove, onPrintLabel, onEdit, onSaveQty, 
       {/* Zone 5 — COGS (w-20 right): buy price per unit, to verify the import */}
       <div className="w-20 shrink-0 text-right">
         {savedCogs != null
-          ? <span className="font-mono text-base text-text-secondary">{formatCurrency(savedCogs)}</span>
+          ? <span className="text-base text-text-secondary tabular-nums">{formatCurrency(savedCogs)}</span>
           : <span className="text-text-tertiary/30">—</span>}
       </div>
 
       {/* Zone 6 — List price (w-20 right) */}
       <div className="w-20 shrink-0 text-right">
         {savedPrice != null
-          ? <span className="font-mono text-base text-text-primary">{formatCurrency(savedPrice)}</span>
+          ? <span className="text-base text-text-primary tabular-nums">{formatCurrency(savedPrice)}</span>
           : <span className="text-text-tertiary/30">—</span>}
       </div>
 
       {/* Zone 7 — Actions (w-24 fixed, right-aligned) */}
       <div className="w-24 shrink-0 flex items-center justify-end">
-        <button onClick={onShowDetail} className="p-1 text-text-tertiary/60 hover:text-blue-400 rounded transition-colors" title="View details"><Info size={13} /></button>
-        <button onClick={onPrintLabel} className="p-1 text-text-tertiary/60 hover:text-blue-400 rounded transition-colors" title="Print ASIN label"><Printer size={13} /></button>
-        {!locked && <button onClick={onEdit} className="p-1 text-text-tertiary/60 hover:text-blue-400 rounded transition-colors" title="Edit (reopens this card)"><Pencil size={13} /></button>}
+        <button onClick={onShowDetail} className="p-1 text-text-tertiary/60 hover:text-link rounded transition-colors" title="View details"><Info size={13} /></button>
+        <button onClick={onPrintLabel} className="p-1 text-text-tertiary/60 hover:text-link rounded transition-colors" title="Print ASIN label"><Printer size={13} /></button>
+        {!locked && <button onClick={onEdit} className="p-1 text-text-tertiary/60 hover:text-link rounded transition-colors" title="Edit (reopens this card)"><Pencil size={13} /></button>}
         {!locked && <button onClick={onRemove} className="p-1 text-text-tertiary/40 hover:text-text-tertiary rounded" title="Remove"><X size={13} /></button>}
       </div>
     </div>

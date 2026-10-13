@@ -29,6 +29,7 @@
 import { getAccessToken, getEndpoint, fetchWithRetry } from './auth';
 import { downloadReport } from './reports';
 import type { SPAPICredentials } from './types';
+import type Database from 'better-sqlite3';
 import { openDb } from '@/lib/db-conn';
 import { createLogger } from '@/lib/log';
 
@@ -210,13 +211,9 @@ export function parseCustomerReturnsReport(tsv: string): CustomerReturnRow[] {
 }
 
 /**
- * Full sync: request the report, wait, download, parse, UPDATE our refunds
- * rows' `reason` column. Returns counts for the sync_log / API response.
- *
- * Match strategy:
- *   - Primary: (order_id + sku) — exact, since refunds are unique per SKU per order
- *   - Fallback: (order_id + asin) — when the refund was synced without a sku
- *   - Fallback: order_id only — if there's exactly one refund row for the order
+ * Full sync: request the report, wait, download, parse, then store the rows
+ * and UPDATE our refunds rows' `reason` (applyCustomerReturnRows). Returns
+ * counts for the sync_log / API response.
  *
  * Match dates don't need to line up — the report's return-date may be a few
  * days off from our refund_date (posted_date of the adjustment event).
@@ -245,81 +242,15 @@ export async function syncFbaCustomerReturns(
   const rows = parseCustomerReturnsReport(tsv);
   log.info(`Parsed ${rows.length} return rows`);
 
-  // 4. UPDATE matching refunds
+  // 4. Store every row + UPDATE matching refunds
   const db = getDb();
-  let refundsMatched = 0;
-  let refundsUpdated = 0;
-  let unmatched = 0;
-  const reasonBreakdown: Record<string, number> = {};
-
+  let applied: ReturnType<typeof applyCustomerReturnRows>;
   try {
-    const findBySkuStmt = db.prepare(
-      `SELECT id, reason, item_returned as itemReturned FROM refunds WHERE order_id = ? AND sku = ? AND marketplace = 'amazon'`
-    );
-    const findByAsinStmt = db.prepare(
-      `SELECT id, reason, item_returned as itemReturned FROM refunds WHERE order_id = ? AND asin = ? AND marketplace = 'amazon' AND asin != ''`
-    );
-    const findByOrderOnlyStmt = db.prepare(
-      `SELECT id, reason, item_returned as itemReturned FROM refunds WHERE order_id = ? AND marketplace = 'amazon'`
-    );
-    const updateStmt = db.prepare(
-      `UPDATE refunds SET reason = ?, item_returned = ? WHERE id = ?`
-    );
-
-    type RefundMatch = { id: number; reason: string; itemReturned: number };
-
-    const tx = db.transaction(() => {
-      for (const row of rows) {
-        if (!row.orderId) continue;
-
-        // Tally the reason regardless of whether we match — useful diagnostic
-        reasonBreakdown[row.reason] = (reasonBreakdown[row.reason] || 0) + 1;
-
-        // detailed-disposition tells us whether the returned unit went back
-        // to fulfillable stock. SELLABLE → the unit will be resold, so its
-        // COGS should follow it to that future sale, not be a loss on this
-        // refund (item_returned = 1). Anything else (CUSTOMER_DAMAGED,
-        // DEFECTIVE, CARRIER_DAMAGED, ...) → the unit is gone, COGS stays a
-        // loss (item_returned = 0); Amazon typically issues a reimbursement
-        // for those, which offsets it elsewhere.
-        const itemReturned = row.detailedDisposition === 'SELLABLE' ? 1 : 0;
-
-        // Try SKU first (exact match)
-        let matches = row.sku
-          ? (findBySkuStmt.all(row.orderId, row.sku) as RefundMatch[])
-          : [];
-
-        // Fall back to ASIN
-        if (matches.length === 0 && row.asin) {
-          matches = findByAsinStmt.all(row.orderId, row.asin) as RefundMatch[];
-        }
-
-        // Last resort: only match if there's exactly one refund for the order
-        if (matches.length === 0) {
-          const candidates = findByOrderOnlyStmt.all(row.orderId) as RefundMatch[];
-          if (candidates.length === 1) matches = candidates;
-        }
-
-        if (matches.length === 0) {
-          unmatched++;
-          continue;
-        }
-
-        refundsMatched += matches.length;
-        for (const m of matches) {
-          // Only UPDATE if reason or item_returned would actually change —
-          // keeps the transaction small on re-runs
-          if (m.reason !== row.reason || m.itemReturned !== itemReturned) {
-            updateStmt.run(row.reason, itemReturned, m.id);
-            refundsUpdated++;
-          }
-        }
-      }
-    });
-    tx();
+    applied = applyCustomerReturnRows(db, rows);
   } finally {
     db.close();
   }
+  const { refundsMatched, refundsUpdated, unmatched, reasonBreakdown } = applied;
 
   return {
     reportRows: rows.length,
@@ -328,4 +259,111 @@ export async function syncFbaCustomerReturns(
     unmatched,
     reasonBreakdown,
   };
+}
+
+/**
+ * Write one report's rows: every row goes into fba_customer_returns (so a
+ * return with NO refund — the free-replacement case — is still on record for
+ * FIFO and the replacement detector), and each row's reason + disposition is
+ * copied onto the matching refund.
+ *
+ * Match strategy for refunds:
+ *   - Primary: (order_id + sku) — exact, since refunds are unique per SKU per order
+ *   - Fallback: (order_id + asin) — when the refund was synced without a sku
+ *   - Fallback: order_id only — if there's exactly one refund row for the order
+ */
+export function applyCustomerReturnRows(
+  db: Database.Database,
+  rows: CustomerReturnRow[]
+): { refundsMatched: number; refundsUpdated: number; unmatched: number; returnsStored: number; reasonBreakdown: Record<string, number> } {
+  let refundsMatched = 0;
+  let refundsUpdated = 0;
+  let unmatched = 0;
+  let returnsStored = 0;
+  const reasonBreakdown: Record<string, number> = {};
+
+  const findBySkuStmt = db.prepare(
+    `SELECT id, reason, item_returned as itemReturned FROM refunds WHERE order_id = ? AND sku = ? AND marketplace = 'amazon'`
+  );
+  const findByAsinStmt = db.prepare(
+    `SELECT id, reason, item_returned as itemReturned FROM refunds WHERE order_id = ? AND asin = ? AND marketplace = 'amazon' AND asin != ''`
+  );
+  const findByOrderOnlyStmt = db.prepare(
+    `SELECT id, reason, item_returned as itemReturned FROM refunds WHERE order_id = ? AND marketplace = 'amazon'`
+  );
+  const updateStmt = db.prepare(
+    `UPDATE refunds SET reason = ?, item_returned = ? WHERE id = ?`
+  );
+  const upsertReturnStmt = db.prepare(`
+    INSERT INTO fba_customer_returns
+      (order_id, sku, asin, return_date, quantity, disposition, reason, fulfillment_center_id, license_plate_number)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(order_id, sku, return_date, license_plate_number) DO UPDATE SET
+      quantity = excluded.quantity,
+      disposition = excluded.disposition,
+      reason = excluded.reason,
+      fulfillment_center_id = excluded.fulfillment_center_id
+  `);
+
+  type RefundMatch = { id: number; reason: string; itemReturned: number };
+
+  const tx = db.transaction(() => {
+    for (const row of rows) {
+      if (!row.orderId) continue;
+
+      // Tally the reason regardless of whether we match — useful diagnostic
+      reasonBreakdown[row.reason] = (reasonBreakdown[row.reason] || 0) + 1;
+
+      if (row.returnDate) {
+        upsertReturnStmt.run(
+          row.orderId, row.sku || '', row.asin || null, row.returnDate, row.quantity || 1,
+          row.detailedDisposition, row.reason, row.fulfillmentCenterId, row.licensePlateNumber || ''
+        );
+        returnsStored++;
+      }
+
+      // detailed-disposition tells us whether the returned unit went back
+      // to fulfillable stock. SELLABLE → the unit will be resold, so its
+      // COGS should follow it to that future sale, not be a loss on this
+      // refund (item_returned = 1). Anything else (CUSTOMER_DAMAGED,
+      // DEFECTIVE, CARRIER_DAMAGED, ...) → the unit is gone, COGS stays a
+      // loss (item_returned = 0); Amazon typically issues a reimbursement
+      // for those, which offsets it elsewhere.
+      const itemReturned = row.detailedDisposition === 'SELLABLE' ? 1 : 0;
+
+      // Try SKU first (exact match)
+      let matches = row.sku
+        ? (findBySkuStmt.all(row.orderId, row.sku) as RefundMatch[])
+        : [];
+
+      // Fall back to ASIN
+      if (matches.length === 0 && row.asin) {
+        matches = findByAsinStmt.all(row.orderId, row.asin) as RefundMatch[];
+      }
+
+      // Last resort: only match if there's exactly one refund for the order
+      if (matches.length === 0) {
+        const candidates = findByOrderOnlyStmt.all(row.orderId) as RefundMatch[];
+        if (candidates.length === 1) matches = candidates;
+      }
+
+      if (matches.length === 0) {
+        unmatched++;
+        continue;
+      }
+
+      refundsMatched += matches.length;
+      for (const m of matches) {
+        // Only UPDATE if reason or item_returned would actually change —
+        // keeps the transaction small on re-runs
+        if (m.reason !== row.reason || m.itemReturned !== itemReturned) {
+          updateStmt.run(row.reason, itemReturned, m.id);
+          refundsUpdated++;
+        }
+      }
+    }
+  });
+  tx();
+
+  return { refundsMatched, refundsUpdated, unmatched, returnsStored, reasonBreakdown };
 }

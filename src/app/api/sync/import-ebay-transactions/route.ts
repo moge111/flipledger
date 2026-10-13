@@ -2,12 +2,14 @@
  * Import eBay "Transaction report" CSV exports
  * (Seller Hub → Payments → Reports → Transaction report).
  *
- * WHY THIS EXISTS: eBay's Finances API (sell/finances/v1/*) returns 404 for this
- * account — the Application Growth Check has never been approved (re-verified
- * live Aug 25, 2026: the Fulfillment API returns 200 with the same token while
- * every Finances endpoint 404s). The regular eBay sync therefore only captures
- * what the Fulfillment API exposes: item revenue, buyer-paid shipping, and
- * `totalMarketplaceFee` (which is Final Value + international fees ONLY).
+ * MANUAL FALLBACK ONLY since Sept 23 2026. The same costs now sync daily from
+ * the eBay Finances API (src/lib/ebay-api/payoutCosts.ts). That API had
+ * "404'd" since April 2025 only because it was called on api.ebay.com; it is
+ * served from apiz.ebay.com. Both paths write through applyEbayPayoutCosts, so
+ * running this importer over the API's window is harmless (each replaces the
+ * window it covers). The regular eBay sync reads the Fulfillment API, which
+ * carries item revenue, buyer-paid shipping, and `totalMarketplaceFee` (Final
+ * Value + international fees ONLY).
  *
  * Three real costs live exclusively on eBay's payout side and were missing from
  * the books entirely:
@@ -37,9 +39,10 @@ import { NextResponse } from 'next/server';
 import path from 'path';
 import fs from 'fs';
 import { openDb } from '@/lib/db-conn';
+import { applyEbayPayoutCosts, addPayoutFee, addPayoutLabel, PAYOUT_FEE_EVENT, type PayoutCosts } from '@/lib/ebay-api/payoutCosts';
 
 const DIR = path.join(process.cwd(), 'data', 'ebay-transactions');
-const EVENT_TYPE = 'EbayTransactionReportFee';
+const EVENT_TYPE = PAYOUT_FEE_EVENT;
 
 /** eBay's free-text Description → our fee_type / fee_category. Prefix-matched. */
 const FEE_MAP: { match: RegExp; feeType: string; feeCategory: string }[] = [
@@ -127,8 +130,7 @@ export async function POST() {
   }
 
   // ── Parse ────────────────────────────────────────────────────────────────
-  const labelByOrder = new Map<string, { cents: number; count: number; date: string }>();
-  const feeAgg = new Map<string, { date: string; feeType: string; feeCategory: string; cents: number; count: number }>();
+  const rows: { date: string; kind: 'label' | 'fee'; order?: string; cents: number; fee?: { feeType: string; feeCategory: string } }[] = [];
   const skipped: Record<string, number> = {};
   const parsedFiles: { file: string; rows: number }[] = [];
   let minDate = '', maxDate = '', badDates = 0;
@@ -146,24 +148,16 @@ export async function POST() {
 
       if (type === 'Shipping label') {
         const order = (r['Order number'] ?? '').trim();
-        // Net amount is signed: negative = label purchased, POSITIVE = label voided
-        // (a refund of a label you bought and cancelled). Negate so a purchase
-        // becomes a positive cost and a void nets back out of the same order.
-        // Do NOT use Math.abs() here — it books voided labels as extra cost.
+        // Net amount is signed: negative = label purchased, POSITIVE = label voided.
+        // Negate so a purchase is a positive cost and a void nets back out of the
+        // same order. Do NOT use Math.abs(): it books voided labels as extra cost.
         const cents = -toCents(r['Net amount']);
         if (!order || order === '--' || cents === 0) { skipped['Shipping label (no order/zero)'] = (skipped['Shipping label (no order/zero)'] ?? 0) + 1; continue; }
-        const cur = labelByOrder.get(order);
-        // An order can legitimately have >1 label (reship, multi-package) — sum them.
-        if (cur) { cur.cents += cents; cur.count += 1; }
-        else labelByOrder.set(order, { cents, count: 1, date });
+        rows.push({ date, kind: 'label', order, cents });
       } else if (type === 'Other fee') {
         const cents = toCents(r['Net amount']); // already signed: negative = charge
         if (cents === 0) { skipped['Other fee (zero)'] = (skipped['Other fee (zero)'] ?? 0) + 1; continue; }
-        const { feeType, feeCategory } = classifyFee((r['Description'] ?? '').trim());
-        const key = `${feeType}|${date}`;
-        const cur = feeAgg.get(key);
-        if (cur) { cur.cents += cents; cur.count += 1; }
-        else feeAgg.set(key, { date, feeType, feeCategory, cents, count: 1 });
+        rows.push({ date, kind: 'fee', cents, fee: classifyFee((r['Description'] ?? '').trim()) });
       } else {
         skipped[type || '(blank)'] = (skipped[type || '(blank)'] ?? 0) + 1;
       }
@@ -173,86 +167,28 @@ export async function POST() {
   if (!minDate) {
     return NextResponse.json({ error: 'No dated rows parsed — is this an eBay Transaction report?' }, { status: 400 });
   }
-  // Exclusive upper bound for date() comparisons.
   const maxDateNext = new Date(new Date(maxDate + 'T00:00:00Z').getTime() + 86400000).toISOString().slice(0, 10);
+  const pc: PayoutCosts = { source: 'ebay-transaction-report', fromDate: minDate, throughDate: maxDate, labelByOrder: new Map(), fees: new Map() };
+  for (const row of rows) {
+    if (row.kind === 'label') addPayoutLabel(pc, row.order!, row.cents);
+    else addPayoutFee(pc, row.date, row.fee!, row.cents);
+  }
 
   // ── Write ────────────────────────────────────────────────────────────────
   const db = openDb();
-  db.pragma('journal_mode = WAL');
   const now = new Date().toISOString();
-
-  let labelsApplied = 0, labelCents = 0;
-  const ordersNotFound: string[] = [];
-  let feeRows = 0, feeCents = 0, priorFeesRemoved = 0, priorEventsRemoved = 0;
-
+  let applied;
   try {
-    const apply = db.transaction(() => {
-      // 1. Clear this window's prior import (children first), bounded to [minDate, maxDate].
-      const priorEvents = db.prepare(`
-        SELECT id FROM financial_events
-        WHERE event_type = ? AND date(posted_date) >= ? AND date(posted_date) < ?
-      `).all(EVENT_TYPE, minDate, maxDateNext) as { id: number }[];
-      if (priorEvents.length) {
-        const ids = priorEvents.map((e) => e.id);
-        const ph = ids.map(() => '?').join(',');
-        priorFeesRemoved = db.prepare(`DELETE FROM fee_details WHERE financial_event_id IN (${ph})`).run(...ids).changes;
-        priorEventsRemoved = db.prepare(`DELETE FROM financial_events WHERE id IN (${ph})`).run(...ids).changes;
-      }
-
-      // 2. Shipping labels → order_items.shipping_cost.
-      //    Reset ONLY the orders this file covers, so a re-run converges and we
-      //    can never zero out an order the CSV says nothing about.
-      const findItem = db.prepare(`
-        SELECT MIN(oi.id) AS id FROM order_items oi
-        JOIN orders o ON o.order_id = oi.order_id
-        WHERE oi.order_id = ? AND o.marketplace = 'ebay'
-      `);
-      const zeroOrder = db.prepare(`UPDATE order_items SET shipping_cost = 0 WHERE order_id = ?`);
-      const setCost = db.prepare(`UPDATE order_items SET shipping_cost = ? WHERE id = ?`);
-
-      for (const [order, info] of labelByOrder) {
-        const row = findItem.get(order) as { id: number | null } | undefined;
-        if (!row?.id) { ordersNotFound.push(order); continue; }
-        // Multi-item orders: put the whole label cost on the lowest-id line only.
-        // Spreading it across every line multiplies it in every SUM (the June 9,
-        // 2026 audit found exactly this bug on the Amazon side).
-        // Voids can in principle exceed purchases for an order; never store a
-        // negative shipping cost (it would read as income in every SUM).
-        const cost = Math.max(0, info.cents);
-        zeroOrder.run(order);
-        setCost.run(cost, row.id);
-        labelsApplied++; labelCents += cost;
-      }
-
-      // 3. Promoted-listing / insertion / other fees → order-less service fees.
-      //    order_id NULL so the P&L picks them up via its serviceFees query,
-      //    which scopes by financial_events.marketplace.
-      const insEvent = db.prepare(`
-        INSERT INTO financial_events (event_type, posted_date, order_id, asin, sku, marketplace, total_amount, raw_data, created_at)
-        VALUES (?, ?, NULL, NULL, NULL, 'ebay', ?, ?, ?)
-      `);
-      const insFee = db.prepare(`
-        INSERT OR IGNORE INTO fee_details (financial_event_id, order_id, asin, fee_type, fee_category, amount, posted_date)
-        VALUES (?, NULL, NULL, ?, ?, ?, ?)
-      `);
-      for (const f of feeAgg.values()) {
-        const res = insEvent.run(EVENT_TYPE, f.date, f.cents, JSON.stringify({ source: 'ebay-transaction-report', feeType: f.feeType, rowsAggregated: f.count }), now);
-        const evId = Number(res.lastInsertRowid);
-        const fr = insFee.run(evId, f.feeType, f.feeCategory, f.cents, f.date);
-        if (fr.changes > 0) { feeRows++; feeCents += f.cents; }
-        else db.prepare(`DELETE FROM financial_events WHERE id = ?`).run(evId); // never leave a childless event
-      }
-
-      db.prepare(`
-        INSERT INTO sync_log (sync_type, started_at, completed_at, records_fetched, status)
-        VALUES ('ebay-transaction-report', ?, ?, ?, 'success')
-      `).run(now, new Date().toISOString(), labelsApplied + feeRows);
-    });
-    apply();
+    applied = applyEbayPayoutCosts(db, pc, now);
+    db.prepare(`
+      INSERT INTO sync_log (sync_type, started_at, completed_at, records_fetched, status)
+      VALUES ('ebay-transaction-report', ?, ?, ?, 'success')
+    `).run(now, new Date().toISOString(), applied.labelsApplied + applied.feeRows);
   } catch (err: any) {
     db.close();
     return NextResponse.json({ error: `Import failed: ${err.message}` }, { status: 500 });
   }
+  const { labelsApplied, labelCents, ordersNotFound, feeRows, feeCents, priorEventsRemoved, priorFeesRemoved } = applied;
 
   // ── Report ───────────────────────────────────────────────────────────────
   const byType = db.prepare(`

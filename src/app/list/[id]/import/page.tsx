@@ -170,7 +170,7 @@ export default function BatchImportPage({ params }: { params: Promise<{ id: stri
           <span>/</span>
           <span>Import buy list</span>
         </div>
-        <h1 className="text-xl font-semibold tracking-tight">Import Buy List</h1>
+        <h1 className="page-title">Import Buy List</h1>
         <p className="text-sm text-text-tertiary mt-0.5">
           {preview
             ? <>Upload a CSV to add items into <span className="text-text-secondary font-medium">{preview.batch.name}</span> ({preview.batch.channel}).</>
@@ -181,7 +181,7 @@ export default function BatchImportPage({ params }: { params: Promise<{ id: stri
       <FileDropper filename={filename} onFile={handleFile} />
 
       {previewError && (
-        <div className="mt-4 rounded-lg border border-negative/30 bg-negative/10 px-4 py-3 text-sm text-negative flex items-start gap-2">
+        <div className="mt-4 flash flash-bad px-4 py-3 text-sm text-negative flex items-start gap-2">
           <AlertCircle className="w-4 h-4 mt-0.5 shrink-0" />
           <span>{previewError}</span>
         </div>
@@ -194,7 +194,7 @@ export default function BatchImportPage({ params }: { params: Promise<{ id: stri
 
           <div className="space-y-5">
             {preview.globalErrors.length > 0 && (
-              <div className="rounded-lg border border-negative/30 bg-negative/10 px-4 py-3 text-sm text-negative">
+              <div className="flash flash-bad px-4 py-3 text-sm text-negative">
                 <div className="font-semibold mb-1">Column mapping incomplete</div>
                 <ul className="list-disc list-inside space-y-0.5">
                   {preview.globalErrors.map((e, i) => <li key={i}>{e}</li>)}
@@ -211,7 +211,7 @@ export default function BatchImportPage({ params }: { params: Promise<{ id: stri
               onMode={setMode} onToggleSkip={toggleSkip} />
 
             {importError && (
-              <div className="rounded-lg border border-negative/30 bg-negative/10 px-4 py-3 text-sm text-negative">
+              <div className="flash flash-bad px-4 py-3 text-sm text-negative">
                 <div className="font-semibold mb-1">Import blocked</div>
                 <div className="text-negative/90">{importError}</div>
                 {duplicateSkus.length > 0 && (
@@ -222,7 +222,7 @@ export default function BatchImportPage({ params }: { params: Promise<{ id: stri
               </div>
             )}
 
-            <div className="rounded-lg border border-border-subtle bg-bg-surface px-4 py-3 flex items-center justify-between gap-4">
+            <div className="panel px-4 py-3 flex items-center justify-between gap-4">
               <div className="text-xs text-text-tertiary">
                 {activeErrors > 0
                   ? `Fix or skip ${activeErrors} row error${activeErrors === 1 ? '' : 's'} before importing.`
@@ -236,7 +236,7 @@ export default function BatchImportPage({ params }: { params: Promise<{ id: stri
                 onClick={handleImport}
                 className={
                   'inline-flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium transition-colors ' +
-                  (canImport ? 'bg-accent text-white hover:bg-accent-hover' : 'bg-bg-elevated text-text-tertiary cursor-not-allowed')
+                  (canImport ? 'bg-accent text-text-inverse hover:bg-accent-hover' : 'bg-bg-elevated text-text-tertiary cursor-not-allowed')
                 }
               >
                 {importing ? <Loader2 className="w-4 h-4 animate-spin" /> : null}
@@ -281,9 +281,9 @@ function MappingPanel({
   headers, mapping, onChange,
 }: { headers: string[]; mapping: ColumnMapping; onChange: (key: FieldKey, header: string | null) => void }) {
   return (
-    <div className="rounded-lg border border-border-subtle bg-bg-surface h-fit">
+    <div className="panel h-fit">
       <div className="px-4 py-3 border-b border-border-subtle">
-        <div className="text-xs uppercase tracking-wide text-text-tertiary font-medium">Column mapping</div>
+        <div className="text-xs label-caps text-text-tertiary">Column mapping</div>
       </div>
       <ul className="px-2 py-2 text-sm space-y-1">
         {FIELD_KEYS.map(key => (
@@ -292,7 +292,7 @@ function MappingPanel({
             <select
               value={mapping[key] ?? ''}
               onChange={e => onChange(key, e.target.value || null)}
-              className="max-w-[150px] text-xs font-mono bg-bg-elevated border border-border-subtle rounded px-1.5 py-1 text-text-primary"
+              className="max-w-[150px] text-xs bg-bg-elevated border border-border-subtle rounded px-1.5 py-1 text-text-primary tabular-nums"
             >
               <option value="">—</option>
               {headers.map(h => <option key={h} value={h}>{h}</option>)}
@@ -317,12 +317,12 @@ function SummaryCards({
   return (
     <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
       {cells.map((c, i) => (
-        <div key={i} className="rounded-lg border border-border-subtle bg-bg-surface px-3 py-2.5">
-          <div className="text-[10px] uppercase tracking-wide font-medium text-text-tertiary flex items-center gap-1">
+        <div key={i} className="panel px-3 py-2.5">
+          <div className="text-[10px] label-caps text-text-tertiary flex items-center gap-1">
             {c.label}
             {loading && i === 0 && <RefreshCw className="w-3 h-3 animate-spin" />}
           </div>
-          <div className={'font-mono font-semibold tabular-nums text-lg mt-0.5 ' + (c.tone === 'negative' ? 'text-negative' : 'text-text-primary')}>
+          <div className={'font-semibold tabular-nums text-lg mt-0.5 ' + (c.tone === 'negative' ? 'text-negative' : 'text-text-primary')}>
             {c.value}
           </div>
         </div>
@@ -339,26 +339,26 @@ function PreviewTable({
   onToggleSkip: (rowIndex: number) => void;
 }) {
   return (
-    <div className="rounded-lg border border-border-subtle bg-bg-surface overflow-hidden">
-      <div className="px-4 py-3 border-b border-border-subtle flex items-center justify-between">
-        <div className="text-xs uppercase tracking-wide text-text-tertiary font-medium">Preview</div>
-        <div className="text-xs text-text-tertiary">{rows.length} row{rows.length === 1 ? '' : 's'}</div>
+    <div className="panel overflow-hidden">
+      <div className="panel-bar">
+        <span>Preview</span>
+        <span className="panel-bar-caption">{rows.length} row{rows.length === 1 ? '' : 's'}</span>
       </div>
       <div className="overflow-x-auto">
         <table className="w-full text-sm">
           <thead>
-            <tr className="bg-bg-elevated text-[10px] uppercase tracking-wide text-text-tertiary font-medium">
-              <th className="text-left px-3 py-2 font-medium">Status</th>
-              <th className="text-left px-3 py-2 font-medium">MSKU</th>
-              <th className="text-left px-3 py-2 font-medium">ASIN</th>
-              <th className="text-left px-3 py-2 font-medium">Product</th>
-              <th className="text-right px-3 py-2 font-medium">Qty</th>
-              <th className="text-right px-3 py-2 font-medium">Cost</th>
-              <th className="text-right px-3 py-2 font-medium">List</th>
-              <th className="text-left px-3 py-2 font-medium">Existing</th>
-              {!isMfn && <th className="text-left px-3 py-2 font-medium">Action</th>}
-              <th className="text-left px-3 py-2 font-medium">Notes</th>
-              <th className="text-center px-3 py-2 font-medium">Skip</th>
+            <tr className="bg-bg-surface text-[10px] label-caps text-text-tertiary">
+              <th className="text-left px-3 py-2">Status</th>
+              <th className="text-left px-3 py-2">MSKU</th>
+              <th className="text-left px-3 py-2">ASIN</th>
+              <th className="text-left px-3 py-2">Product</th>
+              <th className="text-right px-3 py-2">Qty</th>
+              <th className="text-right px-3 py-2">Cost</th>
+              <th className="text-right px-3 py-2">List</th>
+              <th className="text-left px-3 py-2">Existing</th>
+              {!isMfn && <th className="text-left px-3 py-2">Action</th>}
+              <th className="text-left px-3 py-2">Notes</th>
+              <th className="text-center px-3 py-2">Skip</th>
             </tr>
           </thead>
           <tbody>
@@ -384,9 +384,9 @@ function PreviewTable({
                   <td className="px-3 py-2 align-top text-text-secondary max-w-[220px]">
                     <div className="truncate" title={row.productName}>{row.productName || <span className="text-text-tertiary">—</span>}</div>
                   </td>
-                  <td className="px-3 py-2 align-top text-right font-mono tabular-nums text-text-primary">{row.quantity || <span className="text-text-tertiary">—</span>}</td>
-                  <td className="px-3 py-2 align-top text-right font-mono tabular-nums text-text-primary">{row.costCents ? formatCurrency(row.costCents) : <span className="text-text-tertiary">—</span>}</td>
-                  <td className="px-3 py-2 align-top text-right font-mono tabular-nums text-text-primary">{row.listPriceCents ? formatCurrency(row.listPriceCents) : <span className="text-text-tertiary">—</span>}</td>
+                  <td className="px-3 py-2 align-top text-right tabular-nums text-text-primary">{row.quantity || <span className="text-text-tertiary">—</span>}</td>
+                  <td className="px-3 py-2 align-top text-right tabular-nums text-text-primary">{row.costCents ? formatCurrency(row.costCents) : <span className="text-text-tertiary">—</span>}</td>
+                  <td className="px-3 py-2 align-top text-right tabular-nums text-text-primary">{row.listPriceCents ? formatCurrency(row.listPriceCents) : <span className="text-text-tertiary">—</span>}</td>
                   <td className="px-3 py-2 align-top text-xs">
                     {row.existsBySku ? (
                       <span className="text-warning">MSKU exists</span>

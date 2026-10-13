@@ -57,14 +57,14 @@ export default function InventoryValuationPage() {
           <div className="min-w-[200px]">
             <div className="text-sm text-text-primary truncate max-w-[280px]">
               {listingUrl ? (
-                <a href={listingUrl} target="_blank" rel="noopener noreferrer" className="hover:text-accent transition-colors">{r.productName || r.asin}</a>
+                <a href={listingUrl} target="_blank" rel="noopener noreferrer" className="hover:text-link transition-colors">{r.productName || r.asin}</a>
               ) : (
                 r.productName || r.asin
               )}
             </div>
             <div className="text-xs text-text-tertiary font-mono">
               {isAmazon && r.asin ? (
-                <a href={`https://www.amazon.com/dp/${r.asin}`} target="_blank" rel="noopener noreferrer" className="hover:text-accent">{r.asin}</a>
+                <a href={`https://www.amazon.com/dp/${r.asin}`} target="_blank" rel="noopener noreferrer" className="hover:text-link">{r.asin}</a>
               ) : r.asin}{' | '}{r.sku}
             </div>
           </div>
@@ -76,13 +76,13 @@ export default function InventoryValuationPage() {
       id: 'salesRank', header: 'BSR', accessorKey: 'salesRank',
       cell: ({ row }) => {
         const r = row.original;
-        if (r.salesRank === null) return <span className="font-mono text-text-tertiary">—</span>;
+        if (r.salesRank === null) return <span className="text-text-tertiary tabular-nums">—</span>;
         const delta = r.rankDelta7d;
         // Lower rank number = better. Negative delta = improving (good, green). Positive = worsening (red).
         const deltaColor = delta === null ? 'text-text-tertiary' : delta < 0 ? 'text-positive' : delta > 0 ? 'text-negative' : 'text-text-tertiary';
         const deltaPrefix = delta === null ? '' : delta < 0 ? '↑' : delta > 0 ? '↓' : '·';
         return (
-          <div className="font-mono text-sm leading-tight">
+          <div className="text-sm leading-tight tabular-nums">
             <div className="text-text-primary">#{formatNumber(r.salesRank)}</div>
             {delta !== null && (
               <div className={`text-[10px] ${deltaColor}`} title={`${delta > 0 ? '+' : ''}${formatNumber(delta)} vs 7d ago${r.rankDelta30d !== null ? ` · ${r.rankDelta30d > 0 ? '+' : ''}${formatNumber(r.rankDelta30d)} vs 30d` : ''}`}>
@@ -93,15 +93,15 @@ export default function InventoryValuationPage() {
         );
       }, size: 90,
     },
-    { id: 'quantityOnHand', header: 'Available', accessorKey: 'quantityOnHand', cell: ({ getValue }) => <span className="font-mono text-text-primary">{formatNumber(getValue() as number)}</span>, size: 80 },
+    { id: 'quantityOnHand', header: 'Available', accessorKey: 'quantityOnHand', cell: ({ getValue }) => <span className="text-text-primary tabular-nums">{formatNumber(getValue() as number)}</span>, size: 80 },
     {
       id: 'inbound', header: 'Inbound', accessorKey: 'inboundQty',
       cell: ({ row }) => {
         const r = row.original as any;
         const total = (r.inboundWorking || 0) + (r.inboundShipped || 0) + (r.inboundReceiving || 0);
-        if (total === 0) return <span className="font-mono text-text-tertiary">—</span>;
+        if (total === 0) return <span className="text-text-tertiary tabular-nums">—</span>;
         return (
-          <div className="font-mono text-sm">
+          <div className="text-sm tabular-nums">
             <span className="text-text-primary">{total}</span>
             {(r.inboundShipped > 0 || r.inboundReceiving > 0) && (
               <div className="text-[10px] text-text-tertiary">
@@ -119,9 +119,9 @@ export default function InventoryValuationPage() {
       cell: ({ row }) => {
         const r = row.original as any;
         const total = r.reservedQty || 0;
-        if (total === 0) return <span className="font-mono text-text-tertiary">—</span>;
+        if (total === 0) return <span className="text-text-tertiary tabular-nums">—</span>;
         return (
-          <div className="font-mono text-sm">
+          <div className="text-sm tabular-nums">
             <span className="text-text-primary">{total}</span>
             <div className="text-[10px] text-text-tertiary">
               {r.reservedCustomerOrder > 0 && <span>Orders: {r.reservedCustomerOrder} </span>}
@@ -136,26 +136,26 @@ export default function InventoryValuationPage() {
       id: 'cogsPerUnit', header: 'COGS/Unit', accessorKey: 'cogsPerUnit',
       cell: ({ row }) => {
         const v = row.original.cogsPerUnit;
-        if (v > 0) return <button onClick={() => handleEditCogs(row.original)} className="font-mono text-text-secondary hover:text-accent transition-colors">{formatCurrency(v)}</button>;
+        if (v > 0) return <button onClick={() => handleEditCogs(row.original)} className="text-text-secondary hover:text-text-primary transition-colors tabular-nums">{formatCurrency(v)}</button>;
         return (
           <button
             onClick={() => handleEditCogs(row.original)}
-            className="text-xs text-accent hover:text-accent-hover underline"
+            className="text-xs text-accent hover:text-text-primary underline"
           >
             + Add COGS
           </button>
         );
       }, size: 100,
     },
-    { id: 'totalCogsValue', header: 'Total COGS', accessorKey: 'totalCogsValue', cell: ({ getValue }) => <span className="font-mono text-text-primary">{formatCurrency(getValue() as number)}</span>, size: 110 },
+    { id: 'totalCogsValue', header: 'Total COGS', accessorKey: 'totalCogsValue', cell: ({ getValue }) => <span className="text-text-primary tabular-nums">{formatCurrency(getValue() as number)}</span>, size: 110 },
     {
       id: 'expectedRevenue', header: 'Expected Revenue', accessorKey: 'expectedRevenue',
       cell: ({ row }) => {
         const r = row.original as any;
         if (!r.hasSalesHistory) return (
-          <button onClick={() => handleEditPrice(r)} className="text-xs text-accent hover:text-accent-hover underline">+ Set price</button>
+          <button onClick={() => handleEditPrice(r)} className="text-xs text-accent hover:text-text-primary underline">+ Set price</button>
         );
-        return <button onClick={() => handleEditPrice(r)} className="font-mono text-text-primary hover:text-accent transition-colors">{formatCurrency(r.expectedRevenue)}</button>;
+        return <button onClick={() => handleEditPrice(r)} className="text-text-primary hover:text-text-primary transition-colors tabular-nums">{formatCurrency(r.expectedRevenue)}</button>;
       }, size: 130,
     },
     {
@@ -163,7 +163,7 @@ export default function InventoryValuationPage() {
       cell: ({ row }) => {
         const r = row.original as any;
         if (!r.hasSalesHistory) return <span className="text-text-tertiary">—</span>;
-        return <span className={`font-mono font-medium ${r.expectedProfit >= 0 ? 'text-positive' : 'text-negative'}`}>{formatCurrency(r.expectedProfit)}</span>;
+        return <span className={`font-medium tabular-nums ${r.expectedProfit >= 0 ? 'text-positive' : 'text-negative'}`}>{formatCurrency(r.expectedProfit)}</span>;
       }, size: 120,
     },
     {
@@ -171,7 +171,7 @@ export default function InventoryValuationPage() {
       cell: ({ row }) => {
         const r = row.original as any;
         if (!r.hasSalesHistory) return <span className="text-text-tertiary">—</span>;
-        return <span className={`font-mono ${r.expectedRoi >= 0 ? 'text-positive' : 'text-negative'}`}>{formatPercent(r.expectedRoi)}</span>;
+        return <span className={`tabular-nums ${r.expectedRoi >= 0 ? 'text-positive' : 'text-negative'}`}>{formatPercent(r.expectedRoi)}</span>;
       }, size: 100,
     },
   ];
@@ -244,10 +244,10 @@ export default function InventoryValuationPage() {
 
   const footerRow = totals ? {
     product: <span className="font-semibold text-text-primary">Totals</span>,
-    quantityOnHand: <span className="font-mono">{formatNumber(totals.totalUnits)}</span>,
-    totalCogsValue: <span className="font-mono">{formatCurrency(totals.totalCogsValue)}</span>,
-    expectedRevenue: <span className="font-mono">{formatCurrency(totals.totalExpectedRevenue)}</span>,
-    expectedProfit: <span className={`font-mono font-medium ${totals.totalExpectedProfit >= 0 ? 'text-positive' : 'text-negative'}`}>{formatCurrency(totals.totalExpectedProfit)}</span>,
+    quantityOnHand: <span className="tabular-nums">{formatNumber(totals.totalUnits)}</span>,
+    totalCogsValue: <span className="tabular-nums">{formatCurrency(totals.totalCogsValue)}</span>,
+    expectedRevenue: <span className="tabular-nums">{formatCurrency(totals.totalExpectedRevenue)}</span>,
+    expectedProfit: <span className={`font-medium tabular-nums ${totals.totalExpectedProfit >= 0 ? 'text-positive' : 'text-negative'}`}>{formatCurrency(totals.totalExpectedProfit)}</span>,
   } : undefined;
 
   return (
@@ -263,7 +263,7 @@ export default function InventoryValuationPage() {
       </div>
       <div className="flex justify-end mb-3">
         <button onClick={() => setShowAddMfn(true)}
-          className="flex items-center gap-1.5 h-8 px-3 bg-bg-elevated border border-border-default rounded-md text-xs text-text-secondary hover:text-text-primary hover:bg-bg-hover transition-colors">
+          className="flex items-center gap-1.5 h-8 px-3 bg-bg-surface border-[1.5px] border-border-strong rounded-md text-xs text-text-secondary hover:text-text-primary hover:bg-bg-hover transition-colors">
           + Add MFN Inventory
         </button>
       </div>
@@ -272,11 +272,12 @@ export default function InventoryValuationPage() {
       {/* Edit COGS Modal */}
       {editItem && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onClick={() => setEditItem(null)}>
-          <div className="bg-bg-surface border border-border-subtle rounded-lg p-6 w-96 shadow-xl" onClick={e => e.stopPropagation()}>
-            <h3 className="text-sm font-semibold text-text-primary mb-1">{editField === 'cogs' ? 'Edit COGS' : 'Set Sale Price'}</h3>
+          <div className="panel w-96 shadow-xl" onClick={e => e.stopPropagation()}>
+            <h3 className="panel-bar"><span className="flex items-center gap-2">{editField === 'cogs' ? 'Edit COGS' : 'Set Sale Price'}</span></h3>
+<div className="p-6">
             <p className="text-xs text-text-tertiary mb-4 truncate">{editItem.productName || editItem.sku}</p>
             <div className="mb-4">
-              <label className="block text-xs font-medium tracking-wide uppercase text-text-tertiary mb-1.5">
+              <label className="block text-xs label-caps text-text-tertiary mb-1.5">
                 {editField === 'cogs' ? 'Cost Per Unit ($)' : 'Sale Price Per Unit ($)'}
               </label>
               <input
@@ -287,54 +288,57 @@ export default function InventoryValuationPage() {
                 onChange={e => setEditCogs(e.target.value)}
                 onKeyDown={e => e.key === 'Enter' && handleSave()}
                 autoFocus
-                className="w-full h-9 px-3 bg-bg-input border border-border-default rounded-md text-sm font-mono text-text-primary focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent/25"
+                className="w-full h-9 px-3 bg-bg-input border border-border-default rounded-md text-sm text-text-primary focus:border-link focus:outline-none focus:ring-[3px] focus:ring-link-muted tabular-nums"
                 placeholder="0.00"
               />
             </div>
             <div className="flex gap-2">
               <button onClick={handleSave}
-                className="flex-1 h-9 bg-accent text-white rounded-md text-sm font-medium hover:bg-accent-hover transition-colors">
+                className="flex-1 h-9 bg-accent text-text-inverse rounded-md text-sm font-bold hover:bg-accent-hover transition-colors">
                 Save
               </button>
               <button onClick={() => setEditItem(null)}
-                className="flex-1 h-9 bg-bg-elevated border border-border-default rounded-md text-sm text-text-secondary hover:bg-bg-hover transition-colors">
+                className="flex-1 h-9 bg-bg-surface border-[1.5px] border-border-strong rounded-md text-sm text-text-secondary hover:bg-bg-hover transition-colors">
                 Cancel
               </button>
             </div>
           </div>
+</div>
         </div>
       )}
       {/* Add MFN Inventory Modal */}
       {showAddMfn && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onClick={() => setShowAddMfn(false)}>
-          <div className="bg-bg-surface border border-border-subtle rounded-lg p-6 w-96 shadow-xl" onClick={e => e.stopPropagation()}>
-            <h3 className="text-sm font-semibold text-text-primary mb-4">Add Merchant Fulfilled Inventory</h3>
+          <div className="panel w-96 shadow-xl" onClick={e => e.stopPropagation()}>
+            <h3 className="panel-bar"><span className="flex items-center gap-2">Add Merchant Fulfilled Inventory</span></h3>
+<div className="p-6">
             <div className="space-y-3">
               <div>
-                <label className="block text-xs font-medium tracking-wide uppercase text-text-tertiary mb-1.5">SKU</label>
+                <label className="block text-xs label-caps text-text-tertiary mb-1.5">SKU</label>
                 <input type="text" value={mfnSku} onChange={e => setMfnSku(e.target.value)} autoFocus
-                  className="w-full h-9 px-3 bg-bg-input border border-border-default rounded-md text-sm font-mono text-text-primary focus:border-accent focus:outline-none" placeholder="Enter SKU" />
+                  className="w-full h-9 px-3 bg-bg-input border border-border-default rounded-md text-sm font-mono text-text-primary focus:border-link focus:outline-none" placeholder="Enter SKU" />
               </div>
               <div>
-                <label className="block text-xs font-medium tracking-wide uppercase text-text-tertiary mb-1.5">Quantity On Hand</label>
+                <label className="block text-xs label-caps text-text-tertiary mb-1.5">Quantity On Hand</label>
                 <input type="number" min="0" value={mfnQty} onChange={e => setMfnQty(e.target.value)}
                   onKeyDown={e => e.key === 'Enter' && handleAddMfn()}
-                  className="w-full h-9 px-3 bg-bg-input border border-border-default rounded-md text-sm font-mono text-text-primary focus:border-accent focus:outline-none" placeholder="0" />
+                  className="w-full h-9 px-3 bg-bg-input border border-border-default rounded-md text-sm text-text-primary focus:border-link focus:outline-none tabular-nums" placeholder="0" />
               </div>
               <div>
-                <label className="block text-xs font-medium tracking-wide uppercase text-text-tertiary mb-1.5">Marketplace</label>
+                <label className="block text-xs label-caps text-text-tertiary mb-1.5">Marketplace</label>
                 <select value={mfnMarketplace} onChange={e => setMfnMarketplace(e.target.value)}
-                  className="w-full h-9 px-3 bg-bg-input border border-border-default rounded-md text-sm text-text-primary focus:border-accent focus:outline-none">
+                  className="w-full h-9 px-3 bg-bg-input border border-border-default rounded-md text-sm text-text-primary focus:border-link focus:outline-none">
                   <option value="amazon">Amazon (MFN)</option>
                   <option value="walmart">Walmart (Seller Fulfilled)</option>
                 </select>
               </div>
             </div>
             <div className="flex gap-2 mt-4">
-              <button onClick={handleAddMfn} className="flex-1 h-9 bg-accent text-white rounded-md text-sm font-medium hover:bg-accent-hover transition-colors">Add</button>
-              <button onClick={() => setShowAddMfn(false)} className="flex-1 h-9 bg-bg-elevated border border-border-default rounded-md text-sm text-text-secondary hover:bg-bg-hover transition-colors">Cancel</button>
+              <button onClick={handleAddMfn} className="flex-1 h-9 bg-accent text-text-inverse rounded-md text-sm font-bold hover:bg-accent-hover transition-colors">Add</button>
+              <button onClick={() => setShowAddMfn(false)} className="flex-1 h-9 bg-bg-surface border-[1.5px] border-border-strong rounded-md text-sm text-text-secondary hover:bg-bg-hover transition-colors">Cancel</button>
             </div>
           </div>
+</div>
         </div>
       )}
     </div>

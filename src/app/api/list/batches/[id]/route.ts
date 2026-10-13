@@ -8,6 +8,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { recalculateFIFO } from '@/lib/fifo';
 import { openDb } from '@/lib/db-conn';
+import { rollbackItemLedger, isZeroQtyUnlotted, lotUnitsSold, type LedgerItem } from '@/lib/listing-ledger';
+import { estimateWalmartUnitFees } from '@/lib/walmart-api/feeEstimates';
 
 const getDb = () => openDb();
 
@@ -54,6 +56,8 @@ export async function GET(_request: NextRequest, { params }: { params: Promise<{
         transportation_confirmed_at as transportationConfirmedAt,
         transportation_cost_cents as transportationCostCents,
         transportation_error as transportationError,
+        inbound_order_id as inboundOrderId,
+        is_holding as isHolding,
         notes,
         created_at as createdAt,
         updated_at as updatedAt
@@ -79,16 +83,40 @@ export async function GET(_request: NextRequest, { params }: { params: Promise<{
         prep_category as prepCategory,
         preflight_status as preflightStatus,
         preflight_detail as preflightDetail,
+        send_qty_to_amazon as sendQtyToAmazon,
+        walmart_item_id as walmartItemId,
+        gtin,
+        walmart_setup_status as walmartSetupStatus,
+        walmart_setup as walmartSetup,
+        (SELECT COALESCE(SUM(il.quantity_remaining), 0) FROM inventory_ledger il WHERE il.sku = listing_batch_items.sku) AS skuStock,
         created_at as createdAt
       FROM listing_batch_items
       WHERE batch_id = ?
       ORDER BY created_at ASC
     `).all(batchId) as any[];
 
+    const walmartBatch = (batch as { marketplace?: string }).marketplace === 'walmart';
+    const wfsBatch = (batch as { channel?: string }).channel === 'WFS';
+
     // preflight_detail is stored as JSON — hand the frontend an object.
     for (const it of items) {
       try { it.preflightDetail = it.preflightDetail ? JSON.parse(it.preflightDetail) : null; }
       catch { it.preflightDetail = null; }
+      // Walmart batches: per-unit fee estimate at the item's Walmart price, so
+      // the page can show expected revenue/profit like an Amazon batch. Weight
+      // comes from the SKU-setup feed when FlipLedger created the SKU.
+      if (walmartBatch) {
+        const weight = it.walmartSetup ? Number(/"eachWeight":\s*([\d.]+)/.exec(it.walmartSetup)?.[1]) : NaN;
+        it.feeEstimate = estimateWalmartUnitFees(db, {
+          sku: it.sku, priceCents: it.listPriceCents || 0, wfs: wfsBatch,
+          weightLb: Number.isFinite(weight) ? weight : null,
+        });
+      }
+      // Walmart SKU setup: only what the page shows (no feed payloads).
+      try {
+        const st = it.walmartSetup ? JSON.parse(it.walmartSetup) : null;
+        it.walmartSetup = st ? { status: st.status, error: st.error ?? null, pending: st.pending ?? null, updatedAt: st.updatedAt } : null;
+      } catch { it.walmartSetup = null; }
     }
 
     // Phase 3: include boxes + box-item assignments if any exist
@@ -209,6 +237,7 @@ export async function DELETE(_request: NextRequest, { params }: { params: Promis
 
   const db = getDb();
   const affectedSkus = new Set<string>();
+  const skippedLedger: string[] = [];
   try {
     // Allow deleting batches that haven't been successfully sent to Amazon.
     // Draft: never sent. Failed: send attempt didn't complete. Both are safe
@@ -220,22 +249,28 @@ export async function DELETE(_request: NextRequest, { params }: { params: Promis
       return NextResponse.json({ error: `Cannot delete batch in status: ${batch.status}` }, { status: 400 });
     }
 
+    // Sold-units guard: an item whose lot FIFO already gave to sales backs
+    // those sales' COGS, so the batch can't be deleted out from under them.
+    const sold = (db.prepare('SELECT id, sku, inventory_ledger_id FROM listing_batch_items WHERE batch_id = ?').all(batchId) as LedgerItem[])
+      .map((it) => ({ sku: it.sku, sold: lotUnitsSold(db, it) }))
+      .filter((r) => r.sold > 0);
+    if (sold.length > 0) {
+      return NextResponse.json({
+        error: `Can't delete this batch: units already sold from ${sold.map((r) => `${r.sku} (${r.sold})`).join(', ')}, ` +
+          `and those sales take their cost from it. Removing it would wipe that cost from your books.`,
+        soldItems: sold,
+      }, { status: 409 });
+    }
+
     // Roll back every item's inventory_ledger contribution, then delete.
     const cascade = db.transaction(() => {
-      const items = db.prepare('SELECT sku, quantity FROM listing_batch_items WHERE batch_id = ?').all(batchId) as any[];
+      const items = db.prepare('SELECT id, sku, quantity, buy_price_cents, inventory_ledger_id FROM listing_batch_items WHERE batch_id = ?').all(batchId) as LedgerItem[];
       for (const item of items) {
-        affectedSkus.add(item.sku);
-        const ledger = db.prepare('SELECT id, quantity, quantity_remaining FROM inventory_ledger WHERE sku = ?').get(item.sku) as any;
-        if (ledger) {
-          const newQty = Math.max(0, ledger.quantity - item.quantity);
-          const newRemaining = Math.max(0, ledger.quantity_remaining - item.quantity);
-          if (newQty === 0) {
-            db.prepare('DELETE FROM inventory_ledger WHERE id = ?').run(ledger.id);
-          } else {
-            db.prepare('UPDATE inventory_ledger SET quantity = ?, quantity_remaining = ? WHERE id = ?')
-              .run(newQty, newRemaining, ledger.id);
-          }
-        }
+        // A 0-qty MFN item owns no lot: nothing to roll back or re-cost.
+        if (!isZeroQtyUnlotted(item)) affectedSkus.add(item.sku);
+        // Only the item's own lot. This used to shrink the SKU's oldest lot.
+        const r = rollbackItemLedger(db, item);
+        if (!r.applied) skippedLedger.push(item.sku);
       }
       db.prepare('DELETE FROM listing_batch_items WHERE batch_id = ?').run(batchId);
       db.prepare('DELETE FROM listing_batches WHERE id = ?').run(batchId);
@@ -249,7 +284,11 @@ export async function DELETE(_request: NextRequest, { params }: { params: Promis
       try { recalculateFIFO({ sku }); } catch { /* best effort */ }
     }
 
-    return NextResponse.json({ success: true, rolledBackSkus: Array.from(affectedSkus) });
+    return NextResponse.json({
+      success: true,
+      rolledBackSkus: Array.from(affectedSkus),
+      ...(skippedLedger.length ? { ledgerWarning: `No linked cost lot for ${skippedLedger.join(', ')} (added before Sept 22 2026); adjust under Products & COGS → Lots.` } : {}),
+    });
   } catch (err) {
     db.close();
     return NextResponse.json({ error: String(err) }, { status: 500 });

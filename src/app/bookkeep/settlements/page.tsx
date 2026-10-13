@@ -49,7 +49,7 @@ export default function SettlementsPage() {
       id: 'period', header: 'Settlement period', accessorFn: (r) => r.startDate,
       cell: ({ row }) => (
         <div>
-          <div className="text-sm text-text-primary font-mono">
+          <div className="text-sm text-text-primary tabular-nums">
             {row.original.startDate ? formatDate(row.original.startDate) : '—'} → {row.original.endDate ? formatDate(row.original.endDate) : '—'}
           </div>
           <div className="text-xs text-text-tertiary font-mono">{row.original.settlementId}</div>
@@ -58,51 +58,51 @@ export default function SettlementsPage() {
     },
     {
       id: 'depositDate', header: 'Deposited', accessorKey: 'depositDate',
-      cell: ({ getValue }) => { const v = getValue() as string; return <span className="font-mono text-sm text-text-secondary">{v ? formatDate(v) : '—'}</span>; }, size: 110,
+      cell: ({ getValue }) => { const v = getValue() as string; return <span className="text-sm text-text-secondary tabular-nums">{v ? formatDate(v) : '—'}</span>; }, size: 110,
     },
     {
       id: 'payout', header: 'Payout', accessorKey: 'payoutCents',
-      cell: ({ getValue }) => <span className="font-mono font-semibold text-accent">{formatCurrency(getValue() as number)}</span>, size: 120,
+      cell: ({ getValue }) => <span className="font-semibold text-text-primary tabular-nums">{formatCurrency(getValue() as number)}</span>, size: 120,
     },
     {
       id: 'sales', header: 'Sales', accessorKey: 'salesCents',
-      cell: ({ getValue }) => <span className="font-mono text-sm text-text-secondary">{formatCurrency(getValue() as number)}</span>, size: 110,
+      cell: ({ getValue }) => <span className="text-sm text-text-secondary tabular-nums">{formatCurrency(getValue() as number)}</span>, size: 110,
     },
     {
       id: 'fees', header: 'Fees', accessorFn: (r) => r.orderFeesCents + r.serviceFeesCents,
-      cell: ({ getValue }) => <span className="font-mono text-sm text-negative">{formatCurrency(getValue() as number)}</span>, size: 110,
+      cell: ({ getValue }) => <span className="text-sm text-negative tabular-nums">{formatCurrency(getValue() as number)}</span>, size: 110,
     },
     {
       id: 'refunds', header: 'Refunds', accessorKey: 'refundsCents',
-      cell: ({ getValue }) => { const v = getValue() as number; return <span className="font-mono text-sm text-text-secondary">{v ? '-' + formatCurrency(v).replace('-', '') : formatCurrency(0)}</span>; }, size: 100,
+      cell: ({ getValue }) => { const v = getValue() as number; return <span className="text-sm text-text-secondary tabular-nums">{v ? '-' + formatCurrency(v).replace('-', '') : formatCurrency(0)}</span>; }, size: 100,
     },
     {
       id: 'reimb', header: 'Reimb.', accessorKey: 'reimbursementsCents',
-      cell: ({ getValue }) => { const v = getValue() as number; return <span className="font-mono text-sm text-positive">{v ? formatCurrency(v) : formatCurrency(0)}</span>; }, size: 100,
+      cell: ({ getValue }) => { const v = getValue() as number; return <span className="text-sm text-positive tabular-nums">{v ? formatCurrency(v) : formatCurrency(0)}</span>; }, size: 100,
     },
     {
       id: 'cogs', header: 'COGS', accessorKey: 'cogsCents',
-      cell: ({ getValue }) => <span className="font-mono text-sm text-negative">{formatCurrency(getValue() as number)}</span>, size: 110,
+      cell: ({ getValue }) => <span className="text-sm text-negative tabular-nums">{formatCurrency(getValue() as number)}</span>, size: 110,
     },
     {
       id: 'net', header: 'Net Profit', accessorKey: 'netProfitCents',
-      cell: ({ getValue }) => { const v = getValue() as number; return <span className={`font-mono font-semibold ${v >= 0 ? 'text-positive' : 'text-negative'}`}>{formatCurrency(v)}</span>; }, size: 120,
+      cell: ({ getValue }) => { const v = getValue() as number; return <span className={`font-semibold tabular-nums ${v >= 0 ? 'text-positive' : 'text-negative'}`}>{formatCurrency(v)}</span>; }, size: 120,
     },
     {
       id: 'recon', header: 'Recon Δ', accessorKey: 'reconDeltaCents',
       cell: ({ getValue }) => {
         const v = getValue() as number;
         const ok = Math.abs(v) < 100; // within $1 = matched
-        return <span className={`font-mono text-sm ${ok ? 'text-text-tertiary' : 'text-warning'}`} title="Payout − (sales + fees − refunds + reimbursements). Near $0 = books explain the deposit; large = reserve/DD7 or timing across the window edge.">{formatCurrency(v)}</span>;
+        return <span className={`text-sm tabular-nums ${ok ? 'text-text-tertiary' : 'text-warning'}`} title="Payout − (sales + fees − refunds + reimbursements). Near $0 = books explain the deposit; large = reserve/DD7 or timing across the window edge.">{formatCurrency(v)}</span>;
       }, size: 110,
     },
     {
       id: 'orders', header: 'Orders', accessorKey: 'orders',
-      cell: ({ getValue }) => <span className="font-mono text-sm">{formatNumber(getValue() as number)}</span>, size: 80,
+      cell: ({ getValue }) => <span className="text-sm tabular-nums">{formatNumber(getValue() as number)}</span>, size: 80,
     },
     {
       id: 'units', header: 'Units', accessorKey: 'units',
-      cell: ({ getValue }) => <span className="font-mono text-sm">{formatNumber(getValue() as number)}</span>, size: 70,
+      cell: ({ getValue }) => <span className="text-sm tabular-nums">{formatNumber(getValue() as number)}</span>, size: 70,
     },
   ], []);
 
@@ -110,7 +110,7 @@ export default function SettlementsPage() {
     <div>
       <PageHeader title="Settlements" subtitle="Bookkeeping > Settlements" dateRange={dateRange} onDateRangeChange={setDateRange} />
 
-      <div className="grid grid-cols-4 gap-4 mb-6">
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
         <StatCard label="Settlements" value={summary?.settlementCount || 0} format="number" />
         <StatCard label="Total Payout" value={summary?.totalPayoutCents || 0} format="currency" accentColor="amazon" />
         <StatCard label="COGS (attributed)" value={summary?.totalCogsCents || 0} format="currency" accentColor="negative" />
@@ -118,7 +118,7 @@ export default function SettlementsPage() {
       </div>
 
       {!loading && rows.length === 0 && (
-        <div className="bg-bg-surface border border-border-subtle rounded-lg p-6 mb-6 text-sm text-text-secondary">
+        <div className="panel p-6 mb-6 text-sm text-text-secondary">
           No settlements found in this range. Settlement headers populate from Amazon&apos;s settlement reports
           (available ~90 days back) on the next sync — try a wider date range or run a sync from Settings.
         </div>

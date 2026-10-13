@@ -111,7 +111,7 @@ Thank you,`;
     <div className="p-6 max-w-[1600px] mx-auto">
       <div className="flex items-center justify-between mb-6">
         <div>
-          <h1 className="text-2xl font-semibold tracking-tight">Reimbursement Re-Evaluations</h1>
+          <h1 className="page-title">Reimbursement Re-Evaluations</h1>
           <p className="text-sm text-text-tertiary mt-0.5">
             Reimbursements where Amazon paid less than your 18-month average sale price. File via Help → Get Support → &quot;Submit a reimbursement claim dispute&quot;.
             {lastSync && (
@@ -122,7 +122,7 @@ Thank you,`;
         <button
           onClick={runSync}
           disabled={syncing}
-          className="flex items-center gap-2 h-9 px-4 bg-accent text-white rounded-md text-sm font-medium hover:bg-accent/90 disabled:opacity-50 transition-colors"
+          className="flex items-center gap-2 h-9 px-4 bg-accent text-text-inverse rounded-md text-sm font-bold hover:bg-accent/90 disabled:opacity-50 transition-colors"
         >
           {syncing ? <Loader2 size={14} className="animate-spin" /> : <RefreshCw size={14} />}
           {syncing ? 'Syncing…' : 'Refresh'}
@@ -131,30 +131,30 @@ Thank you,`;
 
       {totals && (
         <div className="grid grid-cols-2 md:grid-cols-3 gap-3 mb-6">
-          <div className="bg-bg-surface border border-border-subtle rounded-lg p-5 border-t-2 border-t-accent">
-            <div className="text-[11px] font-medium tracking-widest uppercase text-text-tertiary mb-2">To Re-Evaluate</div>
-            <div className="text-2xl font-bold font-mono text-text-primary tracking-tight">{formatNumber(totals.pendingCount)}</div>
+          <div className="panel p-5">
+            <div className="text-[11px] label-caps text-text-tertiary mb-2">To Re-Evaluate</div>
+            <div className="stat-num text-xl sm:text-2xl text-text-primary">{formatNumber(totals.pendingCount)}</div>
             <div className="text-xs text-text-tertiary mt-1.5">{formatCurrency(totals.pendingGapCents)} potential additional recovery</div>
           </div>
-          <div className="bg-bg-surface border border-border-subtle rounded-lg p-5 border-t-2 border-t-border-default">
-            <div className="text-[11px] font-medium tracking-widest uppercase text-text-tertiary mb-2">Filed</div>
-            <div className="text-2xl font-bold font-mono text-text-primary tracking-tight">{formatNumber(totals.filedCount)}</div>
+          <div className="panel p-5">
+            <div className="text-[11px] label-caps text-text-tertiary mb-2">Filed</div>
+            <div className="stat-num text-xl sm:text-2xl text-text-primary">{formatNumber(totals.filedCount)}</div>
             <div className="text-xs text-text-tertiary mt-1.5">{formatCurrency(totals.filedGapCents)} pending Amazon</div>
           </div>
-          <div className="bg-bg-surface border border-border-subtle rounded-lg p-5 border-t-2 border-t-positive">
-            <div className="text-[11px] font-medium tracking-widest uppercase text-text-tertiary mb-2">Recovered</div>
-            <div className="text-2xl font-bold font-mono text-text-primary tracking-tight">{formatCurrency(totals.recoveredGapCents)}</div>
+          <div className="panel p-5">
+            <div className="text-[11px] label-caps text-text-tertiary mb-2">Recovered</div>
+            <div className="stat-num text-xl sm:text-2xl text-text-primary">{formatCurrency(totals.recoveredGapCents)}</div>
             <div className="text-xs text-text-tertiary mt-1.5">From won re-evaluations</div>
           </div>
         </div>
       )}
 
-      <div className="flex items-center gap-2 mb-4 border-b border-border-subtle">
+      <div className="flex items-center gap-2 mb-4 border-b border-border-subtle overflow-x-auto">
         {TABS.map((t) => (
           <button
             key={t.key}
             onClick={() => setTab(t.key)}
-            className={`px-4 h-9 text-sm font-medium border-b-2 transition-colors ${
+            className={`px-4 h-9 text-sm font-medium border-b-2 transition-colors whitespace-nowrap shrink-0 ${
               tab === t.key
                 ? 'border-accent text-text-primary'
                 : 'border-transparent text-text-tertiary hover:text-text-secondary'
@@ -173,18 +173,18 @@ Thank you,`;
           <span>{tab === 'pending' ? 'No re-evaluations pending. Click Refresh to scan.' : 'Nothing here.'}</span>
         </div>
       ) : (
-        <div className="bg-bg-surface border border-border-subtle rounded-lg overflow-hidden">
+        <div className="panel overflow-hidden">
           <table className="w-full text-sm">
-            <thead className="bg-bg-elevated text-[11px] uppercase tracking-wider text-text-tertiary">
+            <thead className="bg-bg-elevated text-[11px] label-caps text-text-tertiary">
               <tr>
-                <th className="text-left px-4 py-2 font-medium">Date</th>
-                <th className="text-left px-4 py-2 font-medium">Reimbursement ID</th>
-                <th className="text-left px-4 py-2 font-medium">Product</th>
-                <th className="text-right px-4 py-2 font-medium">Qty</th>
-                <th className="text-right px-4 py-2 font-medium">Paid</th>
-                <th className="text-right px-4 py-2 font-medium">Expected</th>
-                <th className="text-right px-4 py-2 font-medium">Gap</th>
-                <th className="text-right px-4 py-2 font-medium">Actions</th>
+                <th className="text-left px-4 py-2">Date</th>
+                <th className="text-left px-4 py-2">Reimbursement ID</th>
+                <th className="text-left px-4 py-2">Product</th>
+                <th className="text-right px-4 py-2">Qty</th>
+                <th className="text-right px-4 py-2">Paid</th>
+                <th className="text-right px-4 py-2">Expected</th>
+                <th className="text-right px-4 py-2">Gap</th>
+                <th className="text-right px-4 py-2">Actions</th>
               </tr>
             </thead>
             <tbody>
@@ -194,7 +194,7 @@ Thank you,`;
                   className={`border-t border-border-subtle hover:bg-bg-elevated/50 ${c.status === 'pending' ? 'cursor-pointer' : ''}`}
                   onClick={() => { if (c.status === 'pending') openTemplate(c); }}
                 >
-                  <td className="px-4 py-3 text-text-secondary font-mono text-xs">{formatDate(c.reimbursementDate)}</td>
+                  <td className="px-4 py-3 text-text-secondary text-xs tabular-nums">{formatDate(c.reimbursementDate)}</td>
                   <td className="px-4 py-3" onClick={(e) => e.stopPropagation()}>
                     <CopyableText text={c.reimbursementId} variant="chip" title="Click to copy" />
                   </td>
@@ -206,30 +206,30 @@ Thank you,`;
                       {c.asin && c.asin} {c.reason && `· ${c.reason}`}
                     </div>
                   </td>
-                  <td className="px-4 py-3 text-right font-mono text-text-primary">{c.quantity}</td>
-                  <td className="px-4 py-3 text-right font-mono text-text-secondary">{formatCurrency(c.paidCents)}</td>
-                  <td className="px-4 py-3 text-right font-mono text-text-secondary">{formatCurrency(c.expectedCents)}</td>
-                  <td className="px-4 py-3 text-right font-mono font-semibold text-positive">+{formatCurrency(c.gapCents)}</td>
+                  <td className="px-4 py-3 text-right text-text-primary tabular-nums">{c.quantity}</td>
+                  <td className="px-4 py-3 text-right text-text-secondary tabular-nums">{formatCurrency(c.paidCents)}</td>
+                  <td className="px-4 py-3 text-right text-text-secondary tabular-nums">{formatCurrency(c.expectedCents)}</td>
+                  <td className="px-4 py-3 text-right font-semibold text-positive tabular-nums">+{formatCurrency(c.gapCents)}</td>
                   <td className="px-4 py-3 text-right">
                     <div className="flex items-center justify-end gap-1">
                       {c.status === 'pending' && (
                         <>
                           <button
                             onClick={(e) => { e.stopPropagation(); openTemplate(c); }}
-                            className="inline-flex items-center gap-1 px-2 h-7 text-[11px] bg-accent/10 border border-accent/30 rounded text-accent hover:bg-accent/20 transition-colors"
+                            className="inline-flex items-center gap-1 px-2 h-7 text-[11px] rounded-sm text-accent hover:bg-bg-hover transition-colors border-[1.2px] border-current"
                           >
                             View
                           </button>
                           <button
                             onClick={(e) => { e.stopPropagation(); patchCandidate(c.id, 'file'); }}
-                            className="px-2 h-7 text-[11px] bg-bg-elevated border border-border-default rounded text-text-secondary hover:text-text-primary transition-colors"
+                            className="px-2 h-7 text-[11px] rounded text-text-primary hover:text-text-primary transition-colors font-semibold hover:bg-bg-hover bg-bg-surface border-[1.5px] border-border-strong"
                             title="Mark as filed"
                           >
                             <CheckCircle2 size={11} />
                           </button>
                           <button
                             onClick={(e) => { e.stopPropagation(); patchCandidate(c.id, 'dismiss'); }}
-                            className="px-2 h-7 text-[11px] bg-bg-elevated border border-border-default rounded text-text-tertiary hover:text-negative transition-colors"
+                            className="px-2 h-7 text-[11px] rounded text-text-primary hover:text-negative transition-colors font-semibold hover:bg-bg-hover bg-bg-surface border-[1.5px] border-border-strong"
                             title="Dismiss"
                           >
                             <XCircle size={11} />
@@ -241,13 +241,13 @@ Thank you,`;
                           <span className="text-[10px] text-accent">Filed {c.filedAt ? formatDate(c.filedAt) : ''}</span>
                           <button
                             onClick={(e) => { e.stopPropagation(); patchCandidate(c.id, 'received'); }}
-                            className="px-2 h-7 text-[11px] bg-positive/10 border border-positive/30 rounded text-positive hover:bg-positive/20 transition-colors"
+                            className="px-2 h-7 text-[11px] rounded-sm text-positive hover:bg-positive/20 transition-colors border-[1.2px] border-current"
                           >
                             Won
                           </button>
                           <button
                             onClick={(e) => { e.stopPropagation(); patchCandidate(c.id, 'reopen'); }}
-                            className="px-2 h-7 text-[11px] bg-bg-elevated border border-border-default rounded text-text-tertiary hover:text-text-primary transition-colors"
+                            className="px-2 h-7 text-[11px] rounded text-text-primary hover:text-text-primary transition-colors font-semibold hover:bg-bg-hover bg-bg-surface border-[1.5px] border-border-strong"
                           >
                             Reopen
                           </button>
@@ -267,14 +267,14 @@ Thank you,`;
       {/* Modal */}
       {openCandidate && (
         <div
-          className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4"
+          className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4"
           onClick={() => setOpenCandidate(null)}
         >
           <div
-            className="bg-bg-surface border border-border-subtle rounded-lg max-w-3xl w-full max-h-[90vh] overflow-hidden flex flex-col"
+            className="panel max-w-3xl w-full max-h-[90vh] overflow-hidden flex flex-col"
             onClick={(e) => e.stopPropagation()}
           >
-            <div className="px-5 py-4 border-b border-border-subtle flex items-start justify-between">
+            <div className="px-5 py-4 border-b-[1.5px] border-border-strong flex items-start justify-between">
               <div>
                 <h2 className="text-lg font-semibold tracking-tight">Reimbursement Re-Evaluation Request</h2>
                 <p className="text-xs text-text-tertiary mt-0.5 flex items-center gap-1.5 max-w-[500px]">
@@ -293,7 +293,7 @@ Thank you,`;
 
             <div className="px-5 py-4 overflow-y-auto flex-1 space-y-4">
               {/* Gap callout */}
-              <div className="bg-positive/5 border border-positive/20 rounded p-3 flex items-start gap-3">
+              <div className="flash border-l-positive p-3 flex items-start gap-3">
                 <AlertTriangle size={16} className="text-positive mt-0.5 flex-shrink-0" />
                 <div className="flex-1 text-sm">
                   <div className="font-medium text-text-primary mb-1">
@@ -307,25 +307,25 @@ Thank you,`;
               </div>
 
               <div>
-                <label className="text-[11px] uppercase tracking-widest text-text-tertiary font-medium block mb-2">
+                <label className="text-[11px] label-caps text-text-tertiary block mb-2">
                   Re-evaluation request (paste into the case description)
                 </label>
                 <textarea
                   value={editedBody}
                   onChange={(e) => setEditedBody(e.target.value)}
-                  className="w-full h-72 px-3 py-2 bg-bg-elevated border border-border-default rounded text-sm font-mono text-text-primary focus:outline-none focus:border-accent resize-y"
+                  className="w-full h-72 px-3 py-2 bg-bg-elevated border border-border-default rounded text-sm text-text-primary focus:outline-none focus:border-link resize-y tabular-nums"
                 />
               </div>
 
               <div className="bg-accent/5 border border-accent/20 rounded p-3 text-xs text-text-secondary">
                 <div className="font-medium text-text-primary mb-1.5">How to file</div>
                 <ol className="space-y-1">
-                  <li className="flex gap-2"><span className="text-accent font-mono">1.</span><span>Click <strong>&quot;Open Get Support & mark filed&quot;</strong> below.</span></li>
-                  <li className="flex gap-2"><span className="text-accent font-mono">2.</span><span>Choose <strong>Selling on Amazon</strong> → <strong>Fulfillment by Amazon</strong>.</span></li>
-                  <li className="flex gap-2"><span className="text-accent font-mono">3.</span><span>Click <strong>&quot;Submit a reimbursement claim dispute&quot;</strong>.</span></li>
-                  <li className="flex gap-2"><span className="text-accent font-mono">4.</span><span>Enter the Reimbursement ID: <code className="font-mono bg-bg-elevated px-1 rounded">{openCandidate.reimbursementId}</code></span></li>
-                  <li className="flex gap-2"><span className="text-accent font-mono">5.</span><span>Upload an invoice (optional but helps — supplier receipt or sourcing email).</span></li>
-                  <li className="flex gap-2"><span className="text-accent font-mono">6.</span><span>Paste the request above as the case description. Submit.</span></li>
+                  <li className="flex gap-2"><span className="text-text-primary tabular-nums">1.</span><span>Click <strong>&quot;Open Get Support & mark filed&quot;</strong> below.</span></li>
+                  <li className="flex gap-2"><span className="text-text-primary tabular-nums">2.</span><span>Choose <strong>Selling on Amazon</strong> → <strong>Fulfillment by Amazon</strong>.</span></li>
+                  <li className="flex gap-2"><span className="text-text-primary tabular-nums">3.</span><span>Click <strong>&quot;Submit a reimbursement claim dispute&quot;</strong>.</span></li>
+                  <li className="flex gap-2"><span className="text-text-primary tabular-nums">4.</span><span>Enter the Reimbursement ID: <code className="font-mono bg-bg-elevated px-1 rounded">{openCandidate.reimbursementId}</code></span></li>
+                  <li className="flex gap-2"><span className="text-text-primary tabular-nums">5.</span><span>Upload an invoice (optional but helps — supplier receipt or sourcing email).</span></li>
+                  <li className="flex gap-2"><span className="text-text-primary tabular-nums">6.</span><span>Paste the request above as the case description. Submit.</span></li>
                 </ol>
               </div>
             </div>
@@ -346,7 +346,7 @@ Thank you,`;
                 <button
                   onClick={copyToClipboard}
                   className={`flex items-center gap-1.5 px-3 h-8 text-xs rounded border transition-colors ${
-                    copied ? 'bg-positive/10 border-positive/30 text-positive' : 'bg-bg-elevated border-border-default text-text-secondary hover:text-text-primary'
+                    copied ? 'bg-bg-surface border-positive text-positive' : 'bg-bg-elevated border-border-default text-text-secondary hover:text-text-primary'
                   }`}
                 >
                   {copied ? <Check size={12} /> : <Copy size={12} />}
@@ -357,7 +357,7 @@ Thank you,`;
                   target="_blank"
                   rel="noopener noreferrer"
                   onClick={() => { if (openCandidate) patchCandidate(openCandidate.id, 'file'); }}
-                  className="inline-flex items-center gap-1.5 px-3 h-8 text-xs bg-accent text-white rounded font-medium hover:bg-accent/90 transition-colors"
+                  className="inline-flex items-center gap-1.5 px-3 h-8 text-xs bg-accent text-text-inverse rounded font-bold hover:bg-accent/90 transition-colors"
                 >
                   <ExternalLink size={12} /> Open Get Support & mark filed
                 </a>

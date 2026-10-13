@@ -103,3 +103,79 @@ export function expandCarrierChoice<T extends CarrierOptionLike>(
   }
   return { selected, missing, shipmentIds };
 }
+
+/**
+ * Minimal shape of a getListing() response (summaries, offers,
+ * fulfillmentAvailability) for the readiness checks below.
+ */
+export interface ListingLike {
+  summaries?: { status?: string[]; fnSku?: string }[];
+  offers?: unknown[];
+  fulfillmentAvailability?: { fulfillmentChannelCode?: string; quantity?: number }[];
+}
+
+/** Units Amazon currently shows on the listing's merchant (DEFAULT) channel. */
+export function mfnLiveQuantity(listing: ListingLike | null | undefined): number {
+  const mfn = (listing?.fulfillmentAvailability || []).find((f) => f.fulfillmentChannelCode === 'DEFAULT');
+  return Number(mfn?.quantity) || 0;
+}
+
+/**
+ * Is a batch item's listing "done" from the batch flow's point of view?
+ *   FBA: FNSKU assigned (BUYABLE only follows physical receipt).
+ *   MFN with stock: BUYABLE.
+ *   MFN offering 0 — quantity 0, Qty → Amazon off, or already sold out
+ *     (Oct 4 2026: batch 51's Pokémon bundles sold out the day after they were
+ *     listed and read STUCK) — is never BUYABLE. Done once Amazon holds the
+ *     offer on the merchant channel at 0: a summary, an offer with a price,
+ *     and a DEFAULT fulfillment entry. Verified against real 0-qty MFN
+ *     listings, which read status [DISCOVERABLE], offers [{price}],
+ *     fulfillmentAvailability [{DEFAULT, quantity 0}]. A DISCOVERABLE listing
+ *     showing units is still propagating, so it is not done yet.
+ */
+export function isItemListingReady(
+  channel: 'FBA' | 'MFN',
+  quantity: number,
+  listing: ListingLike | null | undefined,
+): boolean {
+  if (!listing) return false;
+  const summary = listing.summaries?.[0];
+  if (channel === 'FBA') return !!summary?.fnSku;
+  if ((summary?.status || []).includes('BUYABLE')) return true;
+  if (Number(quantity) !== 0 && mfnLiveQuantity(listing) > 0) return false;
+  return !!summary
+    && (listing.offers?.length || 0) > 0
+    && (listing.fulfillmentAvailability || []).some((f) => f.fulfillmentChannelCode === 'DEFAULT');
+}
+
+/**
+ * The MFN "Qty → Amazon" switch (Oct 4 2026, Parker: "on = send that stock
+ * qty to Amazon, off = don't"). An MFN PUT SETS the quantity, so:
+ *   ON:  Amazon gets the SKU's stock in FlipLedger — units bought minus units
+ *        sold (sum of the SKU's lots' quantity_remaining). Never the batch
+ *        quantity: that would re-list units already sold (batch 51's Pokémon).
+ *   OFF: FlipLedger never changes the Amazon quantity. A new offer is created
+ *        at 0; an existing one keeps what Amazon shows (stock is managed in
+ *        Seller Central), and Publish doesn't PUT it at all.
+ */
+export interface QtySwitch {
+  channel: 'FBA' | 'MFN';
+  sendQty: boolean;
+  skuStock: number;
+}
+
+/** Publish skips the PUT for an existing MFN listing whose switch is OFF. */
+export function skipMfnPut(channel: 'FBA' | 'MFN', sendQty: boolean, existing: ListingLike | null | undefined): boolean {
+  return channel === 'MFN' && !sendQty && (existing?.summaries?.length || 0) > 0;
+}
+
+/** Quantity to PUT on an MFN listing (FBA ignores the quantity). */
+export function mfnQuantityToPut(q: QtySwitch, existing: ListingLike | null | undefined): number {
+  if (q.sendQty) return Math.max(0, Number(q.skuStock) || 0);
+  return (existing?.summaries?.length || 0) > 0 ? mfnLiveQuantity(existing) : 0;
+}
+
+/** What the item offers, for the readiness check: 0 when the switch is OFF. */
+export function offeredQuantity(sendQty: boolean, skuStock: number): number {
+  return sendQty ? Math.max(0, Number(skuStock) || 0) : 0;
+}

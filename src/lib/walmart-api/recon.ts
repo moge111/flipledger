@@ -340,6 +340,28 @@ export function applyWfsServiceRows(
   return run();
 }
 
+// Books the refund-side reversal of a Walmart-funded incentive as a negative
+// reimbursement (income reversal). Idempotent via the Transaction Key.
+// No financial_events row is written: the Refund branch already stored this
+// line as a WalmartRefundEvent, and a second (WalmartIncentive) copy made the
+// per-order Net on /lookup subtract the reversal twice (review A12).
+export function applyFundedIncentiveReversal(
+  db: Database.Database,
+  entry: Record<string, string>,
+  orderId: string,
+  sku: string,
+  amount: number,
+  isoDate: string,
+  now: string,
+) {
+  const txKey = entry['Transaction Key'] || `${orderId}-${sku}-${isoDate.substring(0, 10)}`;
+
+  db.prepare(`
+    INSERT OR IGNORE INTO reimbursements (reimbursement_id, reimbursement_date, asin, sku, reason, amount, quantity, status, marketplace, created_at)
+    VALUES (?, ?, ?, ?, 'Walmart Funded Incentive Reversal', ?, 1, 'Approved', 'walmart', ?)
+  `).run(`WMT-FUNDED-REV-${txKey}`, isoDate, sku, sku, amount, now);
+}
+
 function processReconEntry(db: Database.Database, entry: Record<string, string>, now: string) {
   const orderId = entry['Purchase Order #'];
   const sku = entry['Partner Item Id'] || '';
@@ -348,8 +370,6 @@ function processReconEntry(db: Database.Database, entry: Record<string, string>,
   const postedDate = entry['Transaction Posted Timestamp'] || now;
   const commissionRate = entry['Commission Rate'] || '';
   const category = entry['Contract Category'] || '';
-  const commissionSaving = toCents(entry['Commission Saving']);
-  const incentiveProgram = entry['Commission Incentive Program'] || '';
 
   if (!orderId || amount === 0) return;
 
@@ -419,6 +439,14 @@ function processReconEntry(db: Database.Database, entry: Record<string, string>,
         INSERT OR IGNORE INTO fee_details (financial_event_id, order_id, asin, fee_type, fee_category, amount, posted_date)
         VALUES (?, ?, ?, 'WalmartReferralFeeClawback', 'Walmart Referral Fee', ?, ?)
       `).run(refundEventId, orderId, sku, amount, refundIsoDate);
+    }
+
+    // A return also reverses the Walmart-funded incentive booked on the sale
+    // (negative "Total Walmart Funded Savings"). The sale side is income in
+    // reimbursements, so the reversal must land there too or the incentive
+    // stays on the books for a unit the customer sent back.
+    if (amount < 0 && amountType === 'Total Walmart Funded Savings') {
+      applyFundedIncentiveReversal(db, entry, orderId, sku, amount, refundIsoDate, now);
     }
     return;
   }
@@ -530,20 +558,11 @@ function processReconEntry(db: Database.Database, entry: Record<string, string>,
     `).run(eventId, orderId, sku, feeType, feeCategory, feeAmount, isoDate);
   }
 
-  // Store commission savings (incentive credits) as reimbursements (they're income, not fees)
-  if (commissionSaving > 0 && incentiveProgram) {
-    // Track in financial_events for reporting
-    db.prepare(`
-      INSERT OR IGNORE INTO financial_events (event_type, posted_date, order_id, asin, sku, marketplace, total_amount, raw_data, created_at)
-      VALUES ('WalmartIncentive', ?, ?, ?, ?, 'walmart', ?, ?, ?)
-    `).run(isoDate, orderId, sku, sku, commissionSaving, JSON.stringify({ incentiveProgram, commissionSaving }), now);
-
-    // Store as reimbursement (income), NOT as fee_details
-    db.prepare(`
-      INSERT OR IGNORE INTO reimbursements (reimbursement_id, reimbursement_date, asin, sku, reason, amount, quantity, status, marketplace, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, 1, 'Approved', 'walmart', ?)
-    `).run(`WMT-INCENTIVE-${orderId}-${sku}`, isoDate, sku, sku, `Commission Incentive: ${incentiveProgram}`, commissionSaving, now);
-  }
+  // "Commission Saving" is NOT booked. It is a descriptive column on the
+  // commission row, not cash: the Amount above is already charged at the
+  // reduced rate (amount == Commission Rate x price), and every recon deposit
+  // equals the sum of the Amount column exactly. Booking the saving as income
+  // counted the same money twice (Sept 21 2026: $912.75 removed).
 
   // Mark order as reconciled
   db.prepare("UPDATE orders SET is_estimated = 0 WHERE order_id = ? AND marketplace = 'walmart'").run(orderId);

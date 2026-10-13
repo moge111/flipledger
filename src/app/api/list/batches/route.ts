@@ -20,6 +20,7 @@ export async function GET() {
         b.status,
         b.channel,
         b.marketplace,
+        COALESCE(b.is_holding, 0) as isHolding,
         b.inbound_plan_id as inboundPlanId,
         b.created_at as createdAt,
         b.updated_at as updatedAt,
@@ -31,7 +32,7 @@ export async function GET() {
       FROM listing_batches b
       LEFT JOIN listing_batch_items i ON i.batch_id = b.id
       GROUP BY b.id
-      ORDER BY b.created_at DESC
+      ORDER BY COALESCE(b.is_holding, 0) DESC, b.created_at DESC
     `).all();
 
     return NextResponse.json({ batches });
@@ -66,9 +67,10 @@ export async function POST(request: NextRequest) {
   if (!name) {
     return NextResponse.json({ error: 'Batch name is required' }, { status: 400 });
   }
-  if (channel !== 'FBA' && channel !== 'MFN') {
-    return NextResponse.json({ error: 'channel must be FBA or MFN' }, { status: 400 });
+  if (!['FBA', 'MFN', 'WFS', 'WMT_SF'].includes(channel)) {
+    return NextResponse.json({ error: 'channel must be FBA, MFN, WFS or WMT_SF' }, { status: 400 });
   }
+  const marketplace = channel === 'WFS' || channel === 'WMT_SF' ? 'walmart' : 'amazon';
 
   const db = getDb();
   try {
@@ -90,10 +92,11 @@ export async function POST(request: NextRequest) {
         ship_from_name, ship_from_address_line1, ship_from_city, ship_from_state,
         ship_from_postal_code, ship_from_country_code, ship_from_phone, notes,
         created_at, updated_at
-      ) VALUES (?, 'draft', ?, 'amazon', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ) VALUES (?, 'draft', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       name,
       channel,
+      marketplace,
       resolvedShipFrom.name,
       resolvedShipFrom.addressLine1,
       resolvedShipFrom.city,

@@ -22,12 +22,27 @@
  *    confirms the smaller dimensions. fd.asin is NULL on most fee rows, so
  *    the ASIN is resolved through order_items by order_id (restricted to
  *    single-ASIN orders when ambiguous).
+ *
+ * 3. replacement_no_return — Amazon shipped a free replacement unit. The
+ *    customer is supposed to send the original back; when they don't (or the
+ *    original was lost/destroyed by the carrier or FC) the seller is out a
+ *    unit with no revenue. Same policy class as refund_no_return: claimable
+ *    between day 60 and day 120 after the replacement, and Amazon often
+ *    auto-reimburses first. A replacement has no refund row, so neither the
+ *    refunds table nor the customer-returns sync can see it — this reads
+ *    orders.is_replacement (Orders API + FBA Replacements report).
  */
 import { openDb } from '@/lib/db-conn';
+import { replacementReasonLabel } from '@/lib/sp-api/replacementsReport';
 
 const RNR_ELIGIBLE_FROM_DAYS = 60;
 const RNR_WINDOW_DAYS = 120;
 const RNR_REIMB_MATCH_DAYS = 120;
+
+// Replacement reason codes where Amazon's carrier or FC caused the problem
+// (lost, damaged in shipping, wrong item picked, missing from shipment, lost by
+// shipper, wrong address, delivery problem, FC handling damage, not received).
+const REPL_AMAZON_FAULT_CODES = new Set([1, 3, 4, 5, 6, 8, 9, 10, 11]);
 
 // Fee spike thresholds: recent 90d avg per-unit fee must exceed the prior
 // baseline by at least 40 cents AND 8%, with 3+ orders in each period.
@@ -40,8 +55,9 @@ const FEE_RECENT_DAYS = 90;
 const getDb = () => openDb();
 
 export interface RecoveryScanResult {
-  refundNoReturn: { scanned: number; eligible: number; waiting: number; expired: number; eligibleValueCents: number };
+  refundNoReturn: { scanned: number; eligible: number; waiting: number; expired: number; retracted: number; eligibleValueCents: number };
   feeOvercharge: { asinsChecked: number; flagged: number; estimatedValueCents: number };
+  replacementNoReturn: { scanned: number; eligible: number; waiting: number; expired: number; eligibleValueCents: number };
 }
 
 export function syncRecoveryDiscrepancies(): RecoveryScanResult {
@@ -87,6 +103,7 @@ export function syncRecoveryDiscrepancies(): RecoveryScanResult {
     WHERE r.marketplace = 'amazon'
       AND UPPER(COALESCE(o.fulfillment_channel, '')) IN ('AFN', 'FBA')
       AND r.reason = 'CUSTOMER_RETURN'
+      AND COALESCE(r.item_returned, 0) = 0
     GROUP BY r.id
   `).all() as Array<{
     refundId: number; orderId: string; refundDate: string;
@@ -105,7 +122,7 @@ export function syncRecoveryDiscrepancies(): RecoveryScanResult {
     LIMIT 1
   `);
 
-  let rnrEligible = 0, rnrWaiting = 0, rnrExpired = 0, rnrEligibleValue = 0;
+  let rnrEligible = 0, rnrWaiting = 0, rnrExpired = 0, rnrEligibleValue = 0, rnrRetracted = 0;
 
   const tx = db.transaction(() => {
     for (const r of rnrRows) {
@@ -154,6 +171,38 @@ export function syncRecoveryDiscrepancies(): RecoveryScanResult {
         else if (eligibility === 'waiting') rnrWaiting++;
         else rnrExpired++;
       }
+    }
+
+    // Retract pending rows whose refund has left the candidate set. The usual
+    // cause: the customer-returns sync wrote a real reason, i.e. the FC
+    // processed the return. Without this, the row froze as pending and the
+    // promote sweep kept moving it to eligible. Sept 22 2026 (review D1): 13
+    // false claims ($860.38), 6 of them in File-now. Keyed on membership, so
+    // a deleted refund or a channel change also retracts. Filed/received/
+    // dismissed rows are left alone.
+    const live = new Set(rnrRows.map((r) => `rnr-${r.refundId}`));
+    const openRnr = db.prepare(`
+      SELECT d.id, d.ref_key AS refKey, r.id AS refundId, r.reason, COALESCE(r.item_returned, 0) AS itemReturned
+      FROM recovery_discrepancies d
+      LEFT JOIN refunds r ON r.id = CAST(substr(d.ref_key, 5) AS INTEGER)
+      WHERE d.discrepancy_type = 'refund_no_return' AND d.status = 'pending'
+    `).all() as Array<{ id: number; refKey: string; refundId: number | null; reason: string | null; itemReturned: number }>;
+    const retract = db.prepare(`
+      UPDATE recovery_discrepancies SET status = 'expired', eligibility = 'not_eligible',
+        eligibility_reasons = json_array(?), updated_at = datetime('now')
+      WHERE id = ?
+    `);
+    for (const o of openRnr) {
+      if (live.has(o.refKey)) continue;
+      const why = o.refundId == null
+        ? 'Refund no longer on record — no claim'
+        : o.reason && o.reason !== 'CUSTOMER_RETURN'
+          ? `Return processed at the FC (reason: ${o.reason}) — no claim`
+          : o.itemReturned
+            ? 'Unit came back to sellable stock — no claim'
+            : 'No longer an FBA refund without a return — no claim';
+      retract.run(why, o.id);
+      rnrRetracted++;
     }
   });
   tx();
@@ -243,11 +292,131 @@ export function syncRecoveryDiscrepancies(): RecoveryScanResult {
   });
   feeTx();
 
+  // ---------- Detector 3: replacement shipped, original never made whole ----------
+  // Oldest first so that when two replacements share a SKU, each reimbursement
+  // is credited to at most one of them.
+  const replRows = db.prepare(`
+    SELECT
+      o.order_id as orderId, o.replaced_order_id as originalOrderId,
+      COALESCE(o.shipped_at, o.purchase_date) as eventDate,
+      o.replacement_reason_code as reasonCode,
+      oi.sku, orig.asin as originalAsin, oi.asin as itemAsin,
+      COALESCE(oi.quantity, orig.quantity, 1) as quantity,
+      COALESCE(oi.cogs_per_unit, 0) as cogsPerUnit,
+      COALESCE(orig.total_price, 0) as originalSaleCents,
+      COALESCE(p.name, p2.name, oi.sku, orig.sku) as productName
+    FROM orders o
+    LEFT JOIN (SELECT order_id, MIN(id) id FROM order_items WHERE asin != 'PENDING' GROUP BY order_id) oi1 ON oi1.order_id = o.order_id
+    LEFT JOIN order_items oi ON oi.id = oi1.id
+    LEFT JOIN (SELECT order_id, MIN(id) id FROM order_items GROUP BY order_id) og1 ON og1.order_id = o.replaced_order_id
+    LEFT JOIN order_items orig ON orig.id = og1.id
+    LEFT JOIN products p ON p.asin = orig.asin
+    LEFT JOIN products p2 ON p2.asin = oi.asin
+    WHERE o.marketplace = 'amazon'
+      AND COALESCE(o.is_replacement, 0) = 1
+      AND o.status IN ('Shipped', 'PartiallyShipped')
+      AND UPPER(COALESCE(o.fulfillment_channel, '')) IN ('AFN', 'FBA')
+    ORDER BY eventDate ASC
+  `).all() as Array<{
+    orderId: string; originalOrderId: string | null; eventDate: string; reasonCode: number | null;
+    sku: string | null; originalAsin: string | null; itemAsin: string | null; quantity: number;
+    cogsPerUnit: number; originalSaleCents: number; productName: string | null;
+  }>;
+
+  const replReimbs = db.prepare(`
+    SELECT id FROM reimbursements
+    WHERE marketplace = 'amazon' AND amount > 0
+      AND julianday(reimbursement_date) >= julianday(?) - 1
+      AND julianday(reimbursement_date) <= julianday(?) + ${RNR_REIMB_MATCH_DAYS}
+      AND ((? != '' AND sku = ?) OR (? != '' AND asin = ?))
+    ORDER BY reimbursement_date ASC
+  `);
+  // A sellable return of either unit means nothing was lost. The return can
+  // carry a refund (item_returned) or none at all — Amazon sent the free
+  // replacement instead of refunding, and the original still came back
+  // (fba_customer_returns, from the customer returns report).
+  const replReturned = db.prepare(`
+    SELECT 1 FROM refunds WHERE marketplace = 'amazon' AND COALESCE(item_returned, 0) = 1
+      AND order_id IN (?, ?)
+    UNION ALL
+    SELECT 1 FROM fba_customer_returns WHERE disposition = 'SELLABLE' AND order_id IN (?, ?)
+    LIMIT 1
+  `);
+
+  let replEligible = 0, replWaiting = 0, replExpired = 0, replEligibleValue = 0;
+  const usedReimbIds = new Set<number>();
+
+  const replTx = db.transaction(() => {
+    for (const r of replRows) {
+      const ageDays = (Date.now() - new Date(r.eventDate).getTime()) / 86400000;
+      const eligibleFrom = new Date(new Date(r.eventDate).getTime() + RNR_ELIGIBLE_FROM_DAYS * 86400000).toISOString().slice(0, 10);
+      const windowUntil = new Date(new Date(r.eventDate).getTime() + RNR_WINDOW_DAYS * 86400000).toISOString().slice(0, 10);
+
+      // Replacement line items arrive via financial events with the SKU in the
+      // asin column, so the real ASIN comes from the original order.
+      const asin = r.originalAsin || (r.itemAsin && r.itemAsin !== r.sku ? r.itemAsin : '') || '';
+      const original = r.originalOrderId || r.orderId;
+      const returned = !!replReturned.get(r.orderId, original, r.orderId, original);
+      // A pair that got a unit back owes nothing, so it must not use up a
+      // reimbursement another replacement of the same SKU may be matched to.
+      const reimbMatch = returned ? undefined
+        : (replReimbs.all(r.eventDate, r.eventDate, r.sku || '', r.sku || '', asin, asin) as { id: number }[])
+          .find((m) => !usedReimbIds.has(m.id));
+      if (reimbMatch) usedReimbIds.add(reimbMatch.id);
+
+      const reasonLabel = replacementReasonLabel(r.reasonCode);
+      const amazonFault = r.reasonCode !== null && REPL_AMAZON_FAULT_CODES.has(r.reasonCode);
+      // What the seller actually lost: the replacement unit at cost. Amazon
+      // values these claims at sourcing cost.
+      const valueCents = r.cogsPerUnit > 0 ? r.cogsPerUnit * r.quantity : r.originalSaleCents;
+
+      let eligibility: 'eligible' | 'waiting' | 'not_eligible';
+      let status: string;
+      const tags: string[] = [];
+
+      if (returned) {
+        eligibility = 'not_eligible'; status = 'expired';
+        tags.push('A unit came back to Amazon sellable — nothing to claim');
+      } else if (reimbMatch) {
+        eligibility = 'not_eligible'; status = 'expired';
+        tags.push('Amazon already reimbursed this replacement');
+      } else if (ageDays > RNR_WINDOW_DAYS) {
+        eligibility = 'not_eligible'; status = 'expired';
+        tags.push(`Past the ${RNR_WINDOW_DAYS}-day claim window (${Math.floor(ageDays)} days old)`);
+      } else if (ageDays < RNR_ELIGIBLE_FROM_DAYS) {
+        eligibility = 'waiting'; status = 'pending';
+        tags.push(`Claimable starting ${eligibleFrom} — Amazon opens replacement claims 60 days after the replacement (and often auto-reimburses before then)`);
+      } else {
+        eligibility = 'eligible'; status = 'pending';
+        tags.push(`Free replacement shipped ${Math.floor(ageDays)} days ago — no reimbursement found and no sellable return of the original on record`);
+      }
+      if (eligibility !== 'not_eligible') {
+        tags.push(reasonLabel
+          ? `Amazon's replacement reason: ${reasonLabel}${amazonFault ? ' — carrier/FC fault, the strongest kind of claim' : ''}`
+          : 'Amazon has not reported a replacement reason for this order');
+        tags.push('Before filing, confirm in Seller Central (Manage FBA Returns) that the original was not returned — FlipLedger cannot see a return that has no refund');
+      }
+
+      const result = upsert.run(
+        'replacement_no_return', `repl-${r.orderId}`, r.orderId, asin || null, r.sku, r.productName,
+        r.eventDate, r.quantity || 1, valueCents,
+        eligibility, JSON.stringify(tags), eligibleFrom, windowUntil,
+        JSON.stringify({ originalOrderId: r.originalOrderId, reasonCode: r.reasonCode, reasonLabel, amazonFault }), status
+      );
+      if (result.changes === 1) {
+        if (eligibility === 'eligible') { replEligible++; replEligibleValue += valueCents; }
+        else if (eligibility === 'waiting') replWaiting++;
+        else replExpired++;
+      }
+    }
+  });
+  replTx();
+
   // Expire refund-no-return candidates whose window closed while pending
   db.prepare(`
     UPDATE recovery_discrepancies
     SET status = 'expired', eligibility = 'not_eligible', updated_at = datetime('now')
-    WHERE discrepancy_type = 'refund_no_return'
+    WHERE discrepancy_type IN ('refund_no_return', 'replacement_no_return')
       AND status = 'pending'
       AND date(window_until) < date('now')
   `).run();
@@ -256,7 +425,7 @@ export function syncRecoveryDiscrepancies(): RecoveryScanResult {
   db.prepare(`
     UPDATE recovery_discrepancies
     SET eligibility = 'eligible', updated_at = datetime('now')
-    WHERE discrepancy_type = 'refund_no_return'
+    WHERE discrepancy_type IN ('refund_no_return', 'replacement_no_return')
       AND status = 'pending' AND eligibility = 'waiting'
       AND date(eligible_from) <= date('now')
   `).run();
@@ -269,12 +438,20 @@ export function syncRecoveryDiscrepancies(): RecoveryScanResult {
       eligible: rnrEligible,
       waiting: rnrWaiting,
       expired: rnrExpired,
+      retracted: rnrRetracted,
       eligibleValueCents: rnrEligibleValue,
     },
     feeOvercharge: {
       asinsChecked: feeRows.length,
       flagged: feeFlagged,
       estimatedValueCents: feeValue,
+    },
+    replacementNoReturn: {
+      scanned: replRows.length,
+      eligible: replEligible,
+      waiting: replWaiting,
+      expired: replExpired,
+      eligibleValueCents: replEligibleValue,
     },
   };
 }

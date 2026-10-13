@@ -113,7 +113,7 @@ export default function MfnImportPage() {
             <span>/</span>
             <span>Import</span>
           </div>
-          <h1 className="text-xl font-semibold tracking-tight">InventoryLab FBM Import</h1>
+          <h1 className="page-title">InventoryLab FBM Import</h1>
           <p className="text-sm text-text-tertiary mt-0.5">
             Upload an InventoryLab FBM buy-list CSV. Preview, then create a draft MFN batch.
           </p>
@@ -123,7 +123,7 @@ export default function MfnImportPage() {
       <FileDropper filename={filename} onFile={handleFile} />
 
       {effectiveError && (
-        <div className="mt-4 rounded-lg border border-negative/30 bg-negative/10 px-4 py-3 text-sm text-negative flex items-start gap-2">
+        <div className="mt-4 flash flash-bad px-4 py-3 text-sm text-negative flex items-start gap-2">
           <AlertCircle className="w-4 h-4 mt-0.5 shrink-0" />
           <span>{effectiveError}</span>
         </div>
@@ -132,7 +132,7 @@ export default function MfnImportPage() {
       {result && (
         <>
           {result.globalErrors.length > 0 && (
-            <div className="mt-4 rounded-lg border border-negative/30 bg-negative/10 px-4 py-3 text-sm text-negative">
+            <div className="mt-4 flash flash-bad px-4 py-3 text-sm text-negative">
               <div className="flex items-start gap-2">
                 <AlertCircle className="w-4 h-4 mt-0.5 shrink-0" />
                 <div>
@@ -152,7 +152,7 @@ export default function MfnImportPage() {
               <PreviewTable result={result} />
 
               {importError && (
-                <div className="rounded-lg border border-negative/30 bg-negative/10 px-4 py-3 text-sm text-negative">
+                <div className="flash flash-bad px-4 py-3 text-sm text-negative">
                   <div className="flex items-start gap-2">
                     <AlertCircle className="w-4 h-4 mt-0.5 shrink-0" />
                     <div className="flex-1">
@@ -171,7 +171,7 @@ export default function MfnImportPage() {
                 </div>
               )}
 
-              <div className="rounded-lg border border-border-subtle bg-bg-surface px-4 py-3 flex items-center justify-between gap-4">
+              <div className="panel px-4 py-3 flex items-center justify-between gap-4">
                 <div className="text-xs text-text-tertiary">
                   {previewRowErrors > 0
                     ? `Fix ${previewRowErrors} row error${previewRowErrors === 1 ? '' : 's'} before importing.`
@@ -184,7 +184,7 @@ export default function MfnImportPage() {
                   className={
                     'inline-flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium transition-colors ' +
                     (canConfirm
-                      ? 'bg-accent text-white hover:bg-accent-hover'
+                      ? 'bg-accent text-text-inverse hover:bg-accent-hover'
                       : 'bg-bg-elevated text-text-tertiary cursor-not-allowed')
                   }
                 >
@@ -249,9 +249,9 @@ function FileDropper({
 
 function MappingPanel({ mapping }: { mapping: ColumnMapping }) {
   return (
-    <div className="rounded-lg border border-border-subtle bg-bg-surface">
+    <div className="panel">
       <div className="px-4 py-3 border-b border-border-subtle">
-        <div className="text-xs uppercase tracking-wide text-text-tertiary font-medium">
+        <div className="text-xs label-caps text-text-tertiary">
           Column mapping
         </div>
       </div>
@@ -267,7 +267,7 @@ function MappingPanel({ mapping }: { mapping: ColumnMapping }) {
                 )}
               </div>
               <div className={
-                'font-mono text-xs tabular-nums ' +
+                'text-xs tabular-nums ' +
                 (mapped ? 'text-text-primary' : 'text-text-tertiary')
               }>
                 {mapped ?? '—'}
@@ -281,7 +281,7 @@ function MappingPanel({ mapping }: { mapping: ColumnMapping }) {
             Quantity
             <div className="text-[10px] text-text-tertiary leading-tight">extracted from Seller Sku</div>
           </div>
-          <div className="font-mono text-xs text-accent">SKU-derived</div>
+          <div className="text-xs text-text-primary tabular-nums">SKU-derived</div>
         </li>
       </ul>
     </div>
@@ -304,12 +304,12 @@ function SummaryCards({ result }: { result: ParseResult }) {
   return (
     <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-3">
       {cells.map((c, i) => (
-        <div key={i} className="rounded-lg border border-border-subtle bg-bg-surface px-3 py-2.5">
-          <div className="text-[10px] uppercase tracking-wide font-medium text-text-tertiary">
+        <div key={i} className="panel px-3 py-2.5">
+          <div className="text-[10px] label-caps text-text-tertiary">
             {c.label}
           </div>
           <div className={
-            'font-mono font-semibold tabular-nums text-lg mt-0.5 ' +
+            'font-semibold tabular-nums text-lg mt-0.5 ' +
             (c.tone === 'negative' ? 'text-negative'
              : c.tone === 'warning' ? 'text-warning'
              : 'text-text-primary')
@@ -324,29 +324,27 @@ function SummaryCards({ result }: { result: ParseResult }) {
 
 function PreviewTable({ result }: { result: ParseResult }) {
   return (
-    <div className="rounded-lg border border-border-subtle bg-bg-surface overflow-hidden">
-      <div className="px-4 py-3 border-b border-border-subtle flex items-center justify-between">
-        <div className="text-xs uppercase tracking-wide text-text-tertiary font-medium">
-          Preview
-        </div>
-        <div className="text-xs text-text-tertiary">{result.rows.length} row{result.rows.length === 1 ? '' : 's'}</div>
+    <div className="panel overflow-hidden">
+      <div className="panel-bar">
+        <span>Preview</span>
+        <span className="panel-bar-caption">{result.rows.length} row{result.rows.length === 1 ? '' : 's'}</span>
       </div>
       <div className="overflow-x-auto">
         <table className="w-full text-sm">
           <thead>
-            <tr className="bg-bg-elevated text-[10px] uppercase tracking-wide text-text-tertiary font-medium">
-              <th className="text-left px-3 py-2 font-medium">Status</th>
-              <th className="text-left px-3 py-2 font-medium">MSKU</th>
-              <th className="text-left px-3 py-2 font-medium">ASIN</th>
-              <th className="text-left px-3 py-2 font-medium">Product</th>
-              <th className="text-right px-3 py-2 font-medium">Qty</th>
-              <th className="text-right px-3 py-2 font-medium">Cost/unit</th>
-              <th className="text-right px-3 py-2 font-medium">List</th>
-              <th className="text-left px-3 py-2 font-medium">Purchased</th>
-              <th className="text-left px-3 py-2 font-medium">Supplier</th>
-              <th className="text-right px-3 py-2 font-medium">Ship est</th>
-              <th className="text-left px-3 py-2 font-medium">Template</th>
-              <th className="text-left px-3 py-2 font-medium">Notes</th>
+            <tr className="bg-bg-surface text-[10px] label-caps text-text-tertiary">
+              <th className="text-left px-3 py-2">Status</th>
+              <th className="text-left px-3 py-2">MSKU</th>
+              <th className="text-left px-3 py-2">ASIN</th>
+              <th className="text-left px-3 py-2">Product</th>
+              <th className="text-right px-3 py-2">Qty</th>
+              <th className="text-right px-3 py-2">Cost/unit</th>
+              <th className="text-right px-3 py-2">List</th>
+              <th className="text-left px-3 py-2">Purchased</th>
+              <th className="text-left px-3 py-2">Supplier</th>
+              <th className="text-right px-3 py-2">Ship est</th>
+              <th className="text-left px-3 py-2">Template</th>
+              <th className="text-left px-3 py-2">Notes</th>
             </tr>
           </thead>
           <tbody>
@@ -388,22 +386,22 @@ function PreviewTable({ result }: { result: ParseResult }) {
                       {row.productName || <span className="text-text-tertiary">—</span>}
                     </div>
                   </td>
-                  <td className="px-3 py-2 align-top text-right font-mono tabular-nums text-text-primary">
+                  <td className="px-3 py-2 align-top text-right tabular-nums text-text-primary">
                     {row.quantity || <span className="text-text-tertiary">—</span>}
                   </td>
-                  <td className="px-3 py-2 align-top text-right font-mono tabular-nums text-text-primary">
+                  <td className="px-3 py-2 align-top text-right tabular-nums text-text-primary">
                     {row.costCents ? formatCurrency(row.costCents) : <span className="text-text-tertiary">—</span>}
                   </td>
-                  <td className="px-3 py-2 align-top text-right font-mono tabular-nums text-text-primary">
+                  <td className="px-3 py-2 align-top text-right tabular-nums text-text-primary">
                     {row.listPriceCents ? formatCurrency(row.listPriceCents) : <span className="text-text-tertiary">—</span>}
                   </td>
-                  <td className="px-3 py-2 align-top font-mono text-xs text-text-secondary">
+                  <td className="px-3 py-2 align-top text-xs text-text-secondary tabular-nums">
                     {row.purchaseDate || <span className="text-text-tertiary">—</span>}
                   </td>
                   <td className="px-3 py-2 align-top text-text-secondary">
                     {row.supplier || <span className="text-text-tertiary">—</span>}
                   </td>
-                  <td className="px-3 py-2 align-top text-right font-mono tabular-nums text-text-secondary">
+                  <td className="px-3 py-2 align-top text-right tabular-nums text-text-secondary">
                     {row.estimatedShipCents ? formatCurrency(row.estimatedShipCents) : <span className="text-text-tertiary">—</span>}
                   </td>
                   <td className="px-3 py-2 align-top text-text-secondary text-xs">
@@ -432,19 +430,19 @@ function PreviewTable({ result }: { result: ParseResult }) {
             )}
           </tbody>
           <tfoot>
-            <tr className="bg-bg-elevated border-t-2 border-border-strong">
-              <td colSpan={4} className="px-3 py-2 text-xs uppercase tracking-wide text-text-tertiary font-medium">Totals</td>
-              <td className="px-3 py-2 text-right font-mono tabular-nums font-semibold text-text-primary">
+            <tr className="bg-bg-surface border-t-[1.5px] border-border-strong">
+              <td colSpan={4} className="px-3 py-2 text-xs label-caps text-text-tertiary">Totals</td>
+              <td className="px-3 py-2 text-right tabular-nums font-semibold text-text-primary">
                 {result.totals.totalUnits}
               </td>
-              <td className="px-3 py-2 text-right font-mono tabular-nums font-semibold text-text-primary">
+              <td className="px-3 py-2 text-right tabular-nums font-semibold text-text-primary">
                 {formatCurrency(result.totals.totalCostCents)}
               </td>
-              <td className="px-3 py-2 text-right font-mono tabular-nums font-semibold text-text-primary">
+              <td className="px-3 py-2 text-right tabular-nums font-semibold text-text-primary">
                 {formatCurrency(result.totals.totalListValueCents)}
               </td>
               <td colSpan={2}></td>
-              <td className="px-3 py-2 text-right font-mono tabular-nums font-semibold text-text-primary">
+              <td className="px-3 py-2 text-right tabular-nums font-semibold text-text-primary">
                 {formatCurrency(result.totals.totalEstimatedShippingCents)}
               </td>
               <td colSpan={2}></td>

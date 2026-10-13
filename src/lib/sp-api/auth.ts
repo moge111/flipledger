@@ -194,7 +194,6 @@ export async function spApiRequest(
   sandbox: boolean = false
 ): Promise<any> {
   const endpoint = getEndpoint(credentials.marketplaceId, sandbox);
-  const accessToken = await getAccessToken(credentials);
 
   const url = new URL(path, endpoint);
   if (params) {
@@ -204,6 +203,9 @@ export async function spApiRequest(
   }
 
   for (let attempt = 0; attempt < retries; attempt++) {
+    // Fetched per attempt so the 403 branch's clearTokenCache() actually yields a
+    // fresh token, and a token that aged out during a long backoff is refreshed.
+    const accessToken = await getAccessToken(credentials);
     const response = await netFetch(url.toString(), {
       headers: {
         'x-amz-access-token': accessToken,

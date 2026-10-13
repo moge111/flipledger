@@ -20,9 +20,9 @@ export default function OtherIncomePage() {
   const total = data?.totalIncome || 0;
 
   const columns = useMemo<ColumnDef<IncomeRow, any>[]>(() => [
-    { id: 'date', header: 'Date', accessorKey: 'date', cell: ({ getValue }) => <span className="font-mono text-sm text-text-secondary whitespace-nowrap">{formatDate(getValue() as string)}</span>, size: 120 },
+    { id: 'date', header: 'Date', accessorKey: 'date', cell: ({ getValue }) => <span className="text-sm text-text-secondary whitespace-nowrap tabular-nums">{formatDate(getValue() as string)}</span>, size: 120 },
     { id: 'incomeType', header: 'Type', accessorKey: 'incomeType', cell: ({ getValue }) => <span className="text-sm text-text-primary">{getValue() as string}</span>, size: 180 },
-    { id: 'amount', header: 'Amount', accessorKey: 'amount', cell: ({ getValue }) => <span className="font-mono text-positive">{formatCurrency(getValue() as number)}</span>, size: 120 },
+    { id: 'amount', header: 'Amount', accessorKey: 'amount', cell: ({ getValue }) => <span className="text-positive tabular-nums">{formatCurrency(getValue() as number)}</span>, size: 120 },
     { id: 'description', header: 'Description', accessorKey: 'description', cell: ({ getValue }) => <span className="text-sm text-text-secondary">{getValue() as string}</span>, size: 300 },
   ], []);
 

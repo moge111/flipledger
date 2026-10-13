@@ -2,6 +2,7 @@
 
 import DateRangePicker, { type DateRange } from './DateRangePicker';
 import MarketplaceFilter from './MarketplaceFilter';
+import { Seg } from './Paper';
 import { Download } from 'lucide-react';
 
 interface PageHeaderProps {
@@ -18,35 +19,22 @@ interface PageHeaderProps {
 
 export default function PageHeader({ title, subtitle, dateRange, onDateRangeChange, onExport, marketplace, onMarketplaceChange, dateBasis, onDateBasisChange }: PageHeaderProps) {
   return (
-    <div className="flex items-center justify-between mb-6">
-      <div>
-        <h1 className="text-xl font-semibold tracking-tight">{title}</h1>
+    <div className="flex flex-wrap items-end justify-between gap-x-6 gap-y-3 mb-6">
+      <div className="min-w-0">
+        <h1 className="page-title">{title}</h1>
         {subtitle && <p className="text-sm text-text-tertiary mt-0.5">{subtitle}</p>}
       </div>
-      <div className="flex items-center gap-2">
+      <div className="flex flex-wrap items-center gap-2">
         {onDateBasisChange && (
-          <div className="flex h-9 rounded-md border border-border-default overflow-hidden text-sm">
-            <button
-              onClick={() => onDateBasisChange('posted')}
-              className={`px-3 transition-colors ${
-                dateBasis === 'posted'
-                  ? 'bg-accent/15 text-accent font-medium'
-                  : 'bg-bg-elevated text-text-secondary hover:bg-bg-hover'
-              }`}
-            >
-              Cash
-            </button>
-            <button
-              onClick={() => onDateBasisChange('purchase')}
-              className={`px-3 border-l border-border-default transition-colors ${
-                dateBasis === 'purchase'
-                  ? 'bg-accent/15 text-accent font-medium'
-                  : 'bg-bg-elevated text-text-secondary hover:bg-bg-hover'
-              }`}
-            >
-              Accrual
-            </button>
-          </div>
+          <Seg
+            ariaLabel="Date basis"
+            value={dateBasis === 'purchase' ? 'purchase' : 'posted'}
+            onChange={onDateBasisChange}
+            options={[
+              { value: 'posted', label: 'Cash' },
+              { value: 'purchase', label: 'Accrual' },
+            ]}
+          />
         )}
         {onMarketplaceChange && (
           <MarketplaceFilter value={marketplace || 'all'} onChange={onMarketplaceChange} />
@@ -55,9 +43,9 @@ export default function PageHeader({ title, subtitle, dateRange, onDateRangeChan
         {onExport && (
           <button
             onClick={onExport}
-            className="flex items-center gap-2 h-9 px-3 bg-bg-elevated border border-border-default rounded-md text-sm text-text-primary hover:bg-bg-hover transition-colors"
+            className="flex items-center gap-2 h-9 px-3 bg-bg-surface border-[1.5px] border-border-strong rounded-md text-sm font-semibold text-text-primary hover:bg-bg-hover transition-colors"
           >
-            <Download size={14} className="text-text-tertiary" />
+            <Download size={14} />
             Export
           </button>
         )}

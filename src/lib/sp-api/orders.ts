@@ -80,17 +80,27 @@ export async function syncOrders(
           // Don't overwrite a previously-recorded shipped_at on subsequent syncs (keep first-seen ship time).
           const shippedAt = (status === 'Shipped' || status === 'PartiallyShipped') ? (order.LastUpdateDate || null) : null;
 
+          // Replacement orders ship a second unit free. Amazon flags them and
+          // names the order being replaced; the reason arrives later via the
+          // FBA Replacements report (replacementsReport.ts).
+          const isReplacement = order.IsReplacementOrder === true || order.IsReplacementOrder === 'true' ? 1 : 0;
+          const replacedOrderId: string | null = order.ReplacedOrderId || null;
+
           // Upsert order. Preserve shipped_at once set: COALESCE keeps existing value if not null.
+          // Replacement fields only ever ratchet on — the report may have set
+          // them for an order this API call no longer flags.
           db.prepare(`
-            INSERT INTO orders (order_id, purchase_date, status, marketplace, fulfillment_channel, is_estimated, shipped_at, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO orders (order_id, purchase_date, status, marketplace, fulfillment_channel, is_estimated, shipped_at, is_replacement, replaced_order_id, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(order_id) DO UPDATE SET
               purchase_date = excluded.purchase_date,
               status = excluded.status,
               fulfillment_channel = excluded.fulfillment_channel,
               is_estimated = excluded.is_estimated,
-              shipped_at = COALESCE(orders.shipped_at, excluded.shipped_at)
-          `).run(orderId, purchaseDate, status, 'amazon', channel, isEstimated, shippedAt, now);
+              shipped_at = COALESCE(orders.shipped_at, excluded.shipped_at),
+              is_replacement = MAX(COALESCE(orders.is_replacement, 0), excluded.is_replacement),
+              replaced_order_id = COALESCE(excluded.replaced_order_id, orders.replaced_order_id)
+          `).run(orderId, purchaseDate, status, 'amazon', channel, isEstimated, shippedAt, isReplacement, replacedOrderId, now);
 
           // Update sales tax state from shipping address. Delete any 'Unknown'
           // row already shadowed by a real-state row for the same posted_date

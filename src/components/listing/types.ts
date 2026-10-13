@@ -110,10 +110,15 @@ export interface BatchItem {
   inboundReady?: number | null;
   prepCategory?: string | null;
   preflightStatus?: string | null;  // READY | PENDING | GATED | CATALOG_ISSUE | STUCK | FAILED | UNPRICED
+  // MFN "Qty → Amazon" switch: 1 = FlipLedger sets the Amazon quantity to the
+  // SKU's stock in FlipLedger (skuStock); 0 = it never touches it.
+  sendQtyToAmazon?: number | null;
+  skuStock?: number | null;
   preflightDetail?: {
     restriction?: { status: string; reasons: string[]; approvalUrl: string | null };
     errorIssues?: string[];
     catalogDefect?: boolean;
+    mfnAvailable?: number;
   } | null;
 }
 
@@ -133,6 +138,7 @@ interface ShippingEstimate {
 interface ExistingMsku {
   msku: string;
   lastBuyPriceCents: number;
+  currentPriceCents?: number;  // live Amazon offer price for this MSKU
   source: 'live_inventory' | 'inventory_ledger' | 'listing_batch';
   unitsInStock?: number | null;
   /** Fulfillment channel this MSKU is currently registered on, when known. */
@@ -173,6 +179,7 @@ export interface BoxingWorkflowProps {
   confirmingPlacementId: string | null;
   onAddBox: (packingGroupId?: string) => void;
   onRemoveBox: (idx: number) => void;
+  onDuplicateBox: (idx: number) => void;
   onUpdateBoxField: (idx: number, field: keyof Box, value: number) => void;
   onSetBoxItemQty: (boxIdx: number, itemId: number, qty: number) => void;
   onSaveBoxes: () => void;

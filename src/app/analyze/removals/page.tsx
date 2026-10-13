@@ -32,8 +32,8 @@ export default function RemovalsPage() {
   const totals: { totalRemovals: number; totalFee: number; totalQuantity: number } | null = data?.totals || null;
 
   const columns = useMemo<ColumnDef<RemovalRow, any>[]>(() => [
-    { id: 'dateRequested', header: 'Date', accessorKey: 'dateRequested', cell: ({ getValue }) => <span className="font-mono text-sm text-text-secondary">{formatDate(getValue() as string)}</span>, size: 120 },
-    { id: 'removalOrderId', header: 'Removal ID', accessorKey: 'removalOrderId', cell: ({ getValue }) => <span className="font-mono text-sm text-accent">{getValue() as string}</span>, size: 140 },
+    { id: 'dateRequested', header: 'Date', accessorKey: 'dateRequested', cell: ({ getValue }) => <span className="text-sm text-text-secondary tabular-nums">{formatDate(getValue() as string)}</span>, size: 120 },
+    { id: 'removalOrderId', header: 'Removal ID', accessorKey: 'removalOrderId', cell: ({ getValue }) => <span className="text-sm text-text-primary tabular-nums">{getValue() as string}</span>, size: 140 },
     {
       id: 'product', header: 'Product', accessorFn: (row) => row.productName || row.asin,
       cell: ({ row }) => (
@@ -43,12 +43,12 @@ export default function RemovalsPage() {
         </div>
       ), size: 220,
     },
-    { id: 'quantity', header: 'Qty', accessorKey: 'quantity', cell: ({ getValue }) => <span className="font-mono">{getValue() as number}</span>, size: 60 },
+    { id: 'quantity', header: 'Qty', accessorKey: 'quantity', cell: ({ getValue }) => <span className="tabular-nums">{getValue() as number}</span>, size: 60 },
     {
       id: 'removalType', header: 'Type', accessorKey: 'removalType',
       cell: ({ getValue }) => {
         const v = getValue() as string;
-        return <span className={`text-xs font-medium px-2 py-0.5 rounded ${v === 'Return' ? 'bg-accent-muted text-accent' : 'bg-negative-muted text-negative'}`}>{v}</span>;
+        return <span className={`tag ${v === 'Return' ? '' : 'tag-red'}`}>{v}</span>;
       }, size: 90,
     },
     { id: 'reason', header: 'Reason', accessorKey: 'reason', cell: ({ getValue }) => <span className="text-sm text-text-secondary">{getValue() as string}</span>, size: 130 },
@@ -56,10 +56,10 @@ export default function RemovalsPage() {
       id: 'status', header: 'Status', accessorKey: 'status',
       cell: ({ getValue }) => {
         const v = getValue() as string;
-        return <span className={`text-xs font-medium px-2 py-0.5 rounded ${v === 'Completed' ? 'bg-positive-muted text-positive' : 'bg-warning-muted text-warning'}`}>{v}</span>;
+        return <span className={`tag ${v === 'Completed' ? 'text-positive' : 'text-warning'}`}>{v}</span>;
       }, size: 100,
     },
-    { id: 'fee', header: 'Fee', accessorKey: 'fee', cell: ({ getValue }) => <span className="font-mono text-negative">{formatCurrency(getValue() as number)}</span>, size: 90 },
+    { id: 'fee', header: 'Fee', accessorKey: 'fee', cell: ({ getValue }) => <span className="text-negative tabular-nums">{formatCurrency(getValue() as number)}</span>, size: 90 },
   ], []);
 
   if (loading) return <div className="space-y-4"><div className="skeleton h-6 w-32" /><div className="skeleton h-[400px] w-full" /></div>;

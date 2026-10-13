@@ -105,11 +105,13 @@ export async function GET(request: NextRequest) {
                      rb.reimbursement_id LIKE '%' || r.order_id || '%'
                      OR (rb.sku IS NOT NULL AND rb.sku <> '' AND rb.sku = r.sku COLLATE NOCASE)
                    )
-                 -- KNOWN LIMIT: recon-sourced WFS Refund / WFS Lost Inventory
-                 -- rows are period roll-ups carrying no SKU or order id, so
-                 -- they cannot be attributed and will not clear a claim here.
-                 -- Same attribution gap as the RTV fee roll-ups.
+                 -- Recon-sourced WFS Refund roll-ups carry no SKU or order id;
+                 -- lost-return payouts are attributed via wfs_lost_returns below.
                ) THEN 'reimbursed'
+          WHEN COALESCE(r.marketplace, 'amazon') = 'walmart'
+               AND EXISTS (SELECT 1 FROM wfs_lost_returns l
+                           WHERE l.rma = r.return_order_id OR (l.rma IS NULL AND l.po = r.order_id))
+            THEN 'reimbursed'
           -- RESTOCKED requires evidence the unit is actually back: the SKU has
           -- sellable stock right now, or it sold again after the refund. A bare
           -- "settled + no RTV fee" claim overcounts (in-store returns spend

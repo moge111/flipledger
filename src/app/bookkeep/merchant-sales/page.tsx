@@ -20,6 +20,7 @@ interface MFNSaleRow {
   salePrice: number;
   buyCost: number;
   fees: number;
+  refunded: number;
   shippingCharged: number;
   shippingCost: number;
   shippingProfit: number;
@@ -39,12 +40,12 @@ export default function MerchantSalesPage() {
   const totalProfit = rows.reduce((s, r) => s + r.profit, 0);
 
   const columns = useMemo<ColumnDef<MFNSaleRow, any>[]>(() => [
-    { id: 'date', header: 'Date', accessorKey: 'date', cell: ({ getValue }) => <span className="font-mono text-sm text-text-secondary whitespace-nowrap">{formatDate(getValue() as string)}</span>, size: 110 },
+    { id: 'date', header: 'Date', accessorKey: 'date', cell: ({ getValue }) => <span className="text-sm text-text-secondary whitespace-nowrap tabular-nums">{formatDate(getValue() as string)}</span>, size: 110 },
     {
       id: 'order', header: 'Order Details', accessorFn: (row) => row.productName || row.orderId,
       cell: ({ row }) => (
         <div className="min-w-[200px]">
-          <div className="text-sm font-mono text-accent">{row.original.orderId}</div>
+          <div className="text-sm font-mono text-text-primary">{row.original.orderId}</div>
           <div className="text-sm text-text-secondary truncate max-w-[250px]">{row.original.productName || row.original.asin}</div>
         </div>
       ), size: 280,
@@ -53,32 +54,37 @@ export default function MerchantSalesPage() {
       id: 'quantity', header: 'Qty', accessorKey: 'quantity',
       cell: ({ getValue }) => {
         const v = getValue() as number;
-        return <span className={`font-mono ${v > 1 ? 'text-text-primary font-medium' : 'text-text-tertiary'}`}>{v}</span>;
+        return <span className={`tabular-nums ${v > 1 ? 'text-text-primary font-medium' : 'text-text-tertiary'}`}>{v}</span>;
       }, size: 60,
     },
-    { id: 'salePrice', header: 'Order Price', accessorKey: 'salePrice', cell: ({ getValue }) => <span className="font-mono text-text-primary">{formatCurrency(getValue() as number)}</span>, size: 100 },
-    { id: 'shippingCharged', header: 'Ship Charged', accessorKey: 'shippingCharged', cell: ({ getValue }) => <span className="font-mono text-text-secondary">{formatCurrency(getValue() as number)}</span>, size: 100 },
-    { id: 'shippingCost', header: 'Ship Cost', accessorKey: 'shippingCost', cell: ({ getValue }) => <span className="font-mono text-negative">{formatCurrency(getValue() as number)}</span>, size: 100 },
+    { id: 'salePrice', header: 'Order Price', accessorKey: 'salePrice', cell: ({ getValue }) => <span className="text-text-primary tabular-nums">{formatCurrency(getValue() as number)}</span>, size: 100 },
+    { id: 'shippingCharged', header: 'Ship Charged', accessorKey: 'shippingCharged', cell: ({ getValue }) => <span className="text-text-secondary tabular-nums">{formatCurrency(getValue() as number)}</span>, size: 100 },
+    { id: 'shippingCost', header: 'Ship Cost', accessorKey: 'shippingCost', cell: ({ getValue }) => <span className="text-negative tabular-nums">{formatCurrency(getValue() as number)}</span>, size: 100 },
     {
       id: 'shippingProfit', header: 'Ship Profit', accessorKey: 'shippingProfit',
       cell: ({ getValue }) => {
         const v = getValue() as number;
-        return <span className={`font-mono ${v >= 0 ? 'text-positive' : 'text-negative'}`}>{formatCurrency(v)}</span>;
+        return <span className={`tabular-nums ${v >= 0 ? 'text-positive' : 'text-negative'}`}>{formatCurrency(v)}</span>;
       }, size: 100,
+    },
+    {
+      id: 'refunded', header: 'Refunded', accessorKey: 'refunded',
+      cell: ({ getValue }) => { const v = getValue() as number; return v ? <span className="text-negative tabular-nums">{formatCurrency(-v)}</span> : <span className="text-text-tertiary tabular-nums">—</span>; },
+      size: 100,
     },
     {
       id: 'profit', header: 'Net Profit', accessorKey: 'profit',
       cell: ({ getValue }) => {
         const v = getValue() as number;
-        return <span className={`font-mono font-medium ${v >= 0 ? 'text-positive' : 'text-negative'}`}>{formatCurrency(v)}</span>;
+        return <span className={`font-medium tabular-nums ${v >= 0 ? 'text-positive' : 'text-negative'}`}>{formatCurrency(v)}</span>;
       }, size: 100,
     },
-    { id: 'roiPercent', header: 'ROI', accessorKey: 'roiPercent', cell: ({ getValue }) => { const v = getValue() as number; return <span className={`font-mono ${v >= 0 ? 'text-positive' : 'text-negative'}`}>{formatPercent(v)}</span>; }, size: 80 },
+    { id: 'roiPercent', header: 'ROI', accessorKey: 'roiPercent', cell: ({ getValue }) => { const v = getValue() as number; return <span className={`tabular-nums ${v >= 0 ? 'text-positive' : 'text-negative'}`}>{formatPercent(v)}</span>; }, size: 80 },
   ], []);
 
   function handleExport() {
-    const headers = ['Date', 'Order ID', 'ASIN', 'Product', 'Sale Price', 'Ship Charged', 'Ship Cost', 'Profit', 'ROI %'];
-    const csvRows = rows.map(r => [r.date.split('T')[0], r.orderId, r.asin, `"${r.productName}"`, (r.salePrice/100).toFixed(2), (r.shippingCharged/100).toFixed(2), (r.shippingCost/100).toFixed(2), (r.profit/100).toFixed(2), r.roiPercent.toFixed(1)].join(','));
+    const headers = ['Date', 'Order ID', 'ASIN', 'Product', 'Sale Price', 'Ship Charged', 'Ship Cost', 'Refunded', 'Profit', 'ROI %'];
+    const csvRows = rows.map(r => [r.date.split('T')[0], r.orderId, r.asin, `"${r.productName}"`, (r.salePrice/100).toFixed(2), (r.shippingCharged/100).toFixed(2), (r.shippingCost/100).toFixed(2), (r.refunded / 100).toFixed(2), (r.profit/100).toFixed(2), r.roiPercent.toFixed(1)].join(','));
     const csv = [headers.join(','), ...csvRows].join('\n');
     const blob = new Blob([csv], { type: 'text/csv' }); const url = URL.createObjectURL(blob); const a = document.createElement('a'); a.href = url; a.download = 'merchant-sales.csv'; a.click(); URL.revokeObjectURL(url);
   }

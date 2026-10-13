@@ -9,14 +9,14 @@ export function IdentifierChip({ label, value, href }: { label: string; value: s
   if (!value) return null;
   return (
     <div className="flex items-center gap-1 min-w-0">
-      <span className="text-text-tertiary/60 uppercase tracking-wide shrink-0">{label}</span>
+      <span className="text-text-tertiary/60 label-caps shrink-0">{label}</span>
       {href
         ? <a
             href={href}
             target="_blank"
             rel="noopener noreferrer"
             onClick={e => e.stopPropagation()}
-            className="text-accent truncate hover:underline"
+            className="text-link truncate hover:underline"
             title={`Open ${label} in Seller Central: ${value}`}
           >
             {value}
@@ -34,10 +34,10 @@ export function IdentifierChip({ label, value, href }: { label: string; value: s
 }
 
 const RECEIVE_STATUS_STYLES: Record<ReceiveStatus, string> = {
-  pending:   'bg-bg-elevated text-text-tertiary border-border-subtle',
-  received:  'bg-blue-500/10 text-blue-400 border-blue-500/30',
-  inspected: 'bg-amber-500/10 text-amber-400 border-amber-500/30',
-  ready:     'bg-green-500/10 text-green-400 border-green-500/30',
+  pending:   'tag text-text-tertiary',
+  received:  'tag text-link',
+  inspected: 'tag text-warning',
+  ready:     'tag text-positive',
 };
 
 const RECEIVE_STATUS_LABELS: Record<ReceiveStatus, string> = {
@@ -45,10 +45,10 @@ const RECEIVE_STATUS_LABELS: Record<ReceiveStatus, string> = {
 };
 
 const LIVE_STATE_STYLES: Record<LiveState, string> = {
-  active:     'bg-green-500/10 text-green-400 border-green-500/30',
-  oos:        'bg-amber-500/10 text-amber-400 border-amber-500/30',
-  inactive:   'bg-red-500/10 text-red-400 border-red-500/30',
-  not_listed: 'bg-bg-elevated text-text-tertiary border-border-subtle',
+  active:     'tag text-positive',
+  oos:        'tag text-warning',
+  inactive:   'tag text-negative',
+  not_listed: 'tag text-text-tertiary',
 };
 
 const LIVE_STATE_LABELS: Record<LiveState, string> = {
@@ -64,7 +64,7 @@ const LIVE_STATE_LABELS: Record<LiveState, string> = {
 
 export function ReceiveStatusBadge({ status }: { status: ReceiveStatus }) {
   return (
-    <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-medium border ${RECEIVE_STATUS_STYLES[status]}`}>
+    <span className={RECEIVE_STATUS_STYLES[status]}>
       {RECEIVE_STATUS_LABELS[status]}
     </span>
   );
@@ -72,7 +72,7 @@ export function ReceiveStatusBadge({ status }: { status: ReceiveStatus }) {
 
 export function LiveStateBadge({ state }: { state: LiveState }) {
   return (
-    <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-medium border ${LIVE_STATE_STYLES[state]}`}>
+    <span className={LIVE_STATE_STYLES[state]}>
       {LIVE_STATE_LABELS[state]}
     </span>
   );

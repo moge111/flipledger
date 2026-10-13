@@ -1,7 +1,8 @@
 'use client';
 
-import { formatCurrency, formatPercent, formatNumber } from '@/lib/formatters';
+import { formatPercent, formatNumber } from '@/lib/formatters';
 import { calculatePercentChange } from '@/lib/calculations';
+import { Money } from '@/components/ui/Paper';
 
 interface StatCardProps {
   label: string;
@@ -11,33 +12,31 @@ interface StatCardProps {
   accentColor?: 'default' | 'positive' | 'negative' | 'amazon';
 }
 
+// Paper stat tile: a small label panel — condensed-caps label over an expanded heavy number.
+// Profit/loss tiles print their number green/red; everything else stays ink.
 export default function StatCard({ label, value, previousValue, format, accentColor = 'default' }: StatCardProps) {
-  const formatted = format === 'currency'
-    ? formatCurrency(value)
-    : format === 'percent'
-    ? formatPercent(value)
-    : formatNumber(value);
-
   const change = previousValue !== undefined ? calculatePercentChange(value, previousValue) : null;
 
-  const borderColors = {
-    default: 'border-t-accent',
-    positive: 'border-t-positive',
-    negative: 'border-t-negative',
-    amazon: 'border-t-amazon',
-  };
+  const numberColor = {
+    default: 'text-text-primary',
+    positive: 'text-positive',
+    negative: 'text-negative',
+    amazon: 'text-text-primary',
+  }[accentColor];
 
   return (
-    <div className={`bg-bg-surface border border-border-subtle rounded-lg p-5 border-t-2 ${borderColors[accentColor]}`}>
-      <div className="text-[11px] font-medium tracking-widest uppercase text-text-tertiary mb-2">
+    <div className="panel px-4 py-3.5">
+      <div className="label-caps text-text-tertiary mb-1.5">
         {label}
       </div>
-      <div className="text-2xl font-bold font-mono text-text-primary tracking-tight">
-        {formatted}
+      <div className={`stat-num text-[18px] sm:text-[24px] ${numberColor}`}>
+        {format === 'currency'
+          ? <Money cents={value} />
+          : format === 'percent' ? formatPercent(value) : formatNumber(value)}
       </div>
       {change !== null && (
-        <div className={`text-xs font-mono mt-1.5 ${change >= 0 ? 'text-positive' : 'text-negative'}`}>
-          {change >= 0 ? '+' : ''}{change.toFixed(1)}% vs prev period
+        <div className={`text-xs mt-1.5 tabular-nums font-semibold ${change >= 0 ? 'text-positive' : 'text-negative'}`}>
+          {change >= 0 ? '+' : ''}{change.toFixed(1)}% <span className="font-normal text-text-tertiary">vs prev period</span>
         </div>
       )}
     </div>

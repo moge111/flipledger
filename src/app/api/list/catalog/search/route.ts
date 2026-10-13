@@ -18,6 +18,7 @@ import {
   type CatalogItem,
 } from '@/lib/sp-api/catalog';
 import { getFeesEstimate, type FeesEstimate } from '@/lib/sp-api/feesEstimate';
+import { liveOfferPriceCents } from '@/lib/listing-fees';
 import { estimateShippingCost, type ShippingEstimate } from '@/lib/shipping-estimate';
 import type { SPAPICredentials } from '@/lib/sp-api/types';
 import { openDb } from '@/lib/db-conn';
@@ -66,6 +67,8 @@ export interface ExistingMsku {
   channel?: 'FBA' | 'MFN';
   /** Safe to offer as a restock target for the batch's channel. */
   compatible: boolean;
+  /** What this MSKU's offer sells for on Amazon right now (cents), when it has one. */
+  currentPriceCents?: number;
 }
 
 function enrichWithHistory(item: CatalogItem, wantChannel: 'FBA' | 'MFN' = 'FBA'): CatalogItem & {
@@ -290,8 +293,21 @@ export async function GET(request: NextRequest) {
     // Pick a target price for fee estimation: explicit > avgSalePrice > lastBuyPrice*2 > 0
     const enrichedWithFees = await Promise.all(
       enrichedHistory.map(async (item) => {
+        // Restock targets: read each one's live Amazon price so the form can
+        // prefill what the SKU sells for now (the chips show at most 4).
+        const restock = (item.existingMskus || []).filter((m) => m.compatible).slice(0, 4);
+        if (restock.length > 0) {
+          const priceDb = openDb({ readonly: true });
+          try {
+            const prices = await Promise.all(restock.map((m) => liveOfferPriceCents(priceDb, m.msku)));
+            restock.forEach((m, i) => { if (prices[i]) m.currentPriceCents = prices[i]!; });
+          } finally {
+            priceDb.close();
+          }
+        }
         const targetPriceCents =
           explicitPriceCents ||
+          restock[0]?.currentPriceCents ||
           item.avgSalePrice ||
           (item.lastBuyPrice ? item.lastBuyPrice * 2 : 0);
 

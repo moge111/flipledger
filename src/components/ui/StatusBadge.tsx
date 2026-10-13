@@ -21,20 +21,20 @@ interface StatusBadgeProps {
 }
 
 const TONE_CLASSES: Record<StatusBadgeTone, string> = {
-  positive: 'bg-positive/10 text-positive border-positive/30',
-  warning:  'bg-warning/10 text-warning border-warning/30',
-  negative: 'bg-negative/10 text-negative border-negative/30',
-  info:     'bg-info/10 text-info border-info/30',
-  neutral:  'bg-bg-elevated text-text-tertiary border-border-subtle',
-  amazon:   'bg-amazon/10 text-amazon border-amazon/30',
-  walmart:  'bg-walmart/10 text-walmart border-walmart/30',
-  ebay:     'bg-ebay/10 text-ebay border-ebay/30',
-  paypal:   'bg-cyan-500/10 text-cyan-400 border-cyan-500/30',
+  positive: 'tag text-positive',
+  warning:  'tag text-warning',
+  negative: 'tag text-negative',
+  info:     'tag text-info',
+  neutral:  'tag text-text-tertiary',
+  amazon:   'mkt mkt-amazon',
+  walmart:  'mkt mkt-walmart',
+  ebay:     'mkt mkt-ebay',
+  paypal:   'mkt mkt-paypal',
 };
 
 const SIZE_CLASSES: Record<StatusBadgeSize, string> = {
-  xs: 'px-1.5 py-0.5 text-[10px]',
-  sm: 'px-2 py-0.5 text-xs',
+  xs: 'text-[10px]',
+  sm: 'text-[10.5px]',
 };
 
 export default function StatusBadge({
@@ -45,7 +45,7 @@ export default function StatusBadge({
 }: StatusBadgeProps) {
   return (
     <span
-      className={`inline-flex items-center rounded-full font-medium border ${TONE_CLASSES[tone]} ${SIZE_CLASSES[size]} ${className}`}
+      className={`${TONE_CLASSES[tone]} ${SIZE_CLASSES[size]} ${className}`}
     >
       {children}
     </span>

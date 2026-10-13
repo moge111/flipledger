@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { MKT_DATE, marketToday, marketDaysAgo, addDays } from '@/lib/market-day';
 import { openDb } from '@/lib/db-conn';
+import { lineSettledRefundExpr } from '@/lib/accounting-sql';
 import { marketplaceParam } from '@/lib/request-params';
 import { createLogger } from '@/lib/log';
 
@@ -39,6 +40,8 @@ export async function GET(request: NextRequest) {
         COALESCE(p.name, p2.name, oi.asin) as productName,
         oi.quantity,
         oi.total_price as salePrice,
+        -- Settled refunds against this line (review C3).
+        CAST(ROUND(${lineSettledRefundExpr()}) AS INTEGER) as refunded,
         COALESCE(oi.shipping_charged, 0) as shippingCharged,
         COALESCE(oi.shipping_cost, 0) as shippingCost,
         COALESCE(oi.cogs_per_unit, 0) as buyCostPerUnit,
@@ -67,7 +70,8 @@ export async function GET(request: NextRequest) {
     const items = rows.map((row) => {
       const buyCost = row.buyCostPerUnit * row.quantity;
       const shippingProfit = row.shippingCharged - row.shippingCost;
-      const profit = row.salePrice - buyCost - row.fees + shippingProfit;
+      const refunded = row.refunded || 0;
+      const profit = row.salePrice - buyCost - row.fees + shippingProfit - refunded;
       const profitPercent = row.salePrice > 0 ? (profit / row.salePrice) * 100 : 0;
       const roiPercent = buyCost > 0 ? (profit / buyCost) * 100 : 0;
       return {
@@ -78,6 +82,7 @@ export async function GET(request: NextRequest) {
         productName: row.productName,
         quantity: row.quantity,
         salePrice: row.salePrice,
+        refunded,
         shippingCharged: row.shippingCharged,
         shippingCost: row.shippingCost,
         shippingProfit,
@@ -91,6 +96,7 @@ export async function GET(request: NextRequest) {
     });
 
     const totalSales = items.reduce((s, i) => s + i.salePrice, 0);
+    const totalRefunded = items.reduce((s, i) => s + i.refunded, 0);
     const totalFees = items.reduce((s, i) => s + i.fees, 0);
     const totalProfit = items.reduce((s, i) => s + i.profit, 0);
     const totalShippingCharged = items.reduce((s, i) => s + i.shippingCharged, 0);
@@ -104,6 +110,7 @@ export async function GET(request: NextRequest) {
       totals: {
         count,
         totalSales,
+        totalRefunded,
         totalFees,
         totalProfit,
         totalShippingCharged,

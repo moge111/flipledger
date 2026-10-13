@@ -51,15 +51,16 @@ export function ShipFromSettings() {
   }
 
   return (
-    <div className="bg-bg-surface border border-border-subtle rounded-lg p-6 mb-6">
-      <h2 className="text-md font-medium text-text-primary mb-2">Ship-From Address</h2>
+    <div className="panel mb-6">
+      <h2 className="panel-bar"><span className="flex items-center gap-2">Ship-From Address</span></h2>
+<div className="p-6">
       <p className="text-xs text-text-tertiary mb-4">
         Used as the default origin on FBA inbound plans. Amazon sends the name, phone, and
         email to the carrier as the pickup contact, so they must be real.
       </p>
 
       {missing.length > 0 && (
-        <div className="flex items-start gap-2 mb-4 py-2 px-3 bg-warning/10 border border-warning/25 rounded-md">
+        <div className="flex items-start gap-2 mb-4 py-2 px-3 attn-banner">
           <AlertCircle size={14} className="text-warning mt-0.5 shrink-0" />
           <span className="text-xs text-text-secondary">
             Carrier booking is blocked until the business name, phone, and email are set.
@@ -70,7 +71,7 @@ export function ShipFromSettings() {
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
         {SHIP_FROM_FIELDS.map(f => (
           <div key={f.key}>
-            <label className="block text-xs font-medium tracking-wide uppercase text-text-tertiary mb-1.5">
+            <label className="block text-xs label-caps text-text-tertiary mb-1.5">
               {f.label}
               {SHIP_FROM_REQUIRED.includes(f.key) && <span className="text-warning ml-1">*</span>}
             </label>
@@ -79,7 +80,7 @@ export function ShipFromSettings() {
               value={values[f.key] || ''}
               onChange={e => setValues(v => ({ ...v, [f.key]: e.target.value }))}
               placeholder={f.placeholder}
-              className="w-full h-9 px-3 bg-bg-input border border-border-default rounded-md text-sm text-text-primary placeholder-text-tertiary focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent/25"
+              className="w-full h-9 px-3 bg-bg-input border border-border-default rounded-md text-sm text-text-primary placeholder-text-tertiary focus:border-link focus:outline-none focus:ring-[3px] focus:ring-link-muted"
             />
           </div>
         ))}
@@ -87,12 +88,13 @@ export function ShipFromSettings() {
 
       <div className="flex items-center gap-3 mt-5">
         <button onClick={handleSave} disabled={saving}
-          className="flex items-center gap-2 h-9 px-4 bg-accent text-white rounded-md text-sm font-medium hover:bg-accent-hover transition-colors disabled:opacity-50">
+          className="flex items-center gap-2 h-9 px-4 bg-accent text-text-inverse rounded-md text-sm font-bold hover:bg-accent-hover transition-colors disabled:opacity-50">
           <Save size={14} />
           {saving ? 'Saving...' : 'Save'}
         </button>
         {saved && <span className="flex items-center gap-1 text-sm text-positive"><CheckCircle size={14} /> Saved</span>}
       </div>
     </div>
+</div>
   );
 }

@@ -727,17 +727,17 @@ export default function MfnBatchReceiveWorkflow({ batchId = null, locked = false
   const searchFreshness = !searching && results.length > 0 ? listingFreshness(results) : null;
 
   return (
-    <div className="flex flex-col h-full bg-slate-900">
+    <div className="flex flex-col h-full bg-bg-root">
       {/* Workbench header — title, actions, search (visually unified) */}
-      <div className="flex items-center justify-between px-4 py-2 bg-slate-800 border border-border-subtle rounded-t-lg border-b border-border-subtle/60">
+      <div className="flex items-center justify-between px-4 py-2 bg-bg-surface border border-border-subtle rounded-t-lg border-b border-border-subtle/60">
         <div className="flex items-center gap-3 min-w-0">
           <h1 className="text-sm font-semibold text-text-primary shrink-0">MFN Receive</h1>
           {batchArray.length > 0 && (
             <span className="text-xs text-text-tertiary truncate">
               {batchArray.length} in batch
-              {savedCount > 0 && <> · <span className="text-green-400/90">{savedCount} saved</span></>}
+              {savedCount > 0 && <> · <span className="text-positive/90">{savedCount} saved</span></>}
               {summary.unsaved > 0 && <> · <span className="text-text-tertiary">{summary.unsaved} unsaved</span></>}
-              {stateCounts['ready'] > 0 && <> · <span className="text-green-400 font-medium">Ready {stateCounts['ready']}</span></>}
+              {stateCounts['ready'] > 0 && <> · <span className="text-positive font-medium">Ready {stateCounts['ready']}</span></>}
             </span>
           )}
           {printAllMsg && <span className="text-[10px] text-text-tertiary/70 shrink-0">{printAllMsg}</span>}
@@ -745,24 +745,24 @@ export default function MfnBatchReceiveWorkflow({ batchId = null, locked = false
         {batchArray.length > 0 && (
           <div className="flex items-center gap-1.5 shrink-0 ml-4">
             {savedCount > 0 && (
-              <button onClick={printAll} className="flex items-center gap-1.5 h-8 px-3 rounded-md border border-border-subtle text-xs text-text-tertiary hover:bg-bg-hover hover:text-text-primary transition-colors">
+              <button onClick={printAll} className="flex items-center gap-1.5 h-8 px-3 rounded-md text-xs text-text-primary hover:bg-bg-hover hover:text-text-primary transition-colors font-semibold bg-bg-surface border-[1.5px] border-border-strong">
                 <Printer size={13} />Print All ({savedCount})
               </button>
             )}
             {!locked && savedCount > 0 && (
-              <button onClick={previewAndPush} disabled={previewLoading} className="flex items-center gap-1.5 h-8 px-3 rounded-md border border-blue-500/50 text-blue-400 text-xs font-medium hover:bg-blue-500/10 transition-colors disabled:opacity-40 disabled:cursor-not-allowed">
+              <button onClick={previewAndPush} disabled={previewLoading} className="flex items-center gap-1.5 h-8 px-3 rounded-md border border-link/50 text-link text-xs font-medium hover:bg-link/10 transition-colors disabled:opacity-40 disabled:cursor-not-allowed">
                 {previewLoading ? <Loader2 size={13} className="animate-spin" /> : <Send size={13} />}
                 {previewLoading ? 'Loading…' : `Preview & Push (${savedCount})`}
               </button>
             )}
             {!locked && hasUnsaved && (
-              <button onClick={saveAll} disabled={savingAll} className="flex items-center gap-1.5 h-8 px-3 rounded-md bg-blue-600 text-white text-xs font-medium hover:bg-blue-700 transition-colors disabled:opacity-50">
+              <button onClick={saveAll} disabled={savingAll} className="flex items-center gap-1.5 h-8 px-3 rounded-md bg-accent text-text-inverse text-xs font-bold hover:bg-accent-hover transition-colors disabled:opacity-50">
                 {savingAll ? <Loader2 size={13} className="animate-spin" /> : <Save size={13} />}
                 {savingAll ? 'Saving…' : `Save All (${saveable.length})`}
               </button>
             )}
             {!locked && batchId != null && batchId > 0 && [...batch.values()].some(i => !i.image_url) && (
-              <button onClick={handleBackfillImages} disabled={backfillingImages} className="flex items-center gap-1.5 h-8 px-3 rounded-md border border-border-subtle text-xs text-text-tertiary hover:bg-bg-hover hover:text-text-primary transition-colors disabled:opacity-50" title="Fetch missing product images from Amazon's catalog">
+              <button onClick={handleBackfillImages} disabled={backfillingImages} className="flex items-center gap-1.5 h-8 px-3 rounded-md text-xs text-text-primary hover:bg-bg-hover hover:text-text-primary transition-colors disabled:opacity-50 font-semibold bg-bg-surface border-[1.5px] border-border-strong" title="Fetch missing product images from Amazon's catalog">
                 {backfillingImages ? <Loader2 size={13} className="animate-spin" /> : <ImageIcon size={13} />}
                 {backfillingImages
                   ? `Fetching… ${backfillProgress ? `${backfillProgress.done}/${backfillProgress.remaining + backfillProgress.done}` : ''}`
@@ -770,7 +770,7 @@ export default function MfnBatchReceiveWorkflow({ batchId = null, locked = false
               </button>
             )}
             {!locked && (
-              <button onClick={() => { setBatch(new Map()); setReceiveFilter('all'); }} className="h-8 px-3 rounded-md border border-border-subtle text-xs text-text-tertiary hover:bg-bg-hover transition-colors">
+              <button onClick={() => { setBatch(new Map()); setReceiveFilter('all'); }} className="h-8 px-3 rounded-md text-xs text-text-primary hover:bg-bg-hover transition-colors font-semibold bg-bg-surface border-[1.5px] border-border-strong">
                 Clear
               </button>
             )}
@@ -779,7 +779,7 @@ export default function MfnBatchReceiveWorkflow({ batchId = null, locked = false
       </div>
 
       {locked && (
-        <div className="flex items-center gap-2 px-4 py-2.5 mb-3 bg-slate-800 border-x border-b border-border-subtle rounded-b-lg text-xs text-text-tertiary">
+        <div className="flex items-center gap-2 px-4 py-2.5 mb-3 bg-bg-surface border-x border-b border-border-subtle rounded-b-lg text-xs text-text-tertiary">
           <Lock size={13} className="text-text-tertiary shrink-0" />
           This batch is closed and in History — locked for auditing. Restore it from the header to make changes or re-push.
         </div>
@@ -787,7 +787,7 @@ export default function MfnBatchReceiveWorkflow({ batchId = null, locked = false
 
       {/* Search — lower half of unified header block */}
       {!locked && (
-      <div ref={searchContainerRef} className="relative bg-slate-800 border-x border-b border-border-subtle rounded-b-lg mb-3">
+      <div ref={searchContainerRef} className="relative bg-bg-surface border-x border-b border-border-subtle rounded-b-lg mb-3">
         <div className="relative px-3 py-2">
           <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-text-tertiary pointer-events-none" />
           {searching && (
@@ -828,13 +828,13 @@ export default function MfnBatchReceiveWorkflow({ batchId = null, locked = false
               setResults([]);
             }}
             placeholder="Scan barcode, ASIN, MSKU, or title…"
-            className="w-full h-11 pl-9 pr-9 bg-slate-800 border border-border-default rounded-lg text-sm text-text-primary placeholder:text-text-tertiary focus:border-blue-500 focus:outline-none"
+            className="w-full h-11 pl-9 pr-9 bg-bg-surface border border-border-default rounded-lg text-sm text-text-primary placeholder:text-text-tertiary focus:border-link focus:outline-none"
           />
         </div>
 
         {/* Dropdown — visible when query ≥ 2 chars */}
         {searchOpen && query.trim().length >= 2 && (
-          <div className="absolute top-full left-0 right-0 z-50 mt-1 bg-slate-800 border border-border-default rounded-lg shadow-xl overflow-hidden">
+          <div className="panel absolute top-full left-0 right-0 z-50 mt-1 shadow-xl overflow-hidden">
             {/* Helper / status line */}
             <div className="px-3 py-1.5 border-b border-border-subtle">
               <div className="flex items-center justify-between gap-3">
@@ -849,12 +849,12 @@ export default function MfnBatchReceiveWorkflow({ batchId = null, locked = false
                         ? 'Refine search or click the correct item.'
                         : `No results for "${query}"`}
                   {multiMatchNote && (
-                    <span className="ml-2 text-amber-500">Multiple matches — choose an item.</span>
+                    <span className="ml-2 text-warning">Multiple matches — choose an item.</span>
                   )}
                 </p>
                 {searchFreshness && (
                   <span
-                    className={`shrink-0 text-[10px] ${searchFreshness.stale ? 'text-amber-400' : 'text-text-tertiary/70'}`}
+                    className={`shrink-0 text-[10px] ${searchFreshness.stale ? 'text-warning' : 'text-text-tertiary/70'}`}
                     title={searchFreshness.title}
                   >
                     {searchFreshness.label}
@@ -904,13 +904,13 @@ export default function MfnBatchReceiveWorkflow({ batchId = null, locked = false
               const isNeeds = f.key === 'needs-work';
               const accentCls = active
                 ? isOver
-                  ? 'bg-red-500/15 text-red-400 border-red-500/40'
+                  ? 'bg-bg-surface text-negative border-current'
                   : isNeeds
-                    ? 'bg-amber-500/15 text-amber-400 border-amber-500/40'
+                    ? 'bg-bg-surface text-warning border-current'
                     : f.key === 'complete'
-                      ? 'bg-green-500/15 text-green-400 border-green-500/40'
-                      : 'bg-blue-500/15 text-blue-400 border-blue-500/40'
-                : 'bg-slate-800 text-text-tertiary border-border-subtle hover:text-text-secondary hover:bg-bg-hover';
+                      ? 'bg-bg-surface text-positive border-current'
+                      : 'bg-bg-surface text-link border-current'
+                : 'bg-bg-surface text-text-tertiary border-border-subtle hover:text-text-secondary hover:bg-bg-hover';
               return (
                 <button
                   key={f.key}
@@ -920,7 +920,7 @@ export default function MfnBatchReceiveWorkflow({ batchId = null, locked = false
                   className={`flex items-center gap-1.5 h-6 px-2 rounded-md border font-medium transition-colors disabled:opacity-30 disabled:cursor-not-allowed ${accentCls}`}
                 >
                   {f.label}
-                  <span className="font-mono tabular-nums text-[10px] opacity-80">{f.count}</span>
+                  <span className="tabular-nums text-[10px] opacity-80">{f.count}</span>
                 </button>
               );
             })}
@@ -933,32 +933,32 @@ export default function MfnBatchReceiveWorkflow({ batchId = null, locked = false
           {/* KPI line — right */}
           <div className="shrink-0 text-right">
             <div className="flex items-center gap-x-4 text-xs text-text-secondary flex-wrap justify-end">
-              <span className="text-text-tertiary">Qty <span className="text-text-primary font-mono text-base">{summary.totalQty}</span></span>
-              <span className="text-text-tertiary">Rev <span className="text-text-primary font-mono text-base">{formatCurrency(summary.totalListCents)}</span></span>
-              <span className="text-text-tertiary">Cost <span className="text-text-primary font-mono text-base">{formatCurrency(summary.totalCostCents)}</span></span>
-              <span className="text-text-tertiary">Ship <span className="text-text-primary font-mono text-base">{formatCurrency(summary.totalShipCents)}</span></span>
+              <span className="text-text-tertiary">Qty <span className="text-text-primary text-base tabular-nums">{summary.totalQty}</span></span>
+              <span className="text-text-tertiary">Rev <span className="text-text-primary text-base tabular-nums">{formatCurrency(summary.totalListCents)}</span></span>
+              <span className="text-text-tertiary">Cost <span className="text-text-primary text-base tabular-nums">{formatCurrency(summary.totalCostCents)}</span></span>
+              <span className="text-text-tertiary">Ship <span className="text-text-primary text-base tabular-nums">{formatCurrency(summary.totalShipCents)}</span></span>
               <span className="text-text-tertiary">
-                Fees <span className="font-mono text-text-primary text-base">{formatCurrency(summary.totalFeeCents)}</span>
+                Fees <span className="text-text-primary text-base tabular-nums">{formatCurrency(summary.totalFeeCents)}</span>
               </span>
               <span className="text-text-tertiary">
-                Net <span className={`font-mono font-semibold text-base ${
+                Net <span className={`font-semibold text-base tabular-nums ${
                   summary.profitIncomplete
                     ? 'text-text-secondary'
-                    : summary.totalNetCents > 0 ? 'text-green-400' : 'text-red-400'
+                    : summary.totalNetCents > 0 ? 'text-positive' : 'text-negative'
                 }`}>
                   {summary.profitIncomplete ? '~' : ''}{formatCurrency(summary.totalNetCents)}
                 </span>
               </span>
               {summary.roiPct != null && !summary.profitIncomplete && (
                 <span className="text-text-tertiary">
-                  ROI <span className={`font-mono ${summary.roiPct > 0 ? 'text-green-400/90' : 'text-red-400/90'}`}>
+                  ROI <span className={`tabular-nums ${summary.roiPct > 0 ? 'text-positive/90' : 'text-negative/90'}`}>
                     {summary.roiPct.toFixed(1)}%
                   </span>
                 </span>
               )}
               {summary.marginPct != null && !summary.profitIncomplete && (
                 <span className="text-text-tertiary">
-                  Margin <span className="font-mono text-text-secondary">
+                  Margin <span className="text-text-secondary tabular-nums">
                     {summary.marginPct.toFixed(1)}%
                   </span>
                 </span>
@@ -987,7 +987,7 @@ export default function MfnBatchReceiveWorkflow({ batchId = null, locked = false
           <div className="flex-1 flex flex-col items-center justify-center text-center border border-dashed border-border-subtle rounded-xl py-10">
             {!(searchOpen && query.trim().length >= 2) && (
               <>
-                <div className="flex items-center justify-center w-14 h-14 rounded-2xl bg-slate-800 border border-border-subtle mb-4">
+                <div className="panel flex items-center justify-center w-14 h-14 mb-4">
                   <ScanBarcode size={28} className="text-text-tertiary opacity-60" />
                 </div>
                 <p className="text-sm font-semibold text-text-secondary">Scan or search to start receiving</p>
@@ -1003,7 +1003,7 @@ export default function MfnBatchReceiveWorkflow({ batchId = null, locked = false
           ) : (
             <>
             {/* Table column header — widths match BatchItemRow zones exactly */}
-            <div className="flex items-center gap-2 px-3 pr-1 pb-1 mb-0.5 text-[10px] font-semibold text-text-tertiary/50 uppercase tracking-wider select-none border-b border-border-subtle/50">
+            <div className="flex items-center gap-2 px-3 pr-1 pb-1 mb-0.5 text-[10px] text-text-tertiary/50 label-caps select-none border-b border-border-subtle/50">
               <div className="w-8 shrink-0" />
               <div className="min-w-0 flex-1">Item</div>
               <div className="w-32 shrink-0">Qty</div>
@@ -1018,7 +1018,7 @@ export default function MfnBatchReceiveWorkflow({ batchId = null, locked = false
                   <button
                     type="button"
                     onClick={() => setReceiveFilter('all')}
-                    className="mt-2 text-xs text-blue-400 hover:underline"
+                    className="mt-2 text-xs text-link hover:underline"
                   >
                     Show all
                   </button>
@@ -1055,10 +1055,10 @@ export default function MfnBatchReceiveWorkflow({ batchId = null, locked = false
         </div>
 
       {previewError && (
-        <div className="fixed bottom-4 right-4 z-40 max-w-md px-4 py-3 rounded-lg bg-red-500/10 border border-red-500/30 text-sm text-red-400 shadow-lg flex items-start gap-2">
+        <div className="fixed bottom-4 right-4 z-40 max-w-md px-4 py-3 flash flash-bad text-sm text-negative shadow-lg flex items-start gap-2">
           <AlertCircle size={14} className="shrink-0 mt-0.5" />
           <span className="flex-1">{previewError}</span>
-          <button onClick={() => setPreviewError(null)} className="shrink-0 p-1 hover:bg-red-500/10 rounded">
+          <button onClick={() => setPreviewError(null)} className="shrink-0 p-1 hover:bg-negative/10 rounded">
             <X size={12} />
           </button>
         </div>
@@ -1139,13 +1139,13 @@ export default function MfnBatchReceiveWorkflow({ batchId = null, locked = false
               alt={lightbox.title}
               className="block h-[85vh] w-auto max-w-[92vw] object-contain"
             />
-            <div className="absolute bottom-0 inset-x-0 px-4 py-2.5 bg-gradient-to-t from-black/70 to-transparent">
+            <div className="absolute bottom-0 inset-x-0 px-4 py-2.5 bg-black/70">
               <div className="text-sm font-medium text-white leading-snug line-clamp-2" title={lightbox.title}>
                 {lightbox.title}
               </div>
               <div className="flex items-center gap-2 mt-0.5 text-[10px] font-mono text-white/70">
-                {lightbox.asin && <AsinLink asin={lightbox.asin} className="text-blue-300 hover:text-blue-200 hover:underline" />}
-                <MskuLink sku={lightbox.sku} className="truncate hover:text-blue-200 hover:underline" />
+                {lightbox.asin && <AsinLink asin={lightbox.asin} className="text-link hover:text-link hover:underline" />}
+                <MskuLink sku={lightbox.sku} className="truncate hover:text-link hover:underline" />
               </div>
             </div>
           </div>

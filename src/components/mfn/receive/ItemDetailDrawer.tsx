@@ -40,22 +40,22 @@ export function ItemDetailDrawer({ item, onImageClick, onPrintLabel, onEdit, onC
   return (
     <div className="fixed inset-0 z-50 flex justify-end bg-black/40" onClick={onClose}>
       <div
-        className="bg-slate-800 border-l border-border-subtle shadow-2xl w-[400px] max-w-full h-full overflow-y-auto"
+        className="bg-bg-surface border-l border-border-subtle shadow-2xl w-[400px] max-w-full h-full overflow-y-auto"
         onClick={e => e.stopPropagation()}
       >
         {/* Header */}
-        <div className="sticky top-0 z-10 flex items-start gap-3 px-4 py-3 bg-slate-800 border-b border-border-subtle">
+        <div className="sticky top-0 z-10 flex items-start gap-3 px-4 py-3 bg-bg-surface border-b border-border-subtle">
           {item.image_url
-            ? <button type="button" onClick={onImageClick} className="shrink-0 rounded overflow-hidden bg-slate-800 hover:ring-2 hover:ring-blue-500/40 transition-shadow" title="View larger">
+            ? <button type="button" onClick={onImageClick} className="shrink-0 rounded overflow-hidden bg-bg-surface hover:ring-2 hover:ring-link/40 transition-shadow" title="View larger">
                 <img src={item.image_url} alt="" className="w-14 h-14 object-contain block" />
               </button>
-            : <div className="w-14 h-14 bg-slate-700/40 rounded shrink-0 flex items-center justify-center"><Package size={18} className="text-text-tertiary/40" /></div>}
+            : <div className="w-14 h-14 bg-bg-active rounded shrink-0 flex items-center justify-center"><Package size={18} className="text-text-tertiary/40" /></div>}
           <div className="min-w-0 flex-1">
             <div className="text-sm font-medium text-text-primary leading-snug line-clamp-3" title={item.product_name ?? item.asin}>
               {item.product_name || item.asin}
             </div>
             <div className="flex items-center gap-1.5 mt-1 flex-wrap text-[10px] text-text-tertiary">
-              <AsinLink asin={item.asin} className="font-mono text-blue-400 hover:text-blue-300 hover:underline" />
+              <AsinLink asin={item.asin} className="font-mono text-link hover:text-link hover:underline" />
               <ChannelBadge channel={item.fulfillment_channel} />
               {liveStateBadge(item.amazon_status, item.amazon_qty)}
             </div>
@@ -68,32 +68,32 @@ export function ItemDetailDrawer({ item, onImageClick, onPrintLabel, onEdit, onC
         <div className="px-4 py-3 space-y-4 text-[11px]">
           {/* Identifiers */}
           <section>
-            <div className="text-[10px] uppercase tracking-wider text-text-tertiary/70 mb-1.5">Identifiers</div>
+            <div className="text-[10px] label-caps text-text-tertiary/70 mb-1.5">Identifiers</div>
             <div className="grid grid-cols-[80px_1fr] gap-y-1 gap-x-3">
-              <span className="text-text-tertiary">ASIN</span><AsinLink asin={item.asin} className="font-mono text-text-secondary hover:text-blue-300 hover:underline" />
+              <span className="text-text-tertiary">ASIN</span><AsinLink asin={item.asin} className="font-mono text-text-secondary hover:text-link hover:underline" />
               {item.upc && (<><span className="text-text-tertiary">UPC</span><span className="font-mono text-text-secondary">{item.upc}</span></>)}
               <span className="text-text-tertiary">MSKU</span>
-              <MskuLink sku={item.sku} className="font-mono text-text-secondary break-all hover:text-blue-300 hover:underline" />
+              <MskuLink sku={item.sku} className="font-mono text-text-secondary break-all hover:text-link hover:underline" />
             </div>
           </section>
 
           {/* Amazon snapshot */}
           <section>
-            <div className="text-[10px] uppercase tracking-wider text-text-tertiary/70 mb-1.5">Amazon (local snapshot)</div>
+            <div className="text-[10px] label-caps text-text-tertiary/70 mb-1.5">Amazon (local snapshot)</div>
             <div className="grid grid-cols-[80px_1fr] gap-y-1 gap-x-3">
               <span className="text-text-tertiary">Status</span><span className="text-text-secondary">{item.amazon_status ?? '—'}</span>
-              <span className="text-text-tertiary">Amz qty</span><span className="font-mono text-text-secondary">{item.amazon_qty ?? '—'}</span>
-              {item.amazon_list_price_cents != null && (<><span className="text-text-tertiary">Amz price</span><span className="font-mono text-text-secondary">{formatCurrency(item.amazon_list_price_cents)}</span></>)}
+              <span className="text-text-tertiary">Amz qty</span><span className="text-text-secondary tabular-nums">{item.amazon_qty ?? '—'}</span>
+              {item.amazon_list_price_cents != null && (<><span className="text-text-tertiary">Amz price</span><span className="text-text-secondary tabular-nums">{formatCurrency(item.amazon_list_price_cents)}</span></>)}
             </div>
           </section>
 
           {/* Receive */}
           <section>
-            <div className="text-[10px] uppercase tracking-wider text-text-tertiary/70 mb-1.5">Receive</div>
+            <div className="text-[10px] label-caps text-text-tertiary/70 mb-1.5">Receive</div>
             <div className="grid grid-cols-[80px_1fr] gap-y-1 gap-x-3 mb-2">
-              <span className="text-text-tertiary">Received</span><span className="font-mono text-text-secondary">{item.quantity_received ?? '—'}</span>
-              <span className="text-text-tertiary">Order qty</span><span className="font-mono text-text-secondary">{item.parsed_order_qty ?? '—'}</span>
-              <span className="text-text-tertiary" title="Sellable units remaining in inventory — not the same as 'remaining to receive'">Unsold qty</span><span className="font-mono text-text-secondary">{item.quantity_remaining ?? '—'}</span>
+              <span className="text-text-tertiary">Received</span><span className="text-text-secondary tabular-nums">{item.quantity_received ?? '—'}</span>
+              <span className="text-text-tertiary">Order qty</span><span className="text-text-secondary tabular-nums">{item.parsed_order_qty ?? '—'}</span>
+              <span className="text-text-tertiary" title="Sellable units remaining in inventory — not the same as 'remaining to receive'">Unsold qty</span><span className="text-text-secondary tabular-nums">{item.quantity_remaining ?? '—'}</span>
               <span className="text-text-tertiary">Inspected</span><span className="text-text-secondary">{item.inspected_at ? '✓ ' + item.inspected_at.slice(0, 10) : '—'}</span>
             </div>
             {progress && <ReceiveProgressBar progress={progress} variant="full" />}
@@ -102,28 +102,28 @@ export function ItemDetailDrawer({ item, onImageClick, onPrintLabel, onEdit, onC
           {/* Money — only for items in the batch with draft fields */}
           {inBatch && profit && profit.listCents != null && profit.costCents != null && (
             <section>
-              <div className="text-[10px] uppercase tracking-wider text-text-tertiary/70 mb-1.5">Profit estimate</div>
+              <div className="text-[10px] label-caps text-text-tertiary/70 mb-1.5">Profit estimate</div>
               <div className="grid grid-cols-[80px_1fr] gap-y-1 gap-x-3">
-                <span className="text-text-tertiary">List</span><span className="font-mono text-text-secondary">{formatCurrency(profit.listCents)}</span>
-                <span className="text-text-tertiary">Cost</span><span className="font-mono text-text-secondary">{formatCurrency(profit.costCents)}</span>
-                <span className="text-text-tertiary">Ship est</span><span className="font-mono text-text-secondary">{formatCurrency(profit.shipCents)}</span>
+                <span className="text-text-tertiary">List</span><span className="text-text-secondary tabular-nums">{formatCurrency(profit.listCents)}</span>
+                <span className="text-text-tertiary">Cost</span><span className="text-text-secondary tabular-nums">{formatCurrency(profit.costCents)}</span>
+                <span className="text-text-tertiary">Ship est</span><span className="text-text-secondary tabular-nums">{formatCurrency(profit.shipCents)}</span>
                 <span className="text-text-tertiary">{profit.referralRate != null ? `Referral (${(profit.referralRate * 100).toFixed(0)}%)` : 'Fee'}</span>
-                <span className="font-mono text-text-secondary">
+                <span className="text-text-secondary tabular-nums">
                   {profit.referralCents != null ? formatCurrency(profit.referralCents) : <span className="text-text-tertiary/50 italic">not cached</span>}
                 </span>
-                {profit.vcfCents > 0 && (<><span className="text-text-tertiary">VCF</span><span className="font-mono text-text-secondary">{formatCurrency(profit.vcfCents)}</span></>)}
+                {profit.vcfCents > 0 && (<><span className="text-text-tertiary">VCF</span><span className="text-text-secondary tabular-nums">{formatCurrency(profit.vcfCents)}</span></>)}
                 <span className="text-text-tertiary">Net</span>
-                <span className={`font-mono font-medium ${
-                  !profit.hasFee ? 'text-text-secondary' : profit.netCents != null && profit.netCents > 0 ? 'text-green-400' : 'text-red-400'
+                <span className={`font-medium tabular-nums ${
+                  !profit.hasFee ? 'text-text-secondary' : profit.netCents != null && profit.netCents > 0 ? 'text-positive' : 'text-negative'
                 }`}>
                   {profit.netCents != null ? `${!profit.hasFee ? '~' : ''}${formatCurrency(profit.netCents)}` : '—'}
                 </span>
                 {profit.roiPct != null && profit.hasFee && (<><span className="text-text-tertiary">ROI</span>
-                  <span className={`font-mono ${profit.roiPct > 0 ? 'text-green-400/90' : 'text-red-400/90'}`}>
+                  <span className={`tabular-nums ${profit.roiPct > 0 ? 'text-positive/90' : 'text-negative/90'}`}>
                     {profit.roiPct.toFixed(1)}%
                   </span></>)}
                 {profit.marginPct != null && profit.hasFee && (<><span className="text-text-tertiary">Margin</span>
-                  <span className="font-mono text-text-secondary">
+                  <span className="text-text-secondary tabular-nums">
                     {profit.marginPct.toFixed(1)}%
                   </span></>)}
               </div>
@@ -135,7 +135,7 @@ export function ItemDetailDrawer({ item, onImageClick, onPrintLabel, onEdit, onC
 
           {/* Saved fields */}
           <section>
-            <div className="text-[10px] uppercase tracking-wider text-text-tertiary/70 mb-1.5">Saved fields</div>
+            <div className="text-[10px] label-caps text-text-tertiary/70 mb-1.5">Saved fields</div>
             <div className="grid grid-cols-[80px_1fr] gap-y-1 gap-x-3">
               <span className="text-text-tertiary">Condition</span><span className="text-text-secondary">{condDisplay ?? '—'}</span>
               <span className="text-text-tertiary">Bin</span><span className="font-mono text-text-secondary">{binDisplay ?? '—'}</span>
@@ -152,7 +152,7 @@ export function ItemDetailDrawer({ item, onImageClick, onPrintLabel, onEdit, onC
           {/* Warnings */}
           {chips.length > 0 && (
             <section>
-              <div className="text-[10px] uppercase tracking-wider text-text-tertiary/70 mb-1.5">Warnings</div>
+              <div className="text-[10px] label-caps text-text-tertiary/70 mb-1.5">Warnings</div>
               <div className="flex items-center gap-1.5 flex-wrap">
                 {chips.map(c => <WarningChip key={c.label} chip={c} />)}
               </div>
@@ -161,11 +161,11 @@ export function ItemDetailDrawer({ item, onImageClick, onPrintLabel, onEdit, onC
         </div>
 
         {/* Footer actions */}
-        <div className="sticky bottom-0 px-4 py-3 bg-slate-800 border-t border-border-subtle flex items-center justify-end gap-2">
+        <div className="sticky bottom-0 px-4 py-3 bg-bg-surface border-t border-border-subtle flex items-center justify-end gap-2">
           {onPrintLabel && (
             <button
               onClick={onPrintLabel}
-              className="flex items-center gap-1.5 h-8 px-3 rounded-md border border-border-subtle text-[11px] text-text-secondary hover:bg-bg-hover transition-colors"
+              className="flex items-center gap-1.5 h-8 px-3 rounded-md text-[11px] text-text-primary hover:bg-bg-hover transition-colors font-semibold bg-bg-surface border-[1.5px] border-border-strong"
             >
               <Printer size={12} /> Print label
             </button>
@@ -173,14 +173,14 @@ export function ItemDetailDrawer({ item, onImageClick, onPrintLabel, onEdit, onC
           {onEdit && (
             <button
               onClick={onEdit}
-              className="flex items-center gap-1.5 h-8 px-3 rounded-md border border-border-subtle text-[11px] text-text-secondary hover:bg-bg-hover transition-colors"
+              className="flex items-center gap-1.5 h-8 px-3 rounded-md text-[11px] text-text-primary hover:bg-bg-hover transition-colors font-semibold bg-bg-surface border-[1.5px] border-border-strong"
             >
               <Pencil size={12} /> Edit
             </button>
           )}
           <button
             onClick={onClose}
-            className="flex items-center gap-1.5 h-8 px-3 rounded-md bg-slate-900/40 text-[11px] text-text-secondary hover:bg-bg-hover transition-colors"
+            className="flex items-center gap-1.5 h-8 px-3 rounded-md text-[11px] text-text-primary hover:bg-bg-hover transition-colors font-semibold bg-bg-surface border-[1.5px] border-border-strong"
           >
             Close
           </button>

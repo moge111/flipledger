@@ -114,21 +114,21 @@ export default function DateRangePicker({ value, onChange }: DateRangePickerProp
     <div ref={ref} className="relative">
       <button
         onClick={() => setOpen(!open)}
-        className="flex items-center gap-2 h-9 px-3 bg-bg-elevated border border-border-default rounded-md text-sm text-text-primary hover:bg-bg-hover transition-colors"
+        className="flex items-center gap-2 h-9 px-3 bg-bg-surface border-[1.5px] border-border-strong rounded-md text-sm font-semibold text-text-primary hover:bg-bg-hover transition-colors"
       >
         <Calendar size={14} className="text-text-tertiary" />
         <span className="max-w-[200px] truncate">{activeLabel}</span>
         <ChevronDown size={14} className="text-text-tertiary" />
       </button>
       {open && (
-        <div className="absolute right-0 top-full mt-1 bg-bg-elevated border border-border-default rounded-md shadow-lg z-50 py-1 min-w-[200px]">
+        <div className="absolute right-0 top-full mt-1 bg-bg-elevated border-[1.5px] border-border-strong rounded-lg shadow-lg z-50 py-1 min-w-[200px]">
           {presets.map((preset) => (
             <button
               key={preset.value}
               onClick={() => handlePreset(preset.value)}
               className={`w-full text-left px-3 py-2 text-sm transition-colors ${
                 value.preset === preset.value
-                  ? 'text-accent bg-accent-muted'
+                  ? 'bg-accent text-text-inverse font-semibold'
                   : 'text-text-secondary hover:bg-bg-hover hover:text-text-primary'
               }`}
             >
@@ -140,7 +140,7 @@ export default function DateRangePicker({ value, onChange }: DateRangePickerProp
               onClick={() => setShowCustom(!showCustom)}
               className={`w-full text-left px-3 py-2 text-sm transition-colors ${
                 value.preset === 'custom'
-                  ? 'text-accent bg-accent-muted'
+                  ? 'bg-accent text-text-inverse font-semibold'
                   : 'text-text-secondary hover:bg-bg-hover hover:text-text-primary'
               }`}
             >
@@ -150,26 +150,26 @@ export default function DateRangePicker({ value, onChange }: DateRangePickerProp
           {showCustom && (
             <div className="px-3 py-2 border-t border-border-subtle space-y-2">
               <div>
-                <label className="block text-[11px] font-medium tracking-wide uppercase text-text-tertiary mb-1">Start</label>
+                <label className="block text-[11px] label-caps text-text-tertiary mb-1">Start</label>
                 <input
                   type="date"
                   value={customStart}
                   onChange={e => setCustomStart(e.target.value)}
-                  className="w-full h-8 px-2 bg-bg-input border border-border-default rounded-md text-sm text-text-primary focus:border-accent focus:outline-none"
+                  className="w-full h-8 px-2 bg-bg-input border border-border-default rounded-md text-sm text-text-primary focus:border-link focus:outline-none"
                 />
               </div>
               <div>
-                <label className="block text-[11px] font-medium tracking-wide uppercase text-text-tertiary mb-1">End</label>
+                <label className="block text-[11px] label-caps text-text-tertiary mb-1">End</label>
                 <input
                   type="date"
                   value={customEnd}
                   onChange={e => setCustomEnd(e.target.value)}
-                  className="w-full h-8 px-2 bg-bg-input border border-border-default rounded-md text-sm text-text-primary focus:border-accent focus:outline-none"
+                  className="w-full h-8 px-2 bg-bg-input border border-border-default rounded-md text-sm text-text-primary focus:border-link focus:outline-none"
                 />
               </div>
               <button
                 onClick={handleCustomApply}
-                className="w-full h-8 bg-accent text-white rounded-md text-sm font-medium hover:bg-accent-hover transition-colors"
+                className="w-full h-8 bg-accent text-text-inverse rounded-md text-sm font-bold hover:bg-accent-hover transition-colors"
               >
                 Apply
               </button>

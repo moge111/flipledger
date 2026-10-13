@@ -21,6 +21,9 @@ export interface TransactionRow {
   subtitle: string;
   orderId: string | null;
   amount: number; // signed cents: what this transaction did to the marketplace balance
+  profit?: number; // sales only: amount − COGS − MFN label cost (same rule as the Dashboard)
+  cogs?: number;
+  shippingCost?: number;
   deferred?: boolean;
   releaseDate?: string | null;
   settled?: boolean; // Walmart refunds: whether the deduction actually settled in recon
@@ -51,6 +54,8 @@ export async function GET(request: NextRequest) {
         fe.posted_date as time,
         SUM(oi.total_price + CASE WHEN o.fulfillment_channel IN ('MFN', 'Seller') THEN COALESCE(oi.shipping_charged, 0) ELSE 0 END) as revenue,
         SUM(oi.quantity) as qty,
+        SUM(COALESCE(oi.cogs_per_unit, 0) * oi.quantity) as cogs,
+        SUM(CASE WHEN o.fulfillment_channel IN ('MFN', 'Seller') THEN COALESCE(oi.shipping_cost, 0) ELSE 0 END) as shippingCost,
         COUNT(DISTINCT COALESCE(oi.sku, oi.asin)) as skuCount,
         MAX(COALESCE(p.name, p_sku.name, li.product_name, oi.sku, oi.asin)) as productName
       FROM order_items oi
@@ -85,14 +90,23 @@ export async function GET(request: NextRequest) {
     for (const s of sales) {
       const fees = feesByOrder.get(s.order_id) || 0;
       const t = dd7ByOrder.get(s.order_id);
+      const cogs = s.cogs || 0;
+      const shippingCost = s.shippingCost || 0;
+      const subtitleParts = [`$${(s.revenue / 100).toFixed(2)} revenue`];
+      if (fees > 0) subtitleParts.push(`$${(fees / 100).toFixed(2)} fees`);
+      if (cogs > 0) subtitleParts.push(`$${(cogs / 100).toFixed(2)} COGS`);
+      if (shippingCost > 0) subtitleParts.push(`$${(shippingCost / 100).toFixed(2)} ship`);
       transactions.push({
         time: s.time,
         type: 'sale',
         marketplace: s.marketplace,
         title: s.skuCount > 1 ? `${s.productName} +${s.skuCount - 1} more` : s.productName,
-        subtitle: `${s.qty} unit${s.qty !== 1 ? 's' : ''} · $${(s.revenue / 100).toFixed(2)} revenue${fees > 0 ? ` − $${(fees / 100).toFixed(2)} fees` : ''}`,
+        subtitle: `${s.qty} unit${s.qty !== 1 ? 's' : ''} · ${subtitleParts.join(' − ')}`,
         orderId: s.order_id,
         amount: s.revenue - fees,
+        profit: s.revenue - fees - cogs - shippingCost,
+        cogs,
+        shippingCost,
         deferred: t?.transaction_status === 'DEFERRED',
         releaseDate: t?.maturity_date || null,
       });
@@ -175,6 +189,7 @@ export async function GET(request: NextRequest) {
     transactions.sort((a, b) => (b.time || '').localeCompare(a.time || ''));
 
     const sum = (type: string) => transactions.filter(t => t.type === type).reduce((s, t) => s + t.amount, 0);
+    const salesProfit = transactions.filter(t => t.type === 'sale').reduce((s, t) => s + (t.profit ?? t.amount), 0);
     // Net excludes unsettled Walmart refunds — same rule as the P&L.
     const net = transactions
       .filter(t => !(t.type === 'refund' && t.settled === false))
@@ -185,6 +200,7 @@ export async function GET(request: NextRequest) {
       summary: {
         count: transactions.length,
         salesNet: sum('sale'),
+        salesProfit,
         refunds: sum('refund'),
         fees: sum('fee'),
         reimbursements: sum('reimbursement'),

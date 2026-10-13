@@ -68,6 +68,27 @@ test('YTD Dashboard = P&L parity on every marketplace slice (live data)', { skip
   }
 });
 
+test('Dashboard chart buckets sum to the Total Revenue / Total Profit cards (live data)', { skip: !dbExists }, async () => {
+  // Review C2 (Sept 23 2026): the chart used to be sales minus order fees
+  // only, so its bars disagreed with the cards on the same page. Every
+  // grouping (monthly / weekly / daily) must now sum to the cards exactly.
+  const ranges: Array<[string, string, string]> = [
+    ['monthly', YTD.startDate, YTD.endDate],
+    ['weekly', addDays(YTD.endDate, -50), YTD.endDate],
+    ['daily', addDays(YTD.endDate, -20), YTD.endDate],
+  ];
+  for (const [grouping, startDate, endDate] of ranges) {
+    for (const m of ['', 'amazon', 'walmart', 'ebay']) {
+      const d = await fetchRoute('dashboard', { startDate, endDate, ...(m ? { marketplace: m } : {}) });
+      const rows = d.dailyRevenue as { revenue: number; profit: number; grouping: string }[];
+      const label = `${grouping} ${m || 'all'}`;
+      if (rows.length) assert.equal(rows[0].grouping, grouping, `${label}: grouping`);
+      assert.equal(rows.reduce((a, r) => a + r.revenue, 0), d.stats.totalRevenue, `${label}: chart revenue != card`);
+      assert.equal(rows.reduce((a, r) => a + r.profit, 0), d.stats.totalProfit, `${label}: chart profit != card`);
+    }
+  }
+});
+
 test('Cash Flow months equal P&L netProfit month-by-month (live data)', { skip: !dbExists }, async () => {
   // The cashflow route buckets with the same formulas as the P&L — each
   // month's net must equal the P&L netProfit for that exact month range.
@@ -128,6 +149,58 @@ test('profitability totals equal raw order_items — no JOIN fan-out in any grou
     assert.equal(totals.revenue, truth.revenue,
       `groupBy=${groupBy}: revenue ${totals.revenue} != raw ${truth.revenue} — a JOIN is fanning rows out`);
   }
+});
+
+test('profitability fees, COGS, refunds and profit are identical in every groupBy (live data)', { skip: !dbExists }, async () => {
+  // Review C1 (Sept 2026): rows were keyed on COALESCE(s.name,'Unknown') /
+  // COALESCE(p.category,'Uncategorized') while the fee and COGS maps used the
+  // raw column, so the Unknown bucket got $0 fees and $0 COGS (2026 Supplier
+  // profit 2.3x too high; Category showed revenue as profit). Regrouping the
+  // same sales can never change a total.
+  const mod = await import('../src/app/api/data/profitability/route');
+  for (const marketplace of ['', 'amazon', 'walmart', 'ebay']) {
+    const totals: Record<string, Record<string, number>> = {};
+    for (const groupBy of ['sku', 'asin', 'supplier', 'category']) {
+      const url = `http://test.local/api/data/profitability?groupBy=${groupBy}&`
+        + new URLSearchParams({ ...YTD, ...(marketplace ? { marketplace } : {}) }).toString();
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const res: Response = await mod.GET(new Request(url) as any);
+      assert.equal(res.status, 200);
+      totals[groupBy] = (await res.json()).totals;
+    }
+    for (const groupBy of ['asin', 'supplier', 'category']) {
+      for (const k of ['fees', 'cogs', 'profit', 'refunds']) {
+        assert.ok(Math.abs(totals[groupBy][k] - totals.sku[k]) < 0.5,
+          `${marketplace || 'all'} ${groupBy}.${k} ${totals[groupBy][k]} != sku.${k} ${totals.sku[k]}`);
+      }
+    }
+  }
+});
+
+test('profitability "Refunded" equals the settled refunds on the orders it covers (live data)', { skip: !dbExists }, async () => {
+  // Review C3: per-line attribution (SKU match, else split by revenue) must
+  // neither drop nor duplicate a refund. Truth = every settled refund on an
+  // order posted in range that the attribution can place (a SKU match, or an
+  // order with product revenue to split across).
+  const { walmartSettledRefund } = await import('../src/lib/accounting-sql');
+  const Database = (await import('better-sqlite3')).default;
+  const db = new Database(DB_PATH, { readonly: true });
+  const truth = (db.prepare(`
+    SELECT COALESCE(SUM(r.refund_amount), 0) AS c FROM refunds r
+    JOIN (SELECT order_id, MIN(posted_date) as posted_date FROM financial_events
+          WHERE event_type = 'ShipmentEvent' AND order_id IS NOT NULL GROUP BY order_id) fe ON r.order_id = fe.order_id
+    WHERE ${MKT_DATE('fe.posted_date')} >= ? AND ${MKT_DATE('fe.posted_date')} < ?
+      AND ${walmartSettledRefund('r', true)}
+      AND (EXISTS (SELECT 1 FROM order_items x WHERE x.order_id = r.order_id AND x.sku = r.sku)
+           OR (SELECT SUM(x.total_price) FROM order_items x WHERE x.order_id = r.order_id) > 0)
+  `).get(YTD.startDate, addDays(YTD.endDate, 1)) as { c: number }).c;
+  db.close();
+  const mod = await import('../src/app/api/data/profitability/route');
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const res: Response = await mod.GET(new Request('http://test.local/api/data/profitability?groupBy=sku&' + new URLSearchParams(YTD)) as any);
+  const { totals } = await res.json();
+  assert.ok(truth > 0, 'expected some settled refunds YTD');
+  assert.ok(Math.abs(totals.refunded - truth) < 1, `profitability refunded ${totals.refunded} != settled refunds ${truth}`);
 });
 
 test('profitability "Inventory Value" equals the /inventory page (live data)', { skip: !dbExists }, async () => {

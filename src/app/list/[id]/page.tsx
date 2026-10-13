@@ -4,13 +4,38 @@ import { useEffect, useState, useRef, useCallback, use } from 'react';
 import Link from 'next/link';
 import { formatCurrency } from '@/lib/formatters';
 import { generateMSKU } from '@/lib/listing-msku';
-import { ArrowLeft, Search, Plus, Trash2, Package, TrendingUp, DollarSign, Percent, Send, ExternalLink, CheckCircle, AlertCircle, AlertTriangle, Loader2, Archive, Box as BoxIcon, Pencil, X as XIcon, Check } from 'lucide-react';
-import { PreflightChip, SendStatusCard, StatusBadge } from '@/components/listing/BatchBadges';
+import { ArrowLeft, Search, Plus, Trash2, Package, TrendingUp, DollarSign, Percent, Send, ExternalLink, CheckCircle, AlertCircle, AlertTriangle, Loader2, Archive, Box as BoxIcon, Pencil, X as XIcon, Check, RefreshCw } from 'lucide-react';
+import { gatedLabel, PreflightChip, SendStatusCard, StatusBadge } from '@/components/listing/BatchBadges';
 import { BoxingWorkflow } from '@/components/listing/BoxingWorkflow';
 import { FnskuPrintButton, PrintRowButton } from '@/components/listing/FnskuPrintButtons';
 import { Batch, BatchItem, Box, CatalogResult, PackGroup, PlacementOption } from '@/components/listing/types';
+import { WfsBatchView } from '@/components/listing/WfsBatchView';
+import { useQuery } from '@/lib/useQuery';
+/**
+ * Parse a Qty input. MFN batches allow 0 (register the SKU on Amazon before
+ * any stock is bought, Oct 4 2026); FBA needs at least 1. Blank or invalid
+ * falls back to 1, as before.
+ */
+function parseQty(raw: string, channel: string | undefined): number {
+  const n = parseInt(raw, 10);
+  const min = channel === 'MFN' ? 0 : 1;
+  return Number.isFinite(n) && n >= min ? n : 1;
+}
+
+/**
+ * WFS (Walmart) batches have their own page; everything else is an Amazon
+ * batch. The choice is made before the Amazon page mounts, so its draft-time
+ * Amazon checks never run for a Walmart batch.
+ */
 export default function BatchDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
+  const { data, loading } = useQuery<{ batch?: { channel: string } }>(`/api/list/batches/${id}`);
+  if (loading || !data) return <div className="text-text-tertiary">Loading batch…</div>;
+  if (data.batch?.channel === 'WFS' || data.batch?.channel === 'WMT_SF') return <WfsBatchView batchId={id} />;
+  return <AmazonBatchDetailPage id={id} />;
+}
+
+function AmazonBatchDetailPage({ id }: { id: string }) {
   const [batch, setBatch] = useState<Batch | null>(null);
   const [items, setItems] = useState<BatchItem[]>([]);
   const [loading, setLoading] = useState(true);
@@ -29,6 +54,9 @@ export default function BatchDetailPage({ params }: { params: Promise<{ id: stri
   const [shipCost, setShipCost] = useState(''); // MFN outbound shipping cost
   const [quantity, setQuantity] = useState('1');
   const [supplier, setSupplier] = useState('');
+  // MFN "Qty → Amazon": on = Amazon gets the SKU's stock in FlipLedger; off =
+  // the offer is created at 0 and stock is managed in Seller Central.
+  const [sendQtyToAmazon, setSendQtyToAmazon] = useState(true);
   const [condition, setCondition] = useState('NewItem');
   const [saving, setSaving] = useState(false);
 
@@ -186,6 +214,31 @@ export default function BatchDetailPage({ params }: { params: Promise<{ id: stri
     return () => { cancelled = true; clearInterval(interval); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id, needsPreflight]);
+
+  // Manual re-check — the poll above stops once every item is hard-blocked
+  // (e.g. NEEDS APPROVAL), so an approval granted later needs a click.
+  const [rechecking, setRechecking] = useState(false);
+  async function handleRecheck() {
+    if (preflightRunning.current) return;
+    preflightRunning.current = true;
+    setRechecking(true);
+    try {
+      const res = await fetch(`/api/list/batches/${id}/preflight`, { method: 'POST' });
+      const data = await res.json();
+      if (!data.ran && data.reason) alert(`Re-check failed: ${data.reason}`);
+      const bres = await fetch(`/api/list/batches/${id}`);
+      const bdata = await bres.json();
+      if (!bdata.error) {
+        setBatch(bdata.batch);
+        setItems(bdata.items || []);
+      }
+    } catch (err) {
+      alert(`Re-check failed: ${err}`);
+    } finally {
+      preflightRunning.current = false;
+      setRechecking(false);
+    }
+  }
 
   async function handleSendToAmazon(allowPartial: boolean = false) {
     if (!batch) return;
@@ -460,6 +513,30 @@ export default function BatchDetailPage({ params }: { params: Promise<{ id: stri
     ]);
   }
 
+  // Copy a packed box (dimensions, weight, contents) for identical boxes.
+  // Contents are capped at what's still unassigned so a copy can never
+  // over-allocate an item; the copy lands right after the last box in the
+  // same pack group.
+  function duplicateBoxAt(idx: number) {
+    setBoxes((prev) => {
+      const source = prev[idx];
+      if (!source) return prev;
+      const assigned = new Map<number, number>();
+      for (const b of prev) for (const bi of b.items) assigned.set(bi.itemId, (assigned.get(bi.itemId) ?? 0) + bi.quantity);
+      const copiedItems = source.items
+        .map((bi) => {
+          const total = items.find((it) => it.id === bi.itemId)?.quantity ?? 0;
+          const remaining = Math.max(0, total - (assigned.get(bi.itemId) ?? 0));
+          return { itemId: bi.itemId, quantity: Math.min(bi.quantity, remaining) };
+        })
+        .filter((bi) => bi.quantity > 0);
+      const copy: Box = { ...source, id: undefined, boxIndex: undefined, items: copiedItems };
+      let insertAt = idx;
+      prev.forEach((b, i) => { if ((b.packingGroupId ?? null) === (source.packingGroupId ?? null)) insertAt = i; });
+      return [...prev.slice(0, insertAt + 1), copy, ...prev.slice(insertAt + 1)];
+    });
+  }
+
   function removeBoxAt(idx: number) {
     setBoxes((prev) => prev.filter((_, i) => i !== idx));
   }
@@ -674,7 +751,9 @@ export default function BatchDetailPage({ params }: { params: Promise<{ id: stri
         } else if (first.lastBuyPrice) {
           setBuyPrice((first.lastBuyPrice / 100).toFixed(2));
         }
-        if (first.avgSalePrice) setListPrice((first.avgSalePrice / 100).toFixed(2));
+        // An existing SKU sells at its live Amazon price; else use past sales.
+        if (existing?.currentPriceCents) setListPrice((existing.currentPriceCents / 100).toFixed(2));
+        else if (first.avgSalePrice) setListPrice((first.avgSalePrice / 100).toFixed(2));
         // MFN-only: pre-fill ship cost from historical average
         if (first.shippingEstimate && first.shippingEstimate.costCents > 0) {
           setShipCost((first.shippingEstimate.costCents / 100).toFixed(2));
@@ -751,13 +830,14 @@ export default function BatchDetailPage({ params }: { params: Promise<{ id: stri
           productName: scanned.name,
           imageUrl: scanned.imageUrl,
           condition,
-          quantity: parseInt(quantity) || 1,
+          quantity: parseQty(quantity, batch?.channel),
           listPrice: parseFloat(listPrice) || 0,
           buyPrice: parseFloat(buyPrice) || 0,
           supplier: supplier.trim() || null,
           purchaseDate: new Date().toISOString(),
           estimatedFeeCents: perUnitFeeCents,
           estimatedShipCents: perUnitShipCents,
+          ...(batch?.channel === 'MFN' ? { sendQtyToAmazon } : {}),
         }),
       });
       const data = await res.json();
@@ -797,10 +877,34 @@ export default function BatchDetailPage({ params }: { params: Promise<{ id: stri
     setSaving(false);
   }
 
+  const [togglingQtyId, setTogglingQtyId] = useState<number | null>(null);
+  async function handleToggleAmazonQty(item: BatchItem) {
+    const turnOn = item.sendQtyToAmazon === 0;
+    const stock = item.skuStock ?? 0;
+    if (turnOn && !confirm(`Set Amazon to ${stock} available for ${item.sku}? That's your stock in FlipLedger (bought minus sold).`)) return;
+    setTogglingQtyId(item.id);
+    try {
+      const res = await fetch(`/api/list/batches/${id}/items/${item.id}/amazon-qty`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ send: turnOn }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.success) alert(`Qty → Amazon failed: ${data.error || res.status}`);
+      else if (data.reason) alert(data.reason);
+      await fetchBatch();
+    } catch (err) {
+      alert(String(err));
+    }
+    setTogglingQtyId(null);
+  }
+
   async function handleRemoveItem(itemId: number) {
     if (!confirm('Remove this item from the batch?')) return;
     try {
-      await fetch(`/api/list/batches/${id}/items/${itemId}`, { method: 'DELETE' });
+      const res = await fetch(`/api/list/batches/${id}/items/${itemId}`, { method: 'DELETE' });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) alert(data.error || `Remove failed (${res.status})`);
       fetchBatch();
     } catch (err) {
       console.error(err);
@@ -845,7 +949,7 @@ export default function BatchDetailPage({ params }: { params: Promise<{ id: stri
       // from the live Amazon listing.
       const isDraft = batch.status === 'draft';
       const payload: Record<string, unknown> = {
-        quantity: parseInt(editForm.quantity) || 1,
+        quantity: parseQty(editForm.quantity, batch.channel),
         buyPrice: parseFloat(editForm.buyPrice) || 0,
       };
       if (isDraft) {
@@ -889,9 +993,27 @@ export default function BatchDetailPage({ params }: { params: Promise<{ id: stri
   const roi = totalCost > 0 ? (expectedProfit / totalCost) * 100 : 0;
   const margin = totalRevenue > 0 ? (expectedProfit / totalRevenue) * 100 : 0;
   const totalUnits = items.reduce((sum, i) => sum + i.quantity, 0);
+  // MFN Publish: what actually reaches Amazon depends on each item's
+  // Qty → Amazon switch — ON items set Amazon to the SKU's FlipLedger stock
+  // (counted once per SKU), OFF items leave Amazon's quantity alone.
+  const mfnOnItems = items.filter((i) => i.sendQtyToAmazon !== 0);
+  const mfnOffCount = items.length - mfnOnItems.length;
+  const mfnUnitsToAmazon = Array.from(new Map(mfnOnItems.map((i) => [i.sku, i.skuStock ?? 0])).values())
+    .reduce((sum, n) => sum + n, 0);
+  const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
+  const mfnPublishMessage = [
+    mfnOnItems.length > 0
+      ? `Amazon will be set to ${plural(mfnUnitsToAmazon, 'available unit', 'available units')} for the ${plural(mfnOnItems.length, 'item', 'items')} with Qty → Amazon on (your FlipLedger stock: bought minus sold).` +
+        (mfnUnitsToAmazon > 0 ? ' Once Amazon verifies them, customers can buy them and you ship each order yourself.' : '')
+      : 'No stock is sent to Amazon.',
+    mfnOffCount > 0
+      ? `${plural(mfnOffCount, 'item has', 'items have')} Qty → Amazon off: ${mfnOffCount === 1 ? 'its' : 'their'} Amazon quantity isn't changed (a listing that doesn't exist yet is created at 0).`
+      : '',
+    'Unpublishing must be done from Seller Central.',
+  ].filter(Boolean).join(' ');
 
   // ─── Single-item preview (what the user is about to add) ─────────
-  const previewQty = parseInt(quantity) || 1;
+  const previewQty = parseQty(quantity, batch?.channel);
   const previewBuy = parseFloat(buyPrice) || 0;
   const previewList = parseFloat(listPrice) || 0;
 
@@ -920,7 +1042,7 @@ export default function BatchDetailPage({ params }: { params: Promise<{ id: stri
   const previewFees = (previewPerUnitFeeCents * previewQty) / 100;
   const previewShipTotal = (parseFloat(shipCost) || 0) * previewQty;
   const previewProfit = previewList * previewQty - previewBuy * previewQty - previewFees - previewShipTotal;
-  const previewRoi = previewBuy > 0 ? (previewProfit / (previewBuy * previewQty)) * 100 : 0;
+  const previewRoi = previewBuy * previewQty > 0 ? (previewProfit / (previewBuy * previewQty)) * 100 : 0;
 
   if (loading || !batch) {
     return (
@@ -931,27 +1053,27 @@ export default function BatchDetailPage({ params }: { params: Promise<{ id: stri
   return (
     <div>
       {/* Header */}
-      <div className="flex items-center justify-between mb-4">
+      <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
         <div className="flex items-center gap-3">
           <Link href="/list" className="p-1.5 rounded-md hover:bg-bg-hover text-text-tertiary hover:text-text-primary transition-colors">
             <ArrowLeft size={18} />
           </Link>
           <div>
-            <div className="flex items-center gap-2">
-              <h1 className="text-xl font-semibold tracking-tight">{batch.name}</h1>
+            <div className="flex flex-wrap items-center gap-2">
+              <h1 className="page-title">{batch.name}</h1>
               <StatusBadge status={batch.status} />
-              <span className="text-xs text-text-tertiary uppercase tracking-wider">{batch.channel}</span>
+              <span className="text-xs text-text-tertiary label-caps">{batch.channel}</span>
             </div>
             <p className="text-xs text-text-tertiary mt-0.5">Created {new Date(batch.createdAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}</p>
           </div>
         </div>
 
         {/* Right-side actions */}
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           {batch.status === 'draft' && (
             <Link
               href={`/list/${batch.id}/import`}
-              className="flex items-center gap-2 h-9 px-4 bg-bg-elevated text-text-primary rounded-md text-sm font-medium hover:bg-bg-hover transition-colors"
+              className="flex items-center gap-2 h-9 px-4 text-text-primary rounded-md text-sm font-semibold hover:bg-bg-hover transition-colors bg-bg-surface border-[1.5px] border-border-strong"
             >
               <Plus size={14} />
               Import items
@@ -969,7 +1091,7 @@ export default function BatchDetailPage({ params }: { params: Promise<{ id: stri
           {batch.status === 'draft' && items.length > 0 && (
             <button
               onClick={() => setShowSendModal(true)}
-              className="flex items-center gap-2 h-9 px-4 bg-accent text-white rounded-md text-sm font-medium hover:bg-accent/90 transition-colors"
+              className="flex items-center gap-2 h-9 px-4 bg-accent text-text-inverse rounded-md text-sm font-bold hover:bg-accent/90 transition-colors"
             >
               <Send size={14} />
               {batch.channel === 'FBA' ? 'Send to Amazon' : 'Publish to Amazon'}
@@ -988,7 +1110,7 @@ export default function BatchDetailPage({ params }: { params: Promise<{ id: stri
               <button
                 onClick={initializeDefaultBoxes}
                 disabled={initializingBoxing}
-                className="flex items-center gap-2 h-9 px-4 bg-accent text-white rounded-md text-sm font-medium hover:bg-accent/90 disabled:opacity-50 transition-colors"
+                className="flex items-center gap-2 h-9 px-4 bg-accent text-text-inverse rounded-md text-sm font-bold hover:bg-accent/90 disabled:opacity-50 transition-colors"
                 title="Box the items and generate Amazon placement options in FlipLedger. Asks Amazon how to split items into pack groups (~5-30s)."
               >
                 {initializingBoxing ? <Loader2 size={14} className="animate-spin" /> : <BoxIcon size={14} />}
@@ -1000,7 +1122,7 @@ export default function BatchDetailPage({ params }: { params: Promise<{ id: stri
                   : 'https://sellercentral.amazon.com/fba/inboundshipments'}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="flex items-center gap-2 h-9 px-3 bg-bg-elevated border border-border-default rounded-md text-sm text-text-secondary hover:text-text-primary hover:bg-bg-hover transition-colors"
+                className="flex items-center gap-2 h-9 px-3 bg-bg-surface border-[1.5px] border-border-strong rounded-md text-sm text-text-secondary hover:text-text-primary hover:bg-bg-hover transition-colors"
                 title="Alternative: finish in Seller Central instead"
               >
                 <ExternalLink size={14} /> Seller Central
@@ -1012,7 +1134,7 @@ export default function BatchDetailPage({ params }: { params: Promise<{ id: stri
               <button
                 onClick={handleSyncFromAmazon}
                 disabled={syncingFromAmazon}
-                className="flex items-center gap-2 h-9 px-3 bg-accent text-white rounded-md text-sm font-medium hover:bg-accent/90 disabled:opacity-50 transition-colors"
+                className="flex items-center gap-2 h-9 px-3 bg-accent text-text-inverse rounded-md text-sm font-bold hover:bg-accent/90 disabled:opacity-50 transition-colors"
                 title="Pull the current batch state from Amazon. Use after finishing packing/placement in Seller Central."
               >
                 {syncingFromAmazon ? <Loader2 size={14} className="animate-spin" /> : <CheckCircle size={14} />}
@@ -1022,7 +1144,7 @@ export default function BatchDetailPage({ params }: { params: Promise<{ id: stri
                 href={`https://sellercentral.amazon.com/fba/sendtoamazon/pack_mixed_unit_step?wf=${batch.inboundPlanId}`}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="flex items-center gap-2 h-9 px-3 bg-bg-elevated border border-border-default rounded-md text-sm text-text-secondary hover:text-text-primary hover:bg-bg-hover transition-colors"
+                className="flex items-center gap-2 h-9 px-3 bg-bg-surface border-[1.5px] border-border-strong rounded-md text-sm text-text-secondary hover:text-text-primary hover:bg-bg-hover transition-colors"
                 title="Finish in Seller Central instead"
               >
                 <ExternalLink size={14} /> Seller Central
@@ -1034,7 +1156,7 @@ export default function BatchDetailPage({ params }: { params: Promise<{ id: stri
               href="https://sellercentral.amazon.com/inventory"
               target="_blank"
               rel="noopener noreferrer"
-              className="flex items-center gap-2 h-9 px-4 bg-positive text-white rounded-md text-sm font-medium hover:bg-positive/90 transition-colors"
+              className="flex items-center gap-2 h-9 px-4 bg-accent text-text-inverse rounded-md text-sm font-bold hover:bg-accent-hover transition-colors"
             >
               <ExternalLink size={14} /> View in Seller Central
             </a>
@@ -1046,7 +1168,7 @@ export default function BatchDetailPage({ params }: { params: Promise<{ id: stri
             <button
               onClick={handleCancelAndEdit}
               disabled={cancelling}
-              className="flex items-center gap-2 h-9 px-3 bg-bg-elevated border border-amber-500/30 rounded-md text-sm text-amber-400 hover:bg-amber-500/10 disabled:opacity-50 transition-colors"
+              className="flex items-center gap-2 h-9 px-3 bg-bg-surface border-[1.5px] border-border-strong rounded-md text-sm font-semibold text-warning hover:bg-bg-hover disabled:opacity-50 transition-colors"
               title={batch.status === 'failed'
                 ? 'Reset to draft so you can fix issues (remove items, edit qty) and try sending again.'
                 : 'Cancel the inbound plan on Amazon and reset this batch to draft so you can add items / fix mistakes and re-send. Listings stay live on Amazon — no money lost.'}
@@ -1058,7 +1180,7 @@ export default function BatchDetailPage({ params }: { params: Promise<{ id: stri
           {(batch.status === 'ready' || batch.status === 'failed' || batch.status === 'shipping' || batch.status === 'shipped') && (
             <button
               onClick={handleCloseBatch}
-              className="flex items-center gap-2 h-9 px-3 bg-bg-elevated border border-border-default rounded-md text-sm text-text-secondary hover:text-text-primary hover:bg-bg-hover transition-colors"
+              className="flex items-center gap-2 h-9 px-3 bg-bg-surface border-[1.5px] border-border-strong rounded-md text-sm text-text-secondary hover:text-text-primary hover:bg-bg-hover transition-colors"
               title="Archive this batch — no more changes, but all data is preserved"
             >
               <Archive size={14} /> Close Batch
@@ -1086,6 +1208,7 @@ export default function BatchDetailPage({ params }: { params: Promise<{ id: stri
           confirmingPlacementId={confirmingPlacementId}
           onAddBox={addEmptyBox}
           onRemoveBox={removeBoxAt}
+          onDuplicateBox={duplicateBoxAt}
           onUpdateBoxField={updateBoxField}
           onSetBoxItemQty={setBoxItemQty}
           onSaveBoxes={handleSaveBoxes}
@@ -1098,41 +1221,41 @@ export default function BatchDetailPage({ params }: { params: Promise<{ id: stri
 
       {/* Live profit ticker */}
       <div className="grid grid-cols-2 lg:grid-cols-5 gap-3 mb-5">
-        <div className="bg-bg-surface border border-border-subtle rounded-lg p-3">
-          <div className="flex items-center gap-1.5 text-[10px] font-medium tracking-widest uppercase text-text-tertiary">
+        <div className="panel p-3">
+          <div className="flex items-center gap-1.5 text-[10px] label-caps text-text-tertiary">
             <Package size={12} /> Units
           </div>
-          <div className="text-xl font-semibold text-text-primary mt-1">{totalUnits}</div>
+          <div className="stat-num text-lg sm:text-xl text-text-primary mt-1">{totalUnits}</div>
           <div className="text-[11px] text-text-tertiary">{items.length} SKU{items.length === 1 ? '' : 's'}</div>
         </div>
-        <div className="bg-bg-surface border border-border-subtle rounded-lg p-3">
-          <div className="flex items-center gap-1.5 text-[10px] font-medium tracking-widest uppercase text-text-tertiary">
+        <div className="panel p-3">
+          <div className="flex items-center gap-1.5 text-[10px] label-caps text-text-tertiary">
             <DollarSign size={12} /> Expected Revenue
           </div>
-          <div className="text-xl font-semibold text-text-primary mt-1">{formatCurrency(totalRevenue)}</div>
+          <div className="stat-num text-lg sm:text-xl text-text-primary mt-1">{formatCurrency(totalRevenue)}</div>
         </div>
-        <div className="bg-bg-surface border border-border-subtle rounded-lg p-3">
-          <div className="text-[10px] font-medium tracking-widest uppercase text-text-tertiary">Cost + Fees{totalShip > 0 ? ' + Ship' : ''}</div>
-          <div className="text-xl font-semibold text-text-secondary mt-1">{formatCurrency(totalCost + totalFees + totalShip)}</div>
+        <div className="panel p-3">
+          <div className="text-[10px] label-caps text-text-tertiary">Cost + Fees{totalShip > 0 ? ' + Ship' : ''}</div>
+          <div className="stat-num text-lg sm:text-xl text-text-secondary mt-1">{formatCurrency(totalCost + totalFees + totalShip)}</div>
           <div className="text-[11px] text-text-tertiary">
             {formatCurrency(totalCost)} cost · {formatCurrency(totalFees)} fees
             {totalShip > 0 && <> · {formatCurrency(totalShip)} ship</>}
           </div>
         </div>
-        <div className="bg-bg-surface border border-accent/30 rounded-lg p-3">
-          <div className="flex items-center gap-1.5 text-[10px] font-medium tracking-widest uppercase text-accent">
+        <div className="panel p-3">
+          <div className="flex items-center gap-1.5 text-[10px] label-caps text-accent">
             <TrendingUp size={12} /> Expected Profit
           </div>
-          <div className={`text-xl font-semibold mt-1 ${expectedProfit >= 0 ? 'text-positive' : 'text-negative'}`}>
+          <div className={`stat-num text-lg sm:text-xl mt-1 ${expectedProfit >= 0 ? 'text-positive' : 'text-negative'}`}>
             {formatCurrency(expectedProfit)}
           </div>
           <div className="text-[11px] text-text-tertiary">{margin.toFixed(1)}% margin</div>
         </div>
-        <div className="bg-bg-surface border border-border-subtle rounded-lg p-3">
-          <div className="flex items-center gap-1.5 text-[10px] font-medium tracking-widest uppercase text-text-tertiary">
+        <div className="panel p-3">
+          <div className="flex items-center gap-1.5 text-[10px] label-caps text-text-tertiary">
             <Percent size={12} /> ROI
           </div>
-          <div className={`text-xl font-semibold mt-1 ${roi >= 30 ? 'text-positive' : roi >= 0 ? 'text-text-primary' : 'text-negative'}`}>
+          <div className={`stat-num text-lg sm:text-xl mt-1 ${roi >= 30 ? 'text-positive' : roi >= 0 ? 'text-text-primary' : 'text-negative'}`}>
             {roi.toFixed(1)}%
           </div>
         </div>
@@ -1140,7 +1263,7 @@ export default function BatchDetailPage({ params }: { params: Promise<{ id: stri
 
       {/* Scan / add item form */}
       {batch.status === 'draft' && (
-        <div className="bg-bg-surface border border-border-subtle rounded-lg overflow-hidden mb-5">
+        <div className="panel overflow-hidden mb-5">
           <div className="px-4 py-3 border-b border-border-subtle">
             <h2 className="text-sm font-medium">Scan / Search Product</h2>
             <p className="text-[11px] text-text-tertiary mt-0.5">Enter ASIN, UPC/EAN, or keywords</p>
@@ -1155,13 +1278,13 @@ export default function BatchDetailPage({ params }: { params: Promise<{ id: stri
                   onChange={(e) => setQuery(e.target.value)}
                   placeholder="B0CNJ7G8CP or 045496597818"
                   autoFocus
-                  className="w-full h-10 pl-9 pr-3 bg-bg-elevated border border-border-default rounded-md text-sm text-text-primary focus:outline-none focus:border-accent font-mono"
+                  className="w-full h-10 pl-9 pr-3 bg-bg-elevated border border-border-default rounded-md text-sm text-text-primary focus:outline-none focus:border-link font-mono"
                 />
               </div>
               <button
                 type="submit"
                 disabled={!query.trim() || searching}
-                className="h-10 px-4 bg-accent text-white rounded-md text-sm font-medium hover:bg-accent/90 disabled:opacity-50 transition-colors"
+                className="h-10 px-4 bg-accent text-text-inverse rounded-md text-sm font-bold hover:bg-accent/90 disabled:opacity-50 transition-colors"
               >
                 {searching ? 'Searching…' : 'Scan'}
               </button>
@@ -1190,39 +1313,39 @@ export default function BatchDetailPage({ params }: { params: Promise<{ id: stri
                         href={`https://www.amazon.com/dp/${scanned.asin}`}
                         target="_blank"
                         rel="noopener noreferrer"
-                        className="inline-flex items-center gap-1 hover:text-accent transition-colors"
+                        className="inline-flex items-center gap-1 hover:text-link transition-colors"
                         title="Open Amazon listing in a new tab"
                       >
                         {scanned.asin}
                         <ExternalLink size={11} className="opacity-60" />
                       </a>
                       {scanned.brand && <span>· {scanned.brand}</span>}
-                      <span className={`ml-auto px-1.5 py-0.5 rounded ${scanned.source === 'local' ? 'bg-positive/10 text-positive' : 'bg-accent/10 text-accent'}`}>
+                      <span className={`ml-auto tag ${scanned.source === 'local' ? 'text-positive' : 'text-text-primary'}`}>
                         {scanned.source === 'local' ? 'IN YOUR CATALOG' : 'FROM AMAZON'}
                       </span>
                     </div>
                     <div className="grid grid-cols-4 gap-2 mt-2 text-[11px]">
                       <div>
                         <span className="text-text-tertiary">Avg sale: </span>
-                        <span className="text-text-primary font-mono">{scanned.avgSalePrice ? formatCurrency(scanned.avgSalePrice) : '—'}</span>
+                        <span className="text-text-primary tabular-nums">{scanned.avgSalePrice ? formatCurrency(scanned.avgSalePrice) : '—'}</span>
                       </div>
                       <div>
                         <span className="text-text-tertiary">Est. fees: </span>
                         {scanned.feeEstimate ? (
-                          <span className="text-text-primary font-mono" title={`Referral: ${formatCurrency(scanned.feeEstimate.referralFeeCents)}${scanned.feeEstimate.fbaFeeCents ? ' · FBA: ' + formatCurrency(scanned.feeEstimate.fbaFeeCents) : ''} · ${scanned.feeEstimate.source}`}>
+                          <span className="text-text-primary tabular-nums" title={`Referral: ${formatCurrency(scanned.feeEstimate.referralFeeCents)}${scanned.feeEstimate.fbaFeeCents ? ' · FBA: ' + formatCurrency(scanned.feeEstimate.fbaFeeCents) : ''} · ${scanned.feeEstimate.source}`}>
                             {formatCurrency(scanned.feeEstimate.totalFeeCents)}
                           </span>
                         ) : (
-                          <span className="text-text-tertiary font-mono">—</span>
+                          <span className="text-text-tertiary tabular-nums">—</span>
                         )}
                       </div>
                       <div>
                         <span className="text-text-tertiary">Sold 30d: </span>
-                        <span className="text-text-primary font-mono">{scanned.unitsSoldLast30d ?? 0}</span>
+                        <span className="text-text-primary tabular-nums">{scanned.unitsSoldLast30d ?? 0}</span>
                       </div>
                       <div>
                         <span className="text-text-tertiary">FBA stock: </span>
-                        <span className="text-text-primary font-mono">{scanned.currentFbaStock ?? 0}</span>
+                        <span className="text-text-primary tabular-nums">{scanned.currentFbaStock ?? 0}</span>
                       </div>
                     </div>
                     {(() => {
@@ -1245,9 +1368,12 @@ export default function BatchDetailPage({ params }: { params: Promise<{ id: stri
                                     if (m.lastBuyPriceCents > 0) {
                                       setBuyPrice((m.lastBuyPriceCents / 100).toFixed(2));
                                     }
+                                    if (m.currentPriceCents) {
+                                      setListPrice((m.currentPriceCents / 100).toFixed(2));
+                                    }
                                   }}
-                                  className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-accent/10 text-accent hover:bg-accent/20 transition-colors font-mono"
-                                  title={`Use this MSKU (no new Amazon listing will be created). Buy price ${m.lastBuyPriceCents > 0 ? '$' + (m.lastBuyPriceCents / 100).toFixed(2) : 'unknown'} from ${m.source}${m.unitsInStock ? ` · ${m.unitsInStock} in FBA` : ''}`}
+                                  className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-accent/10 text-text-primary hover:bg-bg-hover transition-colors font-mono"
+                                  title={`Use this MSKU (no new Amazon listing will be created). Buy price ${m.lastBuyPriceCents > 0 ? '$' + (m.lastBuyPriceCents / 100).toFixed(2) : 'unknown'} from ${m.source}${m.currentPriceCents ? ` · selling at $${(m.currentPriceCents / 100).toFixed(2)} on Amazon` : ''}${m.unitsInStock ? ` · ${m.unitsInStock} in FBA` : ''}`}
                                 >
                                   {m.msku}
                                   {m.unitsInStock ? <span className="text-text-tertiary">·{m.unitsInStock}</span> : null}
@@ -1279,7 +1405,7 @@ export default function BatchDetailPage({ params }: { params: Promise<{ id: stri
                 {/* Entry grid */}
                 <div className="p-4 grid grid-cols-2 lg:grid-cols-6 gap-3">
                   <div className="col-span-2">
-                    <label className="text-[10px] uppercase tracking-widest text-text-tertiary flex items-center gap-1">
+                    <label className="text-[10px] label-caps text-text-tertiary flex items-center gap-1">
                       MSKU
                       {scanned?.existingMskus?.some((m) => m.msku === sku && m.compatible !== false) ? (
                         <span className="text-[9px] text-positive normal-case tracking-normal">restock · no new SKU</span>
@@ -1291,15 +1417,15 @@ export default function BatchDetailPage({ params }: { params: Promise<{ id: stri
                       autoComplete="off"
                       value={sku}
                       onChange={(e) => { setSku(e.target.value); setSkuManuallyEdited(true); }}
-                      className="w-full mt-1 h-9 px-2 bg-bg-elevated border border-border-default rounded text-sm font-mono focus:outline-none focus:border-accent"
+                      className="w-full mt-1 h-9 px-2 bg-bg-elevated border border-border-default rounded text-sm font-mono focus:outline-none focus:border-link"
                     />
                   </div>
                   <div>
-                    <label className="text-[10px] uppercase tracking-widest text-text-tertiary">Condition</label>
+                    <label className="text-[10px] label-caps text-text-tertiary">Condition</label>
                     <select
                       value={condition}
                       onChange={(e) => setCondition(e.target.value)}
-                      className="w-full mt-1 h-9 px-2 bg-bg-elevated border border-border-default rounded text-sm focus:outline-none focus:border-accent"
+                      className="w-full mt-1 h-9 px-2 bg-bg-elevated border border-border-default rounded text-sm focus:outline-none focus:border-link"
                     >
                       <option value="NewItem">New</option>
                       <option value="UsedLikeNew">Used - Like New</option>
@@ -1309,41 +1435,41 @@ export default function BatchDetailPage({ params }: { params: Promise<{ id: stri
                     </select>
                   </div>
                   <div>
-                    <label className="text-[10px] uppercase tracking-widest text-text-tertiary">Qty</label>
+                    <label className="text-[10px] label-caps text-text-tertiary">Qty</label>
                     <input
                       autoComplete="off"
                       type="number"
-                      min="1"
+                      min={batch.channel === 'MFN' ? 0 : 1}
                       value={quantity}
                       onChange={(e) => setQuantity(e.target.value)}
-                      className="w-full mt-1 h-9 px-2 bg-bg-elevated border border-border-default rounded text-sm font-mono focus:outline-none focus:border-accent"
+                      className="w-full mt-1 h-9 px-2 bg-bg-elevated border border-border-default rounded text-sm focus:outline-none focus:border-link tabular-nums"
                     />
                   </div>
                   <div>
-                    <label className="text-[10px] uppercase tracking-widest text-text-tertiary">Buy Price ($)</label>
+                    <label className="text-[10px] label-caps text-text-tertiary">Buy Price ($)</label>
                     <input
                       autoComplete="off"
                       type="number"
                       step="0.01"
                       value={buyPrice}
                       onChange={(e) => setBuyPrice(e.target.value)}
-                      className="w-full mt-1 h-9 px-2 bg-bg-elevated border border-border-default rounded text-sm font-mono focus:outline-none focus:border-accent"
+                      className="w-full mt-1 h-9 px-2 bg-bg-elevated border border-border-default rounded text-sm focus:outline-none focus:border-link tabular-nums"
                     />
                   </div>
                   <div>
-                    <label className="text-[10px] uppercase tracking-widest text-text-tertiary">List Price ($)</label>
+                    <label className="text-[10px] label-caps text-text-tertiary">List Price ($)</label>
                     <input
                       autoComplete="off"
                       type="number"
                       step="0.01"
                       value={listPrice}
                       onChange={(e) => setListPrice(e.target.value)}
-                      className="w-full mt-1 h-9 px-2 bg-bg-elevated border border-border-default rounded text-sm font-mono focus:outline-none focus:border-accent"
+                      className="w-full mt-1 h-9 px-2 bg-bg-elevated border border-border-default rounded text-sm focus:outline-none focus:border-link tabular-nums"
                     />
                   </div>
                   {batch.channel === 'MFN' && (
                     <div>
-                      <label className="text-[10px] uppercase tracking-widest text-text-tertiary flex items-center gap-1">
+                      <label className="text-[10px] label-caps text-text-tertiary flex items-center gap-1">
                         Ship Cost ($)
                         {scanned.shippingEstimate && scanned.shippingEstimate.source !== 'none' && (
                           <span className="text-[9px] text-accent/70 normal-case tracking-normal">
@@ -1358,36 +1484,50 @@ export default function BatchDetailPage({ params }: { params: Promise<{ id: stri
                         value={shipCost}
                         onChange={(e) => setShipCost(e.target.value)}
                         placeholder="0.00"
-                        className="w-full mt-1 h-9 px-2 bg-bg-elevated border border-border-default rounded text-sm font-mono focus:outline-none focus:border-accent"
+                        className="w-full mt-1 h-9 px-2 bg-bg-elevated border border-border-default rounded text-sm focus:outline-none focus:border-link tabular-nums"
                       />
                     </div>
                   )}
                   <div className={batch.channel === 'MFN' ? 'col-span-1' : 'col-span-2'}>
-                    <label className="text-[10px] uppercase tracking-widest text-text-tertiary">Supplier</label>
+                    <label className="text-[10px] label-caps text-text-tertiary">Supplier</label>
                     <input
                       autoComplete="off"
                       value={supplier}
                       onChange={(e) => setSupplier(e.target.value)}
                       placeholder="Walmart, Target, …"
-                      className="w-full mt-1 h-9 px-2 bg-bg-elevated border border-border-default rounded text-sm focus:outline-none focus:border-accent"
+                      className="w-full mt-1 h-9 px-2 bg-bg-elevated border border-border-default rounded text-sm focus:outline-none focus:border-link"
                     />
                   </div>
+
+                  {batch.channel === 'MFN' && (
+                    <label className="col-span-6 flex items-center gap-2 text-xs text-text-secondary cursor-pointer select-none">
+                      <input
+                        type="checkbox"
+                        checked={sendQtyToAmazon}
+                        onChange={(e) => setSendQtyToAmazon(e.target.checked)}
+                      />
+                      <span>
+                        <span className="font-bold text-text-primary">Qty → Amazon</span>
+                        {' '}— on: Amazon shows the units you have in FlipLedger. Off: the offer is created at 0 and you manage stock in Seller Central. The cost is recorded either way.
+                      </span>
+                    </label>
+                  )}
 
                   {/* Per-item preview */}
                   <div className="col-span-6 border-t border-border-subtle pt-3 mt-1 flex items-center justify-between">
                     <div className="text-xs text-text-tertiary">
-                      Projected: <span className={`font-mono ${previewProfit >= 0 ? 'text-positive' : 'text-negative'}`}>{formatCurrency(Math.round(previewProfit * 100))}</span>{' '}
-                      profit · <span className="text-text-primary font-mono">{previewRoi.toFixed(1)}%</span> ROI{' '}
-                      · fees <span className="text-text-primary font-mono">{formatCurrency(previewPerUnitFeeCents * previewQty)}</span>
+                      Projected: <span className={`tabular-nums ${previewProfit >= 0 ? 'text-positive' : 'text-negative'}`}>{formatCurrency(Math.round(previewProfit * 100))}</span>{' '}
+                      profit · <span className="text-text-primary tabular-nums">{previewRoi.toFixed(1)}%</span> ROI{' '}
+                      · fees <span className="text-text-primary tabular-nums">{formatCurrency(previewPerUnitFeeCents * previewQty)}</span>
                       {previewShipTotal > 0 && (
-                        <> · ship <span className="text-text-primary font-mono">{formatCurrency(Math.round(previewShipTotal * 100))}</span></>
+                        <> · ship <span className="text-text-primary tabular-nums">{formatCurrency(Math.round(previewShipTotal * 100))}</span></>
                       )}
                       <span className="ml-1 text-text-tertiary">({feeSourceLabel})</span>
                     </div>
                     <button
                       onClick={handleAddItem}
                       disabled={!sku || !buyPrice || saving}
-                      className="h-9 px-4 bg-accent text-white rounded-md text-sm font-medium hover:bg-accent/90 disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex items-center gap-2"
+                      className="h-9 px-4 bg-accent text-text-inverse rounded-md text-sm font-bold hover:bg-accent/90 disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex items-center gap-2"
                     >
                       <Plus size={14} />
                       {saving ? 'Adding…' : 'Add to Batch'}
@@ -1401,7 +1541,7 @@ export default function BatchDetailPage({ params }: { params: Promise<{ id: stri
       )}
 
       {/* Items table */}
-      <div className="bg-bg-surface border border-border-subtle rounded-lg overflow-hidden">
+      <div className="panel overflow-hidden">
         <div className="px-4 py-3 border-b border-border-subtle">
           <div className="flex items-center gap-2 flex-wrap">
             <span className="text-sm font-medium">Batch Items</span>
@@ -1411,7 +1551,10 @@ export default function BatchDetailPage({ params }: { params: Promise<{ id: stri
               const count = (s: string) => items.filter((i) => i.preflightStatus === s).length;
               const ready = count('READY');
               const pending = count('PENDING') + items.filter((i) => !i.preflightStatus && i.listPriceCents > 0).length;
-              const gated = count('GATED');
+              const gatedItems = items.filter((i) => i.preflightStatus === 'GATED');
+              const needsApproval = gatedItems.filter((i) => gatedLabel(i) === 'NEEDS APPROVAL').length;
+              const notOnAmazon = gatedItems.filter((i) => gatedLabel(i) === 'ASIN NOT ON AMAZON').length;
+              const notEligible = gatedItems.length - needsApproval - notOnAmazon;
               const catalog = count('CATALOG_ISSUE');
               const stuck = count('STUCK');
               const failed = count('FAILED');
@@ -1419,14 +1562,16 @@ export default function BatchDetailPage({ params }: { params: Promise<{ id: stri
               const parts: { label: string; cls: string }[] = [];
               if (ready > 0) parts.push({ label: `${ready} ready`, cls: 'text-positive' });
               if (pending > 0) parts.push({ label: `${pending} registering`, cls: 'text-accent' });
-              if (gated > 0) parts.push({ label: `${gated} needs approval`, cls: 'text-negative' });
-              if (catalog > 0) parts.push({ label: `${catalog} catalog issue`, cls: 'text-amber-400' });
-              if (stuck > 0) parts.push({ label: `${stuck} not registered`, cls: 'text-amber-400' });
+              if (needsApproval > 0) parts.push({ label: `${needsApproval} needs approval`, cls: 'text-negative' });
+              if (notOnAmazon > 0) parts.push({ label: `${notOnAmazon} ASIN not on Amazon`, cls: 'text-negative' });
+              if (notEligible > 0) parts.push({ label: `${notEligible} not eligible`, cls: 'text-negative' });
+              if (catalog > 0) parts.push({ label: `${catalog} catalog issue`, cls: 'text-warning' });
+              if (stuck > 0) parts.push({ label: `${stuck} not registered`, cls: 'text-warning' });
               if (failed > 0) parts.push({ label: `${failed} failed`, cls: 'text-negative' });
               if (unpriced > 0) parts.push({ label: `${unpriced} no price`, cls: 'text-text-tertiary' });
               if (parts.length === 0) return null;
               return (
-                <span className="text-[11px] font-mono flex items-center gap-1.5 ml-2">
+                <span className="text-[11px] flex items-center gap-1.5 ml-2 tabular-nums">
                   {parts.map((p, i) => (
                     <span key={p.label} className={p.cls}>
                       {i > 0 && <span className="text-text-tertiary/50 mr-1.5">·</span>}
@@ -1436,6 +1581,17 @@ export default function BatchDetailPage({ params }: { params: Promise<{ id: stri
                 </span>
               );
             })()}
+            {batch.status === 'draft' && items.length > 0 && (
+              <button
+                onClick={handleRecheck}
+                disabled={rechecking}
+                title="Re-check every item with Amazon (approvals, FNSKU, catalog issues)"
+                className="ml-auto inline-flex items-center gap-1.5 text-xs text-text-secondary hover:text-text-primary disabled:opacity-50"
+              >
+                <RefreshCw className={`w-3.5 h-3.5 ${rechecking ? 'animate-spin' : ''}`} />
+                {rechecking ? 'Checking…' : 'Refresh'}
+              </button>
+            )}
           </div>
         </div>
         {items.length === 0 ? (
@@ -1446,15 +1602,15 @@ export default function BatchDetailPage({ params }: { params: Promise<{ id: stri
           <div className="overflow-x-auto">
             <table className="w-full">
               <thead>
-                <tr className="bg-bg-elevated">
-                  <th className="px-4 py-2.5 text-left text-[11px] font-medium tracking-widest uppercase text-text-tertiary border-b border-border-subtle">Product</th>
-                  <th className="px-4 py-2.5 text-left text-[11px] font-medium tracking-widest uppercase text-text-tertiary border-b border-border-subtle w-28">Condition</th>
-                  <th className="px-4 py-2.5 text-right text-[11px] font-medium tracking-widest uppercase text-text-tertiary border-b border-border-subtle w-16">Qty</th>
-                  <th className="px-4 py-2.5 text-right text-[11px] font-medium tracking-widest uppercase text-text-tertiary border-b border-border-subtle w-24">Buy</th>
-                  <th className="px-4 py-2.5 text-right text-[11px] font-medium tracking-widest uppercase text-text-tertiary border-b border-border-subtle w-24">List</th>
-                  <th className="px-4 py-2.5 text-right text-[11px] font-medium tracking-widest uppercase text-text-tertiary border-b border-border-subtle w-24">Est. Fees</th>
-                  <th className="px-4 py-2.5 text-right text-[11px] font-medium tracking-widest uppercase text-text-tertiary border-b border-border-subtle w-28">Est. Profit</th>
-                  <th className="px-2 py-2.5 border-b border-border-subtle w-10"></th>
+                <tr className="bg-bg-surface">
+                  <th className="px-4 py-2.5 text-left text-[11px] label-caps text-text-tertiary">Product</th>
+                  <th className="px-4 py-2.5 text-left text-[11px] label-caps text-text-tertiary w-28">Condition</th>
+                  <th className="px-4 py-2.5 text-right text-[11px] label-caps text-text-tertiary w-16">Qty</th>
+                  <th className="px-4 py-2.5 text-right text-[11px] label-caps text-text-tertiary w-24">Buy</th>
+                  <th className="px-4 py-2.5 text-right text-[11px] label-caps text-text-tertiary w-24">List</th>
+                  <th className="px-4 py-2.5 text-right text-[11px] label-caps text-text-tertiary w-24">Est. Fees</th>
+                  <th className="px-4 py-2.5 text-right text-[11px] label-caps text-text-tertiary w-28">Est. Profit</th>
+                  <th className="px-2 py-2.5 w-10"></th>
                 </tr>
               </thead>
               <tbody>
@@ -1495,15 +1651,29 @@ export default function BatchDetailPage({ params }: { params: Promise<{ id: stri
                               href={`https://www.amazon.com/dp/${item.asin}`}
                               target="_blank"
                               rel="noopener noreferrer"
-                              className="text-sm text-text-primary hover:text-accent hover:underline truncate max-w-[400px] block"
+                              className="text-sm text-text-primary hover:text-link hover:underline truncate max-w-[400px] block"
                               title={item.productName || ''}
                             >
                               {item.productName || item.asin}
                             </a>
-                            <div className="flex items-center gap-1.5 text-[11px] text-text-tertiary font-mono">
-                              <span>{item.sku}</span>
+                            <div className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-[11px] text-text-tertiary font-mono">
+                              <span className="whitespace-nowrap">{item.sku}</span>
                               {item.fnsku && (
                                 <span className="text-[10px] text-text-tertiary/70">· {item.fnsku}</span>
+                              )}
+                              {batch.channel === 'MFN' && (
+                                <button
+                                  role="switch"
+                                  aria-checked={item.sendQtyToAmazon !== 0}
+                                  onClick={() => handleToggleAmazonQty(item)}
+                                  disabled={togglingQtyId === item.id}
+                                  className={`tag text-[9px] font-sans disabled:opacity-50 ${item.sendQtyToAmazon !== 0 ? 'text-positive' : 'text-text-tertiary'}`}
+                                  title={item.sendQtyToAmazon !== 0
+                                    ? `On: Amazon is set to your FlipLedger stock for this SKU (${item.skuStock ?? 0}). Click to stop sending.`
+                                    : 'Off: FlipLedger never changes the Amazon quantity (manage it in Seller Central). Click to send your stock.'}
+                                >
+                                  {togglingQtyId === item.id ? 'QTY → AMAZON …' : `QTY → AMAZON: ${item.sendQtyToAmazon !== 0 ? 'ON' : 'OFF'}`}
+                                </button>
                               )}
                               {batch.status === 'draft' && item.preflightStatus ? (
                                 // Draft: pre-flight badge (gating / catalog / FNSKU state)
@@ -1512,16 +1682,16 @@ export default function BatchDetailPage({ params }: { params: Promise<{ id: stri
                                 // Post-send: listing lifecycle chips
                                 <>
                                   {item.listingStatus === 'ACTIVE' && (
-                                    <span className="text-[9px] text-positive bg-positive/10 px-1 rounded">LIVE</span>
+                                    <span className="tag text-[9px] text-positive">LIVE</span>
                                   )}
                                   {item.listingStatus === 'PROCESSING' && (
-                                    <span className="text-[9px] text-accent bg-accent/10 px-1 rounded">PROCESSING</span>
+                                    <span className="tag tag-blue text-[9px]">PROCESSING</span>
                                   )}
                                   {item.listingStatus === 'FAILED' && (
-                                    <span className="text-[9px] text-negative bg-negative/10 px-1 rounded">FAILED</span>
+                                    <span className="tag text-[9px] text-negative">FAILED</span>
                                   )}
                                   {item.listingStatus === 'NOT_INBOUND_READY' && (
-                                    <span className="text-[9px] text-amber-400 bg-amber-500/10 px-1 rounded">EXCLUDED</span>
+                                    <span className="tag text-[9px] text-warning">EXCLUDED</span>
                                   )}
                                 </>
                               )}
@@ -1530,7 +1700,7 @@ export default function BatchDetailPage({ params }: { params: Promise<{ id: stri
                             {item.listingError && (
                               <div
                                 className={`text-[11px] mt-0.5 leading-snug ${
-                                  item.listingStatus === 'FAILED' ? 'text-negative' : 'text-amber-400'
+                                  item.listingStatus === 'FAILED' ? 'text-negative' : 'text-warning'
                                 }`}
                               >
                                 {item.listingStatus === 'FAILED' ? '⛔ ' : '⚠ '}
@@ -1546,7 +1716,7 @@ export default function BatchDetailPage({ params }: { params: Promise<{ id: stri
                           <select
                             value={editForm.condition}
                             onChange={(e) => setEditForm({ ...editForm, condition: e.target.value })}
-                            className="w-full h-7 px-1 bg-bg-elevated border border-border-default rounded text-xs focus:outline-none focus:border-accent"
+                            className="w-full h-7 px-1 bg-bg-elevated border border-border-default rounded text-xs focus:outline-none focus:border-link"
                           >
                             <option value="NewItem">New</option>
                             <option value="UsedLikeNew">Used - Like New</option>
@@ -1559,20 +1729,20 @@ export default function BatchDetailPage({ params }: { params: Promise<{ id: stri
                         )}
                       </td>
                       {/* Qty */}
-                      <td className="px-4 py-2 text-right text-sm font-mono text-text-secondary">
+                      <td className="px-4 py-2 text-right text-sm text-text-secondary tabular-nums">
                         {isEditing ? (
                           <input
                             autoComplete="off"
                             type="number"
-                            min="1"
+                            min={batch.channel === 'MFN' ? 0 : 1}
                             value={editForm.quantity}
                             onChange={(e) => setEditForm({ ...editForm, quantity: e.target.value })}
-                            className="w-14 h-7 px-1 text-right bg-bg-elevated border border-border-default rounded text-xs font-mono focus:outline-none focus:border-accent"
+                            className="w-14 h-7 px-1 text-right bg-bg-elevated border border-border-default rounded text-xs focus:outline-none focus:border-link tabular-nums"
                           />
                         ) : item.quantity}
                       </td>
                       {/* Buy — editable, FlipLedger-local (affects FIFO/COGS, not Amazon) */}
-                      <td className="px-4 py-2 text-right text-sm font-mono text-text-secondary">
+                      <td className="px-4 py-2 text-right text-sm text-text-secondary tabular-nums">
                         {isEditing ? (
                           <input
                             autoComplete="off"
@@ -1580,12 +1750,17 @@ export default function BatchDetailPage({ params }: { params: Promise<{ id: stri
                             step="0.01"
                             value={editForm.buyPrice}
                             onChange={(e) => setEditForm({ ...editForm, buyPrice: e.target.value })}
-                            className="w-20 h-7 px-1 text-right bg-bg-elevated border border-border-default rounded text-xs font-mono focus:outline-none focus:border-accent"
+                            className="w-20 h-7 px-1 text-right bg-bg-elevated border border-border-default rounded text-xs focus:outline-none focus:border-link tabular-nums"
                           />
-                        ) : formatCurrency(cost)}
+                        ) : (
+                          <>
+                            {formatCurrency(editBuy)}
+                            {editQty > 1 && <div className="text-[10px] text-text-tertiary">{formatCurrency(cost)} total</div>}
+                          </>
+                        )}
                       </td>
                       {/* List — only editable in draft (post-draft would silently diverge from live Amazon listing) */}
-                      <td className="px-4 py-2 text-right text-sm font-mono text-text-primary">
+                      <td className="px-4 py-2 text-right text-sm text-text-primary tabular-nums">
                         {isEditing && batch.status === 'draft' ? (
                           <input
                             autoComplete="off"
@@ -1593,11 +1768,16 @@ export default function BatchDetailPage({ params }: { params: Promise<{ id: stri
                             step="0.01"
                             value={editForm.listPrice}
                             onChange={(e) => setEditForm({ ...editForm, listPrice: e.target.value })}
-                            className="w-20 h-7 px-1 text-right bg-bg-elevated border border-border-default rounded text-xs font-mono focus:outline-none focus:border-accent"
+                            className="w-20 h-7 px-1 text-right bg-bg-elevated border border-border-default rounded text-xs focus:outline-none focus:border-link tabular-nums"
                           />
-                        ) : formatCurrency(rev)}
+                        ) : (
+                          <>
+                            {formatCurrency(editList)}
+                            {editQty > 1 && <div className="text-[10px] text-text-tertiary">{formatCurrency(rev)} total</div>}
+                          </>
+                        )}
                       </td>
-                      <td className="px-4 py-2 text-right text-sm font-mono text-negative">
+                      <td className="px-4 py-2 text-right text-sm text-negative tabular-nums">
                         {fees + ship > 0 ? (
                           <>
                             {formatCurrency(-(fees + ship))}
@@ -1609,7 +1789,7 @@ export default function BatchDetailPage({ params }: { params: Promise<{ id: stri
                           </>
                         ) : '—'}
                       </td>
-                      <td className={`px-4 py-2 text-right text-sm font-mono font-medium ${profit >= 0 ? 'text-positive' : 'text-negative'}`}>
+                      <td className={`px-4 py-2 text-right text-sm font-medium tabular-nums ${profit >= 0 ? 'text-positive' : 'text-negative'}`}>
                         {formatCurrency(profit)}
                       </td>
                       {/* Actions */}
@@ -1649,7 +1829,7 @@ export default function BatchDetailPage({ params }: { params: Promise<{ id: stri
                               )}
                               <button
                                 onClick={() => handleStartEdit(item)}
-                                className="p-1 text-text-tertiary hover:text-accent hover:bg-accent/10 rounded transition-colors"
+                                className="p-1 text-text-tertiary hover:text-text-primary hover:bg-bg-hover rounded transition-colors"
                                 title="Edit"
                               >
                                 <Pencil size={14} />
@@ -1717,7 +1897,7 @@ export default function BatchDetailPage({ params }: { params: Promise<{ id: stri
                               {['ready', 'boxing', 'placement'].includes(batch.status) && (
                                 <button
                                   onClick={() => handleStartEdit(item)}
-                                  className="p-1 text-text-tertiary hover:text-accent hover:bg-accent/10 rounded transition-colors"
+                                  className="p-1 text-text-tertiary hover:text-text-primary hover:bg-bg-hover rounded transition-colors"
                                   title="Edit quantity"
                                 >
                                   <Pencil size={14} />
@@ -1748,9 +1928,9 @@ export default function BatchDetailPage({ params }: { params: Promise<{ id: stri
       {/* Confirmation modal — real Amazon state! */}
       {showSendModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60" onClick={() => !sending && setShowSendModal(false)}>
-          <div className="bg-bg-surface border border-border-default rounded-lg p-5 w-[480px] shadow-xl" onClick={(e) => e.stopPropagation()}>
+          <div className="panel p-5 w-[480px] shadow-xl" onClick={(e) => e.stopPropagation()}>
             <div className="flex items-start gap-3 mb-3">
-              <AlertCircle size={20} className="text-amber-400 shrink-0 mt-0.5" />
+              <AlertCircle size={20} className="text-warning shrink-0 mt-0.5" />
               <div>
                 <h2 className="text-base font-semibold">
                   {batch.channel === 'FBA' ? 'Send batch to Amazon?' : 'Publish batch to Amazon?'}
@@ -1763,7 +1943,7 @@ export default function BatchDetailPage({ params }: { params: Promise<{ id: stri
                     </>
                   ) : (
                     <>
-                      This will create <b className="text-text-primary">{items.length}</b> merchant-fulfilled listing{items.length === 1 ? '' : 's'} on Amazon for <b className="text-text-primary">{totalUnits}</b> unit{totalUnits === 1 ? '' : 's'}. As soon as Amazon finishes verification, customers can buy them — and you&apos;ll be responsible for shipping each order yourself. Unpublishing must be done from Seller Central.
+                      {mfnPublishMessage}
                     </>
                   )}
                 </p>
@@ -1785,11 +1965,11 @@ export default function BatchDetailPage({ params }: { params: Promise<{ id: stri
               )}
               <div className="flex items-start justify-between gap-2">
                 <span className="text-text-tertiary">Expected revenue:</span>
-                <span className="font-mono text-text-primary">{formatCurrency(totalRevenue)}</span>
+                <span className="text-text-primary tabular-nums">{formatCurrency(totalRevenue)}</span>
               </div>
               <div className="flex items-start justify-between gap-2">
                 <span className="text-text-tertiary">Est. profit:</span>
-                <span className={`font-mono ${expectedProfit >= 0 ? 'text-positive' : 'text-negative'}`}>
+                <span className={`tabular-nums ${expectedProfit >= 0 ? 'text-positive' : 'text-negative'}`}>
                   {formatCurrency(expectedProfit)}
                 </span>
               </div>
@@ -1810,7 +1990,7 @@ export default function BatchDetailPage({ params }: { params: Promise<{ id: stri
               <button
                 onClick={() => handleSendToAmazon()}
                 disabled={sending}
-                className="h-9 px-4 bg-accent text-white rounded-md text-sm font-medium hover:bg-accent/90 disabled:opacity-50 transition-colors flex items-center gap-2"
+                className="h-9 px-4 bg-accent text-text-inverse rounded-md text-sm font-bold hover:bg-accent/90 disabled:opacity-50 transition-colors flex items-center gap-2"
               >
                 {sending ? <Loader2 size={14} className="animate-spin" /> : <Send size={14} />}
                 {sending

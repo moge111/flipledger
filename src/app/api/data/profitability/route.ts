@@ -3,6 +3,7 @@ import { MKT_DATE, marketToday, marketDaysAgo, addDays } from '@/lib/market-day'
 import { openDb } from '@/lib/db-conn';
 import { marketplaceParam } from '@/lib/request-params';
 import { createLogger } from '@/lib/log';
+import { lineSettledRefundExpr, lineSettledRefundRowsExpr } from '@/lib/accounting-sql';
 
 const log = createLogger('api/data/profitability');
 
@@ -25,141 +26,109 @@ export async function GET(request: NextRequest) {
   }
   const marketplace = marketplaceParam(searchParams);
   const MF = marketplace ? `AND o.marketplace = '${marketplace}'` : '';
-  const MF_R = marketplace ? `AND marketplace = '${marketplace}'` : '';
 
   const endDateNext = addDays(endDate, 1);
 
   try {
-    let groupCol: string;
+    // ONE group-key expression for every aggregate on this page. The rows used
+    // to be keyed on COALESCE(s.name,'Unknown') / COALESCE(p.category,
+    // 'Uncategorized') while the fee and COGS maps were keyed on the raw
+    // column, so the "Unknown" bucket looked up NULL and got $0 fees and $0
+    // COGS: 2026 Supplier profit showed $131,928 against a true $56,430
+    // (review C1, Sept 2026). Rows, fees, COGS and refunds now come from a
+    // single line-level query, so they cannot disagree on the key.
+    const supplierByAsin = `LEFT JOIN (SELECT asin, MIN(supplier_id) as supplier_id FROM inventory_ledger GROUP BY asin) il_a ON oi.asin = il_a.asin
+          LEFT JOIN suppliers s ON il_a.supplier_id = s.id`;
+    let keyExpr: string;
     let selectCols: string;
     let joinClause: string;
-    let groupByClause: string;
 
     switch (groupBy) {
       case 'sku':
-        groupCol = 'oi.sku';
-        selectCols = `oi.sku as groupKey, p.name as productName, oi.asin, p.category, s.name as supplierName`;
+        keyExpr = 'oi.sku';
+        selectCols = `p.name as productName, oi.asin, p.category, s.name as supplierName`;
         joinClause = `LEFT JOIN products p ON oi.asin = p.asin
           LEFT JOIN (SELECT sku, MIN(supplier_id) as supplier_id FROM inventory_ledger GROUP BY sku) il_s ON oi.sku = il_s.sku
           LEFT JOIN suppliers s ON il_s.supplier_id = s.id`;
-        groupByClause = 'oi.sku';
         break;
       case 'category':
-        groupCol = 'p.category';
-        selectCols = `COALESCE(p.category, 'Uncategorized') as groupKey, '' as productName, '' as asin, '' as supplierName`;
+        keyExpr = `COALESCE(p.category, 'Uncategorized')`;
+        selectCols = `'' as productName, '' as asin, '' as supplierName`;
         joinClause = `LEFT JOIN products p ON oi.asin = p.asin`;
-        groupByClause = 'p.category';
         break;
       case 'supplier':
-        groupCol = 's.name';
-        selectCols = `COALESCE(s.name, 'Unknown') as groupKey, '' as productName, '' as asin, p.category`;
+        keyExpr = `COALESCE(s.name, 'Unknown')`;
+        selectCols = `'' as productName, '' as asin, p.category`;
         joinClause = `LEFT JOIN products p ON oi.asin = p.asin
-          LEFT JOIN (SELECT asin, MIN(supplier_id) as supplier_id FROM inventory_ledger GROUP BY asin) il_s ON oi.asin = il_s.asin
-          LEFT JOIN suppliers s ON il_s.supplier_id = s.id`;
-        groupByClause = 's.name';
+          ${supplierByAsin}`;
         break;
       default: // asin
-        groupCol = 'oi.asin';
-        selectCols = `oi.asin as groupKey, p.name as productName, oi.asin, p.category, s.name as supplierName`;
+        keyExpr = 'oi.asin';
+        selectCols = `p.name as productName, oi.asin, p.category, s.name as supplierName`;
         joinClause = `LEFT JOIN products p ON oi.asin = p.asin
-          LEFT JOIN (SELECT asin, MIN(supplier_id) as supplier_id FROM inventory_ledger GROUP BY asin) il_a ON oi.asin = il_a.asin
-          LEFT JOIN suppliers s ON il_a.supplier_id = s.id`;
-        groupByClause = 'oi.asin';
+          ${supplierByAsin}`;
         break;
     }
 
+    // Order fees are distributed to lines by revenue share (per-order
+    // subqueries, so joining them never fans out a line).
     const rows = db.prepare(`
       SELECT
+        ${keyExpr} as groupKey,
         ${selectCols},
         COUNT(DISTINCT o.order_id) as orders,
         SUM(oi.quantity) as unitsSold,
         SUM(oi.total_price) as revenue,
         COALESCE(SUM(oi.shipping_charged), 0) as shippingCharged,
-        COALESCE(SUM(oi.shipping_cost), 0) as shippingCost
+        COALESCE(SUM(oi.shipping_cost), 0) as shippingCost,
+        COALESCE(SUM(oi.cogs_per_unit * oi.quantity), 0) as cogs,
+        COALESCE(SUM(order_fees.total_fee * oi.total_price * 1.0 / order_totals.order_revenue), 0) as orderFees,
+        COALESCE(SUM(${lineSettledRefundExpr()}), 0) as refunded,
+        SUM(${lineSettledRefundRowsExpr('COUNT(*)')}) as refundCount,
+        SUM(${lineSettledRefundRowsExpr('SUM(r.quantity)')}) as refundUnits
       FROM order_items oi
       JOIN (SELECT order_id, MIN(posted_date) as posted_date FROM financial_events WHERE event_type = 'ShipmentEvent' AND order_id IS NOT NULL GROUP BY order_id) fe ON oi.order_id = fe.order_id
       JOIN orders o ON oi.order_id = o.order_id
-      ${joinClause}
-      WHERE ${MKT_DATE('fe.posted_date')} >= ? AND ${MKT_DATE('fe.posted_date')} < ? ${MF}
-      GROUP BY ${groupByClause}
-      ORDER BY SUM(oi.total_price) DESC
-    `).all(startDate, endDateNext) as any[];
-
-    // Get fees per order first, then distribute to SKUs/ASINs
-    // This avoids cross-product multiplication from joining fee_details to order_items
-    const feeGroupKey = groupBy === 'sku' ? 'oi.sku' : groupBy === 'category' ? 'p.category' : groupBy === 'supplier' ? 's.name' : 'oi.asin';
-    const feesByGroup = db.prepare(`
-      SELECT
-        ${feeGroupKey} as groupKey,
-        COALESCE(SUM(order_fees.total_fee * oi.total_price * 1.0 / order_totals.order_revenue), 0) as totalFees
-      FROM order_items oi
-      JOIN (SELECT order_id, MIN(posted_date) as posted_date FROM financial_events WHERE event_type = 'ShipmentEvent' AND order_id IS NOT NULL GROUP BY order_id) fe ON oi.order_id = fe.order_id
-      JOIN orders o ON oi.order_id = o.order_id
-      JOIN (
+      LEFT JOIN (
         SELECT order_id, -SUM(amount) as total_fee
         FROM fee_details WHERE order_id IS NOT NULL AND order_id != ''
         GROUP BY order_id
       ) order_fees ON oi.order_id = order_fees.order_id
-      JOIN (
+      LEFT JOIN (
         SELECT order_id, SUM(total_price) as order_revenue
-        FROM order_items GROUP BY order_id
-      ) order_totals ON oi.order_id = order_totals.order_id AND order_totals.order_revenue > 0
-      ${groupBy === 'category' ? 'LEFT JOIN products p ON oi.asin = p.asin' : ''}
-      ${groupBy === 'supplier' ? `LEFT JOIN (SELECT asin, MIN(supplier_id) as supplier_id FROM inventory_ledger GROUP BY asin) il ON oi.asin = il.asin LEFT JOIN suppliers s ON il.supplier_id = s.id` : ''}
+        FROM order_items GROUP BY order_id HAVING SUM(total_price) > 0
+      ) order_totals ON oi.order_id = order_totals.order_id
+      ${joinClause}
       WHERE ${MKT_DATE('fe.posted_date')} >= ? AND ${MKT_DATE('fe.posted_date')} < ? ${MF}
-      GROUP BY ${feeGroupKey}
+      GROUP BY ${keyExpr}
+      ORDER BY SUM(oi.total_price) DESC
     `).all(startDate, endDateNext) as any[];
 
-    const feesMap = new Map(feesByGroup.map((f: any) => [f.groupKey, f.totalFees]));
-
-    // Add per-ASIN storage fees directly from the storage fee report
-    // Each ASIN's monthly_fee represents what Amazon charges for storing that specific product
+    // Per-ASIN storage fees (a monthly snapshot from the storage fee report).
+    // Each ASIN's fee is counted once and split across the groups that sold
+    // it by units, so the page total is the same in every groupBy mode. (It
+    // used to be looked up by row.asin, which is blank in category/supplier
+    // mode, and was added once per SKU when several SKUs share an ASIN.)
+    const storageByGroup = new Map<string, number>();
     const hasStorageFees = db.prepare('SELECT COUNT(*) as cnt FROM storage_fees_per_asin').get() as any;
     if (hasStorageFees?.cnt > 0) {
-      for (const row of rows) {
-        const groupKey = row.groupKey || 'Unknown';
-        const currentFees = feesMap.get(groupKey) || 0;
-        // Look up storage fee by ASIN
-        const storageFee = db.prepare(
-          'SELECT monthly_fee FROM storage_fees_per_asin WHERE asin = ?'
-        ).get(row.asin || groupKey) as any;
-        if (storageFee?.monthly_fee) {
-          // Add the monthly storage fee (this is per-ASIN total, not per-unit)
-          feesMap.set(groupKey, currentFees + storageFee.monthly_fee);
-        }
+      const unitsByGroupAsin = db.prepare(`
+        SELECT ${keyExpr} as groupKey, oi.asin as asin, SUM(oi.quantity) as units, sf.monthly_fee as fee
+        FROM order_items oi
+        JOIN (SELECT order_id, MIN(posted_date) as posted_date FROM financial_events WHERE event_type = 'ShipmentEvent' AND order_id IS NOT NULL GROUP BY order_id) fe ON oi.order_id = fe.order_id
+        JOIN orders o ON oi.order_id = o.order_id
+        JOIN storage_fees_per_asin sf ON sf.asin = oi.asin
+        ${joinClause}
+        WHERE ${MKT_DATE('fe.posted_date')} >= ? AND ${MKT_DATE('fe.posted_date')} < ? ${MF}
+        GROUP BY ${keyExpr}, oi.asin
+      `).all(startDate, endDateNext) as any[];
+      const unitsByAsin = new Map<string, number>();
+      for (const u of unitsByGroupAsin) unitsByAsin.set(u.asin, (unitsByAsin.get(u.asin) || 0) + u.units);
+      for (const u of unitsByGroupAsin) {
+        const share = u.fee * u.units / (unitsByAsin.get(u.asin) || 1);
+        storageByGroup.set(u.groupKey, (storageByGroup.get(u.groupKey) || 0) + share);
       }
     }
-
-    // Get COGS per group — uses FIFO pre-calculated cogs_per_unit
-    const cogsGroupKey = groupBy === 'sku' ? 'oi.sku' : groupBy === 'category' ? 'p.category' : groupBy === 'supplier' ? 's.name' : 'oi.asin';
-    const cogsByGroup = db.prepare(`
-      SELECT
-        ${cogsGroupKey} as groupKey,
-        COALESCE(SUM(oi.cogs_per_unit * oi.quantity), 0) as totalCogs
-      FROM order_items oi
-      JOIN (SELECT order_id, MIN(posted_date) as posted_date FROM financial_events WHERE event_type = 'ShipmentEvent' AND order_id IS NOT NULL GROUP BY order_id) fe ON oi.order_id = fe.order_id
-      JOIN orders o ON oi.order_id = o.order_id
-      ${groupBy === 'category' ? 'LEFT JOIN products p ON oi.asin = p.asin' : ''}
-      ${groupBy === 'supplier' ? `LEFT JOIN (SELECT asin, MIN(supplier_id) as supplier_id FROM inventory_ledger GROUP BY asin) il_s ON oi.asin = il_s.asin LEFT JOIN suppliers s ON il_s.supplier_id = s.id` : ''}
-      WHERE ${MKT_DATE('fe.posted_date')} >= ? AND ${MKT_DATE('fe.posted_date')} < ? ${MF}
-      GROUP BY ${cogsGroupKey}
-    `).all(startDate, endDateNext) as any[];
-
-    const cogsMap = new Map(cogsByGroup.map((c: any) => [c.groupKey, c.totalCogs]));
-
-    // Get refund counts per group
-    const refundsByGroup = db.prepare(`
-      SELECT ${groupBy === 'category' ? 'p.category' : groupBy === 'supplier' ? "'Unknown'" : 'r.asin'} as groupKey,
-        COUNT(*) as refundCount,
-        SUM(r.quantity) as refundUnits
-      FROM refunds r
-      ${groupBy === 'category' ? 'LEFT JOIN products p ON r.asin = p.asin' : ''}
-      WHERE ${MKT_DATE('r.refund_date')} >= ? AND ${MKT_DATE('r.refund_date')} < ?
-        ${marketplace ? `AND COALESCE(r.marketplace, 'amazon') = '${marketplace}'` : ''}
-      GROUP BY ${groupBy === 'category' ? 'p.category' : groupBy === 'supplier' ? '1' : 'r.asin'}
-    `).all(startDate, endDateNext) as any[];
-
-    const refundsMap = new Map(refundsByGroup.map((r: any) => [r.groupKey, { count: r.refundCount, units: r.refundUnits }]));
 
     // Get on-hand inventory + its value at cost per group.
     //
@@ -170,7 +139,7 @@ export async function GET(request: NextRequest) {
     // rules as /api/data/inventory-overview: marketplace stock at the latest
     // lot's buy_price, plus local/unsynced stock (small real lots for SKUs
     // live_inventory doesn't track, e.g. eBay cards) at their weighted cost.
-    const onHandGroupKey = groupBy === 'sku' ? 'stock.sku' : groupBy === 'category' ? 'p.category' : groupBy === 'supplier' ? 's.name' : 'stock.asin';
+    const onHandGroupKey = groupBy === 'sku' ? 'stock.sku' : groupBy === 'category' ? `COALESCE(p.category, 'Uncategorized')` : groupBy === 'supplier' ? `COALESCE(s.name, 'Unknown')` : 'stock.asin';
     const liveMktFilter = marketplace ? `AND li.marketplace = '${marketplace}'` : '';
     const localMktFilter = marketplace ? `AND COALESCE(p_loc.marketplace, 'amazon') = '${marketplace}'` : '';
     const onHandByGroup = db.prepare(`
@@ -201,11 +170,10 @@ export async function GET(request: NextRequest) {
         FROM inventory_ledger il
         LEFT JOIN products p_loc ON p_loc.asin = il.asin OR p_loc.asin = il.sku
         WHERE il.quantity_remaining > 0
-          AND il.quantity <= 20
           AND il.buy_price > 0
           AND NOT EXISTS (
             SELECT 1 FROM live_inventory li
-            WHERE li.sku = il.sku OR (il.asin IS NOT NULL AND il.asin != '' AND li.asin = il.asin)
+            WHERE li.total_qty > 0 AND (li.sku = il.sku OR (il.asin IS NOT NULL AND il.asin != '' AND li.asin = il.asin))
           )
           ${localMktFilter}
         GROUP BY il.sku
@@ -224,13 +192,16 @@ export async function GET(request: NextRequest) {
 
     // Build result rows
     const result = rows.map((row: any) => {
-      const fees = feesMap.get(row.groupKey) || 0;
-      const cogs = cogsMap.get(row.groupKey) || 0;
-      const refunds = refundsMap.get(row.groupKey) || { count: 0, units: 0 };
+      const fees = row.orderFees + (storageByGroup.get(row.groupKey) || 0);
+      const cogs = row.cogs;
+      const refunds = { count: row.refundCount || 0, units: row.refundUnits || 0 };
       const onHand = onHandMap.get(row.groupKey) || { onHand: 0, value: 0 };
       const shippingCost = row.shippingCost || 0;
       const shippingCharged = row.shippingCharged || 0;
-      const profit = row.revenue + shippingCharged - cogs - fees - shippingCost;
+      // Settled refunds on these sales (review C3): a returned unit already
+      // has $0 COGS, so without this it showed as near-100% margin.
+      const refunded = row.refunded || 0;
+      const profit = row.revenue + shippingCharged - cogs - fees - shippingCost - refunded;
       const roi = cogs > 0 ? (profit / cogs) * 100 : 0;
       const margin = row.revenue > 0 ? (profit / row.revenue) * 100 : 0;
 
@@ -249,6 +220,7 @@ export async function GET(request: NextRequest) {
         fees,
         cogs,
         shippingCost,
+        refunded,
         costPerUnit: row.unitsSold > 0 ? cogs / row.unitsSold : 0,
         profit,
         roi,
@@ -267,11 +239,12 @@ export async function GET(request: NextRequest) {
       acc.fees += r.fees;
       acc.cogs += r.cogs;
       acc.shippingCost += r.shippingCost;
+      acc.refunded += r.refunded;
       acc.profit += r.profit;
       acc.refunds += r.refunds;
       acc.onHand += r.onHand;
       return acc;
-    }, { orders: 0, unitsSold: 0, revenue: 0, fees: 0, cogs: 0, shippingCost: 0, profit: 0, refunds: 0, onHand: 0 });
+    }, { orders: 0, unitsSold: 0, revenue: 0, fees: 0, cogs: 0, shippingCost: 0, refunded: 0, profit: 0, refunds: 0, onHand: 0 });
 
     // Inventory value is a point-in-time snapshot of everything on hand, so it
     // is the grand total across all stock — NOT the sum of the visible rows,

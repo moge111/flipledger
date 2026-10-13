@@ -125,3 +125,43 @@ export const SERVICE_FEE_ROWS = `(fd.order_id IS NULL OR fd.order_id = '')`;
  * turned every clawback credit into an extra charge (April 11 2026 bug).
  */
 export const SIGNED_FEE_TOTAL = `COALESCE(-SUM(fd.amount), 0)`;
+
+// ── Refunds attributed to a sale line ────────────────────────────────────────
+
+/** A refund row matches no line of its order by SKU (eBay multi-item, some Walmart). */
+const unmatchedRefund = (r: string) =>
+  `(${r}.sku IS NULL OR ${r}.sku = '' OR NOT EXISTS (SELECT 1 FROM order_items x WHERE x.order_id = ${r}.order_id AND x.sku = ${r}.sku))`;
+
+/**
+ * Settled refund dollars that belong to one order_items line: refunds whose
+ * SKU matches the line, plus any SKU-less refund on the order pro-rated by the
+ * line's share of the order's product revenue. Walmart refunds count only
+ * once they settle in recon (same gate as the P&L). Use it in per-order views
+ * (Sales pages, Profitability), where a refund belongs to the sale it
+ * reverses regardless of when it was issued. `oi` is the order_items alias.
+ */
+export function lineSettledRefundExpr(oi = 'oi'): string {
+  return `(
+    COALESCE((SELECT SUM(r.refund_amount) FROM refunds r
+      WHERE r.order_id = ${oi}.order_id AND r.sku = ${oi}.sku AND ${walmartSettledRefund('r', true)}), 0)
+    + COALESCE((SELECT SUM(r.refund_amount) FROM refunds r
+      WHERE r.order_id = ${oi}.order_id AND ${unmatchedRefund('r')} AND ${walmartSettledRefund('r', true)}), 0)
+      * ${oi}.total_price * 1.0 / NULLIF((SELECT SUM(x.total_price) FROM order_items x WHERE x.order_id = ${oi}.order_id), 0)
+  )`;
+}
+
+/**
+ * Aggregate over the settled refund ROWS that belong to one line (`agg` is
+ * e.g. `COUNT(*)` or `SUM(r.quantity)`): SKU matches, plus SKU-less refunds
+ * counted once, on the order's first line.
+ */
+export function lineSettledRefundRowsExpr(agg: string, oi = 'oi'): string {
+  return `(
+    COALESCE((SELECT ${agg} FROM refunds r
+      WHERE r.order_id = ${oi}.order_id AND r.sku = ${oi}.sku AND ${walmartSettledRefund('r', true)}), 0)
+    + CASE WHEN ${oi}.id = (SELECT MIN(x.id) FROM order_items x WHERE x.order_id = ${oi}.order_id)
+      THEN COALESCE((SELECT ${agg} FROM refunds r
+        WHERE r.order_id = ${oi}.order_id AND ${unmatchedRefund('r')} AND ${walmartSettledRefund('r', true)}), 0)
+      ELSE 0 END
+  )`;
+}

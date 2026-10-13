@@ -10,45 +10,61 @@ import { useQuery } from '@/lib/useQuery';
 import DataTable from '@/components/tables/DataTable';
 import { formatCurrency, formatDate } from '@/lib/formatters';
 import { Plus } from 'lucide-react';
+import { marketToday } from '@/lib/market-day';
 
 interface ExpenseRow { id: number; date: string; category: string; amount: number; description: string; recurring: string; }
 
 export default function OtherExpensesPage() {
   const { dateRange, setDateRange, marketplace, setMarketplace, marketplaceParam } = useFilters();
   const [showAddForm, setShowAddForm] = useState(false);
-  const [newExpense, setNewExpense] = useState({ date: new Date().toISOString().split('T')[0], category: 'Supplies', amount: '', description: '', recurring: 'one-time' });
+  // marketToday(), not the UTC day: after ~6 PM Mountain the UTC date is already tomorrow.
+  const blankExpense = () => ({ date: marketToday(), category: 'Supplies', amount: '', description: '' });
+  const [newExpense, setNewExpense] = useState(blankExpense);
+  const [saveError, setSaveError] = useState<string | null>(null);
 
   const { data, loading, reload: fetchData } = useQuery<{ items?: ExpenseRow[]; rows?: ExpenseRow[]; totals?: any }>(`/api/data/other-expenses?startDate=${dateRange.startDate}&endDate=${dateRange.endDate}${marketplaceParam}`);
   const rows: ExpenseRow[] = data?.items || data?.rows || [];
   const totals: any = data?.totals || null;
 
   async function handleAddExpense() {
-    if (!newExpense.amount) return;
-    await fetch('/api/data/other-expenses', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ ...newExpense, amount: Math.round(parseFloat(newExpense.amount) * 100) }),
-    });
+    const cents = Math.round(parseFloat(newExpense.amount) * 100);
+    if (!Number.isFinite(cents) || cents <= 0) { setSaveError('Enter an amount greater than $0.'); return; }
+    setSaveError(null);
+    try {
+      const res = await fetch('/api/data/other-expenses', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...newExpense, amount: cents }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        setSaveError(err.error || `Save failed (HTTP ${res.status})`);
+        return;
+      }
+    } catch {
+      setSaveError('Network error: the expense was not saved.');
+      return;
+    }
     setShowAddForm(false);
-    setNewExpense({ date: new Date().toISOString().split('T')[0], category: 'Supplies', amount: '', description: '', recurring: 'one-time' });
+    setNewExpense(blankExpense());
     fetchData();
   }
 
   const categories = ['Supplies', 'Mileage', 'Subscriptions', 'Storage', 'Packaging', 'Labels', 'Equipment', 'Insurance', 'Other'];
 
   const columns = useMemo<ColumnDef<ExpenseRow, any>[]>(() => [
-    { id: 'date', header: 'Date', accessorKey: 'date', cell: ({ getValue }) => <span className="font-mono text-sm text-text-secondary whitespace-nowrap">{formatDate(getValue() as string)}</span>, size: 120 },
+    { id: 'date', header: 'Date', accessorKey: 'date', cell: ({ getValue }) => <span className="text-sm text-text-secondary whitespace-nowrap tabular-nums">{formatDate(getValue() as string)}</span>, size: 120 },
     {
       id: 'category', header: 'Category', accessorKey: 'category',
       cell: ({ getValue }) => <span className="text-sm font-medium text-text-primary">{getValue() as string}</span>, size: 130,
     },
-    { id: 'amount', header: 'Amount', accessorKey: 'amount', cell: ({ getValue }) => <span className="font-mono text-negative">{formatCurrency(getValue() as number)}</span>, size: 110 },
+    { id: 'amount', header: 'Amount', accessorKey: 'amount', cell: ({ getValue }) => <span className="text-negative tabular-nums">{formatCurrency(getValue() as number)}</span>, size: 110 },
     { id: 'description', header: 'Description', accessorKey: 'description', cell: ({ getValue }) => <span className="text-sm text-text-secondary">{getValue() as string}</span>, size: 300 },
     {
       id: 'recurring', header: 'Recurring', accessorKey: 'recurring',
       cell: ({ getValue }) => {
         const v = getValue() as string;
-        return <span className={`text-xs font-medium px-2 py-0.5 rounded ${v === 'monthly' ? 'bg-accent-muted text-accent' : 'bg-bg-active text-text-tertiary'}`}>{v === 'monthly' ? 'Monthly' : 'One-time'}</span>;
+        return <span className={`tag ${v === 'monthly' ? 'text-text-primary' : ''}`}>{v === 'monthly' ? 'Monthly' : 'One-time'}</span>;
       }, size: 90,
     },
   ], []);
@@ -70,7 +86,7 @@ export default function OtherExpensesPage() {
       <div className="mb-4">
         <button
           onClick={() => setShowAddForm(!showAddForm)}
-          className="flex items-center gap-2 h-9 px-4 bg-accent text-white rounded-md text-sm font-medium hover:bg-accent-hover transition-colors"
+          className="flex items-center gap-2 h-9 px-4 bg-accent text-text-inverse rounded-md text-sm font-bold hover:bg-accent-hover transition-colors"
         >
           <Plus size={14} />
           Add Expense
@@ -79,7 +95,7 @@ export default function OtherExpensesPage() {
 
       {/* Add Expense Form */}
       {showAddForm && (
-        <div className="bg-bg-surface border border-border-subtle rounded-lg p-4 mb-4">
+        <div className="panel p-4 mb-4">
           <div className="grid grid-cols-2 lg:grid-cols-5 gap-3">
             <input type="date" value={newExpense.date} onChange={e => setNewExpense(p => ({ ...p, date: e.target.value }))} className="h-9 px-3 bg-bg-input border border-border-default rounded-md text-sm text-text-primary" />
             <select value={newExpense.category} onChange={e => setNewExpense(p => ({ ...p, category: e.target.value }))} className="h-9 px-3 bg-bg-input border border-border-default rounded-md text-sm text-text-primary">
@@ -87,14 +103,9 @@ export default function OtherExpensesPage() {
             </select>
             <input type="number" step="0.01" placeholder="Amount" value={newExpense.amount} onChange={e => setNewExpense(p => ({ ...p, amount: e.target.value }))} className="h-9 px-3 bg-bg-input border border-border-default rounded-md text-sm text-text-primary placeholder-text-tertiary" />
             <input type="text" placeholder="Description" value={newExpense.description} onChange={e => setNewExpense(p => ({ ...p, description: e.target.value }))} className="h-9 px-3 bg-bg-input border border-border-default rounded-md text-sm text-text-primary placeholder-text-tertiary" />
-            <div className="flex gap-2">
-              <select value={newExpense.recurring} onChange={e => setNewExpense(p => ({ ...p, recurring: e.target.value }))} className="h-9 px-3 bg-bg-input border border-border-default rounded-md text-sm text-text-primary flex-1">
-                <option value="one-time">One-time</option>
-                <option value="monthly">Monthly</option>
-              </select>
-              <button onClick={handleAddExpense} className="h-9 px-4 bg-accent text-white rounded-md text-sm font-medium hover:bg-accent-hover transition-colors">Save</button>
-            </div>
+            <button onClick={handleAddExpense} className="h-9 px-4 bg-accent text-text-inverse rounded-md text-sm font-bold hover:bg-accent-hover transition-colors">Save</button>
           </div>
+          {saveError && <p className="text-xs text-negative mt-2">{saveError}</p>}
         </div>
       )}
 

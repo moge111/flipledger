@@ -79,7 +79,7 @@ export default function MfnUploadListPage() {
     <div className="space-y-6">
       <div className="flex items-start justify-between gap-4">
         <div>
-          <h1 className="text-xl font-semibold tracking-tight">MFN Upload List</h1>
+          <h1 className="page-title">MFN Upload List</h1>
           <p className="text-sm text-text-tertiary mt-0.5">
             Read-only Airtable preview → Inventory Loader CSV + ASIN label batch. No Airtable writes yet.
           </p>
@@ -87,7 +87,7 @@ export default function MfnUploadListPage() {
         <button
           onClick={fetchPreview}
           disabled={loading}
-          className="inline-flex items-center gap-2 rounded-md bg-bg-surface border border-border-subtle px-3 py-2 text-sm text-text-secondary hover:text-text-primary disabled:opacity-60"
+          className="inline-flex items-center gap-2 rounded-md px-3 py-2 text-sm text-text-primary hover:text-text-primary disabled:opacity-60 font-semibold hover:bg-bg-hover bg-bg-surface border-[1.5px] border-border-strong"
         >
           <RefreshCw size={16} className={loading ? 'animate-spin' : ''} />
           Refresh
@@ -95,27 +95,27 @@ export default function MfnUploadListPage() {
       </div>
 
       {data?.error && (
-        <div className="rounded-lg border border-red-500/30 bg-red-500/10 p-4 text-sm text-red-300">
+        <div className="flash flash-bad p-4 text-sm text-negative">
           {data.error}
         </div>
       )}
 
       <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
-        <div className="rounded-lg border border-border-subtle bg-bg-surface p-4">
-          <div className="text-xs uppercase tracking-wide text-text-tertiary">Source view</div>
+        <div className="panel p-4">
+          <div className="text-xs label-caps text-text-tertiary">Source view</div>
           <div className="text-sm mt-1 text-text-primary">{data?.source?.view ?? 'IL FBM Upload Today'}</div>
         </div>
-        <div className="rounded-lg border border-border-subtle bg-bg-surface p-4">
-          <div className="text-xs uppercase tracking-wide text-text-tertiary">Ready rows</div>
-          <div className="text-2xl font-semibold mt-1">{data?.summary?.readyRows ?? 0}</div>
+        <div className="panel p-4">
+          <div className="text-xs label-caps text-text-tertiary">Ready rows</div>
+          <div className="stat-num text-xl sm:text-2xl mt-1">{data?.summary?.readyRows ?? 0}</div>
         </div>
-        <div className="rounded-lg border border-border-subtle bg-bg-surface p-4">
-          <div className="text-xs uppercase tracking-wide text-text-tertiary">Ready units</div>
-          <div className="text-2xl font-semibold mt-1">{data?.summary?.totalReadyQty ?? 0}</div>
+        <div className="panel p-4">
+          <div className="text-xs label-caps text-text-tertiary">Ready units</div>
+          <div className="stat-num text-xl sm:text-2xl mt-1">{data?.summary?.totalReadyQty ?? 0}</div>
         </div>
-        <div className="rounded-lg border border-border-subtle bg-bg-surface p-4">
-          <div className="text-xs uppercase tracking-wide text-text-tertiary">Ready revenue</div>
-          <div className="text-2xl font-semibold mt-1">{money(data?.summary?.totalReadyRevenueCents)}</div>
+        <div className="panel p-4">
+          <div className="text-xs label-caps text-text-tertiary">Ready revenue</div>
+          <div className="stat-num text-xl sm:text-2xl mt-1">{money(data?.summary?.totalReadyRevenueCents)}</div>
         </div>
       </div>
 
@@ -123,7 +123,7 @@ export default function MfnUploadListPage() {
         <button
           disabled={ready.length === 0}
           onClick={() => downloadText(`mfn-upload-list-${new Date().toISOString().slice(0, 10)}.csv`, csv, 'text/csv;charset=utf-8')}
-          className="inline-flex items-center gap-2 rounded-md bg-accent px-3 py-2 text-sm font-medium text-white hover:opacity-90 disabled:opacity-40"
+          className="inline-flex items-center gap-2 rounded-md bg-accent px-3 py-2 text-sm font-bold text-text-inverse hover:opacity-90 disabled:opacity-40"
         >
           <Download size={16} />
           Download CSV
@@ -131,21 +131,21 @@ export default function MfnUploadListPage() {
         <button
           disabled={ready.length === 0}
           onClick={() => openAsinLabels(ready)}
-          className="inline-flex items-center gap-2 rounded-md bg-bg-surface border border-border-subtle px-3 py-2 text-sm text-text-secondary hover:text-text-primary disabled:opacity-40"
+          className="inline-flex items-center gap-2 rounded-md px-3 py-2 text-sm text-text-primary hover:text-text-primary disabled:opacity-40 font-semibold hover:bg-bg-hover bg-bg-surface border-[1.5px] border-border-strong"
         >
           <Tags size={16} />
           Print ASIN labels
         </button>
       </div>
 
-      <section className="rounded-lg border border-border-subtle bg-bg-surface overflow-hidden">
-        <div className="px-4 py-3 border-b border-border-subtle flex items-center justify-between">
-          <h2 className="font-medium">Ready for CSV</h2>
-          <span className="text-xs text-text-tertiary">{ready.length} rows</span>
+      <section className="panel overflow-hidden">
+        <div className="panel-bar">
+          <h2>Ready for CSV</h2>
+          <span className="panel-bar-caption">{ready.length} rows</span>
         </div>
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
-            <thead className="text-xs uppercase tracking-wide text-text-tertiary bg-bg-root/40">
+            <thead className="text-xs label-caps text-text-tertiary">
               <tr>
                 <th className="text-left p-3">SKU</th>
                 <th className="text-left p-3">ASIN</th>
@@ -175,17 +175,17 @@ export default function MfnUploadListPage() {
       </section>
 
       {blocked.length > 0 && (
-        <section className="rounded-lg border border-amber-500/30 bg-amber-500/5 overflow-hidden">
-          <div className="px-4 py-3 border-b border-amber-500/20 flex items-center gap-2">
-            <AlertTriangle size={16} className="text-amber-300" />
+        <section className="attn-banner overflow-hidden">
+          <div className="px-4 py-3 border-b border-warning/20 flex items-center gap-2">
+            <AlertTriangle size={16} className="text-warning" />
             <h2 className="font-medium">Blocked rows</h2>
             <span className="text-xs text-text-tertiary">missing required fields or not safe to upload</span>
           </div>
-          <div className="divide-y divide-amber-500/10">
+          <div className="divide-y divide-warning/10">
             {blocked.map(row => (
               <div key={row.airtableRecordId} className="p-4 text-sm">
                 <div className="font-medium">{row.title || row.sku || row.asin || row.airtableRecordId}</div>
-                <div className="text-xs text-amber-200 mt-1">{row.blockingReasons.join(' · ')}</div>
+                <div className="text-xs text-warning mt-1">{row.blockingReasons.join(' · ')}</div>
               </div>
             ))}
           </div>

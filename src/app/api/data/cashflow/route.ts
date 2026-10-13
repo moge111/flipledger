@@ -225,10 +225,10 @@ export async function GET(request: NextRequest) {
       SELECT COALESCE(SUM(il.quantity_remaining * il.buy_price), 0) as value,
         COALESCE(SUM(il.quantity_remaining), 0) as units
       FROM inventory_ledger il
-      WHERE il.quantity_remaining > 0 AND il.quantity <= 20 AND il.buy_price > 0
+      WHERE il.quantity_remaining > 0 AND il.buy_price > 0
         AND NOT EXISTS (
           SELECT 1 FROM live_inventory li
-          WHERE li.sku = il.sku OR (il.asin IS NOT NULL AND il.asin != '' AND li.asin = il.asin)
+          WHERE li.total_qty > 0 AND (li.sku = il.sku OR (il.asin IS NOT NULL AND il.asin != '' AND li.asin = il.asin))
         )
     `).get() as { value: number; units: number };
 

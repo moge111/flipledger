@@ -8,9 +8,11 @@ import { useFilters } from '@/lib/useFilters';
 import { formatCurrency, centsToDollars, formatNumber } from '@/lib/formatters';
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip,
-  ResponsiveContainer, PieChart, Pie, Cell, Legend
+  ResponsiveContainer, Cell,
 } from 'recharts';
 import { useQuery } from '@/lib/useQuery';
+import { Money, Seg } from '@/components/ui/Paper';
+import ChartTooltip from '@/components/charts/ChartTooltip';
 
 interface DashboardData {
   stats: {
@@ -38,8 +40,6 @@ interface DashboardData {
   };
 }
 
-const CHART_COLORS = ['#6366f1', '#22c55e', '#f59e0b', '#ec4899', '#06b6d4', '#a855f7', '#f97316'];
-
 interface TxRow {
   time: string;
   type: 'sale' | 'refund' | 'fee' | 'reimbursement';
@@ -48,6 +48,9 @@ interface TxRow {
   subtitle: string;
   orderId: string | null;
   amount: number;
+  profit?: number;
+  cogs?: number;
+  shippingCost?: number;
   deferred?: boolean;
   releaseDate?: string | null;
   settled?: boolean;
@@ -56,6 +59,7 @@ interface TxRow {
 interface TxSummary {
   count: number;
   salesNet: number;
+  salesProfit?: number;
   refunds: number;
   fees: number;
   reimbursements: number;
@@ -171,39 +175,24 @@ export default function Dashboard() {
     .map(e => ({
       name: e.category,
       value: centsToDollars(e.total),
-    }));
+    }))
+    .sort((a, b) => b.value - a.value);
 
   return (
     <div>
       {/* Header */}
-      <div className="flex items-center justify-between mb-6">
+      <div className="flex flex-wrap items-end justify-between gap-x-6 gap-y-3 mb-6">
         <div>
-          <h1 className="text-xl font-semibold tracking-tight">Dashboard</h1>
+          <h1 className="page-title">Dashboard</h1>
           <p className="text-sm text-text-tertiary mt-0.5">Overview of your business performance</p>
         </div>
-        <div className="flex items-center gap-2">
-          <div className="flex h-9 rounded-md border border-border-default overflow-hidden text-sm">
-            <button
-              onClick={() => setDateBasis('posted')}
-              className={`px-3 transition-colors ${
-                dateBasis === 'posted'
-                  ? 'bg-accent/15 text-accent font-medium'
-                  : 'bg-bg-elevated text-text-secondary hover:bg-bg-hover'
-              }`}
-            >
-              Cash
-            </button>
-            <button
-              onClick={() => setDateBasis('purchase')}
-              className={`px-3 border-l border-border-default transition-colors ${
-                dateBasis === 'purchase'
-                  ? 'bg-accent/15 text-accent font-medium'
-                  : 'bg-bg-elevated text-text-secondary hover:bg-bg-hover'
-              }`}
-            >
-              Accrual
-            </button>
-          </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <Seg
+            ariaLabel="Date basis"
+            value={dateBasis === 'purchase' ? 'purchase' : 'posted'}
+            onChange={setDateBasis}
+            options={[{ value: 'posted', label: 'Cash' }, { value: 'purchase', label: 'Accrual' }]}
+          />
           <MarketplaceFilter value={marketplace} onChange={setMarketplace} />
           <DateRangePicker
             value={dateRange}
@@ -251,13 +240,13 @@ export default function Dashboard() {
       {/* In-flight: orders earned but not yet in Cash-basis P&L */}
       {data.inFlight && (data.inFlight.pending.orders > 0 || data.inFlight.shippedNotPosted.orders > 0) && (
         <div className="mb-6 grid grid-cols-1 lg:grid-cols-3 gap-4">
-          <div className="bg-bg-surface border border-border-subtle rounded-lg p-4">
-            <div className="flex items-center justify-between mb-1">
-              <div className="text-[11px] uppercase tracking-wider text-text-tertiary">Pending (estimated)</div>
-              <div className="text-[10px] text-text-tertiary">{data.inFlight.pending.orders} orders</div>
+          <div className="panel px-4 py-3.5">
+            <div className="flex items-center justify-between mb-1.5">
+              <div className="label-caps text-text-tertiary">Pending (estimated)</div>
+              <div className="text-[11px] text-text-tertiary tabular-nums">{data.inFlight.pending.orders} orders</div>
             </div>
-            <div className="text-2xl font-mono text-accent">
-              ~{formatCurrency(data.inFlight.pending.revenueEstimate)}
+            <div className="stat-num text-[18px] sm:text-[22px] text-text-primary">
+              ~<Money cents={data.inFlight.pending.revenueEstimate} />
             </div>
             <div className="text-xs text-text-tertiary mt-1">
               {data.inFlight.pending.orders} × {formatCurrency(data.inFlight.pending.avgOrderValue)} (30d AOV).
@@ -277,14 +266,15 @@ export default function Dashboard() {
                   .catch(() => setInFlightLoading(false));
               }
             }}
-            className="bg-bg-surface border border-border-subtle rounded-lg p-4 text-left hover:border-border-default transition-colors cursor-pointer"
+            aria-expanded={showInFlight}
+            className="panel px-4 py-3.5 text-left hover:bg-bg-hover transition-colors cursor-pointer"
           >
-            <div className="flex items-center justify-between mb-1">
-              <div className="text-[11px] uppercase tracking-wider text-text-tertiary">Held under Delivery Date Policy</div>
-              <div className="text-[10px] text-text-tertiary">{data.inFlight.shippedNotPosted.orders} orders ›</div>
+            <div className="flex items-center justify-between mb-1.5">
+              <div className="label-caps text-text-tertiary">Held under Delivery Date Policy</div>
+              <div className="text-[11px] font-semibold text-link tabular-nums">{data.inFlight.shippedNotPosted.orders} orders {showInFlight ? '▾' : '›'}</div>
             </div>
-            <div className="text-2xl font-mono text-warning">
-              {formatCurrency(data.inFlight.shippedNotPosted.revenue)}
+            <div className="stat-num text-[18px] sm:text-[22px] text-link">
+              <Money cents={data.inFlight.shippedNotPosted.revenue} />
             </div>
             <div className="text-xs text-text-tertiary mt-1">
               ≈ {formatCurrency(data.inFlight.shippedNotPosted.projectedProfit)} projected profit
@@ -293,10 +283,10 @@ export default function Dashboard() {
               )}
             </div>
           </button>
-          <div className="bg-bg-surface border border-border-subtle rounded-lg p-4">
-            <div className="text-[11px] uppercase tracking-wider text-text-tertiary mb-1">Total expected to post</div>
-            <div className="text-2xl font-mono text-text-primary">
-              {formatCurrency(data.inFlight.pending.revenueEstimate + data.inFlight.shippedNotPosted.revenue)}
+          <div className="panel px-4 py-3.5">
+            <div className="label-caps text-text-tertiary mb-1.5">Total expected to post</div>
+            <div className="stat-num text-[18px] sm:text-[22px] text-text-primary">
+              <Money cents={data.inFlight.pending.revenueEstimate + data.inFlight.shippedNotPosted.revenue} />
             </div>
             <div className="text-xs text-text-tertiary mt-1">
               Revenue not yet in Cash view; will appear as orders settle
@@ -307,13 +297,13 @@ export default function Dashboard() {
 
       {/* Inline drill: per-order list of orders held under DDP */}
       {showInFlight && (
-        <div className="bg-bg-surface border border-border-subtle rounded-lg overflow-hidden mb-6">
-          <div className="flex items-center justify-between px-4 py-3 border-b border-border-subtle">
-            <div className="flex items-center gap-2">
-              <span className="text-sm font-semibold text-text-primary">Orders Held under Delivery Date Policy</span>
-              <span className="text-xs text-text-tertiary">{inFlightItems.length} orders · sorted by release date</span>
-            </div>
-            <button onClick={() => setShowInFlight(false)} className="text-xs text-text-tertiary hover:text-text-secondary">✕ Close</button>
+        <div className="panel overflow-hidden mb-6">
+          <div className="panel-bar">
+            <span>Orders held under Delivery Date Policy</span>
+            <span className="flex items-center gap-3">
+              <span className="panel-bar-caption">{inFlightItems.length} orders · by release date</span>
+              <button onClick={() => setShowInFlight(false)} className="opacity-70 hover:opacity-100">✕ Close</button>
+            </span>
           </div>
           {inFlightLoading ? (
             <div className="p-4 text-sm text-text-tertiary">Loading...</div>
@@ -323,15 +313,15 @@ export default function Dashboard() {
             <div className="overflow-x-auto">
               <table className="w-full">
                 <thead>
-                  <tr className="bg-bg-elevated">
-                    <th className="px-4 py-2 text-left text-[11px] font-medium tracking-widest uppercase text-text-tertiary border-b border-border-subtle">Product</th>
-                    <th className="px-4 py-2 text-left text-[11px] font-medium tracking-widest uppercase text-text-tertiary border-b border-border-subtle w-32">Order</th>
-                    <th className="px-4 py-2 text-left text-[11px] font-medium tracking-widest uppercase text-text-tertiary border-b border-border-subtle w-20">FC</th>
-                    <th className="px-4 py-2 text-left text-[11px] font-medium tracking-widest uppercase text-text-tertiary border-b border-border-subtle w-24">Shipped</th>
-                    <th className="px-4 py-2 text-left text-[11px] font-medium tracking-widest uppercase text-text-tertiary border-b border-border-subtle w-32">Est. Release</th>
-                    <th className="px-4 py-2 text-right text-[11px] font-medium tracking-widest uppercase text-text-tertiary border-b border-border-subtle w-14">Qty</th>
-                    <th className="px-4 py-2 text-right text-[11px] font-medium tracking-widest uppercase text-text-tertiary border-b border-border-subtle w-24">Revenue</th>
-                    <th className="px-4 py-2 text-right text-[11px] font-medium tracking-widest uppercase text-text-tertiary border-b border-border-subtle w-24">Proj. Profit</th>
+                  <tr className="bg-bg-surface">
+                    <th className="px-4 py-2 text-left text-[11px] label-caps text-text-tertiary">Product</th>
+                    <th className="px-4 py-2 text-left text-[11px] label-caps text-text-tertiary w-32">Order</th>
+                    <th className="px-4 py-2 text-left text-[11px] label-caps text-text-tertiary w-20">FC</th>
+                    <th className="px-4 py-2 text-left text-[11px] label-caps text-text-tertiary w-24">Shipped</th>
+                    <th className="px-4 py-2 text-left text-[11px] label-caps text-text-tertiary w-32">Est. Release</th>
+                    <th className="px-4 py-2 text-right text-[11px] label-caps text-text-tertiary w-14">Qty</th>
+                    <th className="px-4 py-2 text-right text-[11px] label-caps text-text-tertiary w-24">Revenue</th>
+                    <th className="px-4 py-2 text-right text-[11px] label-caps text-text-tertiary w-24">Proj. Profit</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -341,12 +331,12 @@ export default function Dashboard() {
                         <div className="text-text-primary font-medium truncate max-w-[280px] flex items-center gap-2">
                           {item.productName}
                           {item.cogsSource === 'missing' && (
-                            <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[9px] font-semibold uppercase tracking-wider bg-amber-500/15 text-amber-400" title="No COGS entered for this SKU yet">
+                            <span className="tag tag-attn text-[9.5px]" title="No COGS entered for this SKU yet">
                               No COGS
                             </span>
                           )}
                           {item.cogsSource === 'fallback' && (
-                            <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[9px] font-semibold uppercase tracking-wider bg-blue-500/10 text-blue-400" title="COGS estimated from last known buy price (FIFO lot depleted)">
+                            <span className="tag text-[9.5px]" title="COGS estimated from last known buy price (FIFO lot depleted)">
                               Est. COGS
                             </span>
                           )}
@@ -366,9 +356,9 @@ export default function Dashboard() {
                           ({item.daysUntilRelease === 0 ? 'releasing' : `${item.daysUntilRelease}d`})
                         </span>
                       </td>
-                      <td className="px-4 py-2 text-right text-sm font-mono text-text-secondary">{item.quantity}</td>
-                      <td className="px-4 py-2 text-right text-sm font-mono text-text-primary">{formatCurrency(item.revenue)}</td>
-                      <td className={`px-4 py-2 text-right text-sm font-mono font-medium ${item.projectedProfit >= 0 ? 'text-positive' : 'text-negative'}`}>
+                      <td className="px-4 py-2 text-right text-sm text-text-secondary tabular-nums">{item.quantity}</td>
+                      <td className="px-4 py-2 text-right text-sm text-text-primary tabular-nums">{formatCurrency(item.revenue)}</td>
+                      <td className={`px-4 py-2 text-right text-sm font-medium tabular-nums ${item.projectedProfit >= 0 ? 'text-positive' : 'text-negative'}`}>
                         {formatCurrency(item.projectedProfit)}
                       </td>
                     </tr>
@@ -382,20 +372,18 @@ export default function Dashboard() {
 
       {/* Single-day transaction feed: every transaction that posted this day */}
       {singleDay && (
-        <div className="bg-bg-surface border border-border-subtle rounded-lg overflow-hidden mb-6">
-          <div className="flex items-center justify-between px-4 py-3 border-b border-border-subtle">
-            <div className="flex items-center gap-2">
-              <span className="text-sm font-semibold text-text-primary">
-                Transactions · {new Date(dateRange.startDate + 'T00:00:00').toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })}
-              </span>
+        <div className="panel overflow-hidden mb-6">
+          <div className="panel-bar">
+            <span>
+              Transactions · {new Date(dateRange.startDate + 'T00:00:00').toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })}
               {txSummary && (
-                <span className="text-xs text-text-tertiary">
+                <span className="panel-bar-caption ml-2">
                   {txSummary.count} transaction{txSummary.count !== 1 ? 's' : ''}
                 </span>
               )}
-            </div>
+            </span>
             {txSummary && txSummary.count > 0 && (
-              <span className={`text-sm font-mono font-medium ${txSummary.net >= 0 ? 'text-positive' : 'text-negative'}`}>
+              <span className={`tabular-nums ${txSummary.net >= 0 ? 'text-positive' : 'text-negative'}`}>
                 Net {txSummary.net >= 0 ? '+' : ''}{formatCurrency(txSummary.net)}
               </span>
             )}
@@ -411,29 +399,30 @@ export default function Dashboard() {
             <div className="overflow-x-auto">
               <table className="w-full">
                 <thead>
-                  <tr className="bg-bg-elevated">
-                    <th className="px-4 py-2 text-left text-[11px] font-medium tracking-widest uppercase text-text-tertiary border-b border-border-subtle w-20">Time</th>
-                    <th className="px-4 py-2 text-left text-[11px] font-medium tracking-widest uppercase text-text-tertiary border-b border-border-subtle w-24">Type</th>
-                    <th className="px-4 py-2 text-left text-[11px] font-medium tracking-widest uppercase text-text-tertiary border-b border-border-subtle">Details</th>
-                    <th className="px-4 py-2 text-left text-[11px] font-medium tracking-widest uppercase text-text-tertiary border-b border-border-subtle w-16">Mkt</th>
-                    <th className="px-4 py-2 text-left text-[11px] font-medium tracking-widest uppercase text-text-tertiary border-b border-border-subtle w-44">Order</th>
-                    <th className="px-4 py-2 text-right text-[11px] font-medium tracking-widest uppercase text-text-tertiary border-b border-border-subtle w-28">Amount</th>
+                  <tr className="bg-bg-surface">
+                    <th className="px-4 py-2 text-left text-[11px] label-caps text-text-tertiary w-20">Time</th>
+                    <th className="px-4 py-2 text-left text-[11px] label-caps text-text-tertiary w-24">Type</th>
+                    <th className="px-4 py-2 text-left text-[11px] label-caps text-text-tertiary">Details</th>
+                    <th className="px-4 py-2 text-left text-[11px] label-caps text-text-tertiary w-16">Mkt</th>
+                    <th className="px-4 py-2 text-left text-[11px] label-caps text-text-tertiary w-44">Order</th>
+                    <th className="px-4 py-2 text-right text-[11px] label-caps text-text-tertiary w-28">Amount</th>
+                    <th className="px-4 py-2 text-right text-[11px] label-caps text-text-tertiary w-28">Profit</th>
                   </tr>
                 </thead>
                 <tbody>
                   {transactions.map((t, i) => (
                     <tr key={i} className="border-b border-border-subtle/50 hover:bg-bg-hover transition-colors">
-                      <td className="px-4 py-2 text-xs font-mono text-text-tertiary whitespace-nowrap">
+                      <td className="px-4 py-2 text-xs text-text-tertiary whitespace-nowrap tabular-nums">
                         {t.time && t.time.length > 10
                           ? new Date(t.time).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })
                           : '—'}
                       </td>
                       <td className="px-4 py-2">
-                        <span className={`inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold uppercase tracking-wider ${
-                          t.type === 'sale' ? 'bg-positive/10 text-positive' :
-                          t.type === 'refund' ? 'bg-negative/10 text-negative' :
-                          t.type === 'fee' ? 'bg-amber-500/10 text-amber-400' :
-                          'bg-cyan-500/10 text-cyan-400'
+                        <span className={`tag ${
+                          t.type === 'sale' ? 'tag-green' :
+                          t.type === 'refund' ? 'tag-red' :
+                          t.type === 'fee' ? 'text-text-tertiary' :
+                          'text-text-primary'
                         }`}>
                           {t.type === 'reimbursement' ? 'REIMB' : t.type.toUpperCase()}
                         </span>
@@ -442,13 +431,13 @@ export default function Dashboard() {
                         <div className="flex items-center gap-1.5">
                           <span className="text-text-primary font-medium truncate max-w-[320px]">{t.title}</span>
                           {t.deferred && (
-                            <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-purple-500/10 text-purple-400 whitespace-nowrap"
+                            <span className="tag tag-blue"
                               title="Held under Amazon's Delivery Date Policy — not in your available balance yet">
                               DD7{t.releaseDate ? ` · rel ${new Date(t.releaseDate).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}` : ''}
                             </span>
                           )}
                           {t.type === 'refund' && t.settled === false && (
-                            <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-bg-elevated text-text-tertiary whitespace-nowrap"
+                            <span className="tag text-text-tertiary"
                               title="Walmart hasn't settled this deduction yet — excluded from P&L and the net total until it appears in recon">
                               NOT SETTLED
                             </span>
@@ -457,40 +446,48 @@ export default function Dashboard() {
                         <div className="text-[11px] text-text-tertiary truncate max-w-[380px]">{t.subtitle}</div>
                       </td>
                       <td className="px-4 py-2">
-                        <span className={`inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold uppercase tracking-wider ${
-                          t.marketplace === 'amazon' ? 'bg-orange-500/10 text-orange-400' :
-                          t.marketplace === 'walmart' ? 'bg-blue-500/10 text-blue-400' :
-                          t.marketplace === 'ebay' ? 'bg-green-500/10 text-green-400' :
-                          t.marketplace === 'paypal' ? 'bg-cyan-500/10 text-cyan-400' :
-                          'bg-purple-500/10 text-purple-400'
+                        <span className={`${
+                          t.marketplace === 'amazon' ? 'mkt mkt-amazon' :
+                          t.marketplace === 'walmart' ? 'mkt mkt-walmart' :
+                          t.marketplace === 'ebay' ? 'mkt mkt-ebay' :
+                          t.marketplace === 'paypal' ? 'mkt mkt-paypal' :
+                          'mkt'
                         }`}>
                           {t.marketplace === 'amazon' ? 'AMZ' : t.marketplace === 'walmart' ? 'WMT' : t.marketplace === 'ebay' ? 'EBAY' : t.marketplace === 'paypal' ? 'PP' : (t.marketplace || '').toUpperCase()}
                         </span>
                       </td>
                       <td className="px-4 py-2 text-xs font-mono">
                         {t.orderId ? (
-                          <a href={`/lookup/${encodeURIComponent(t.orderId)}`} className="text-accent hover:underline">{t.orderId}</a>
+                          <a href={`/lookup/${encodeURIComponent(t.orderId)}`} className="text-link hover:underline">{t.orderId}</a>
                         ) : (
                           <span className="text-text-tertiary">—</span>
                         )}
                       </td>
-                      <td className={`px-4 py-2 text-right text-sm font-mono font-medium ${t.amount >= 0 ? 'text-positive' : 'text-negative'}`}>
+                      <td className={`px-4 py-2 text-right text-sm font-medium tabular-nums ${t.amount >= 0 ? 'text-positive' : 'text-negative'}`}>
                         {t.amount >= 0 ? '+' : ''}{formatCurrency(t.amount)}
+                      </td>
+                      <td className={`px-4 py-2 text-right text-sm font-medium tabular-nums ${t.profit === undefined ? 'text-text-tertiary' : t.profit >= 0 ? 'text-positive' : 'text-negative'}`}
+                        title={t.profit === undefined ? undefined : `Amount − COGS${(t.shippingCost || 0) > 0 ? ' − label cost' : ''}`}>
+                        {t.profit === undefined ? '—' : `${t.profit >= 0 ? '+' : ''}${formatCurrency(t.profit)}`}
                       </td>
                     </tr>
                   ))}
                 </tbody>
                 {txSummary && (
                   <tfoot>
-                    <tr className="bg-bg-elevated">
+                    <tr className="bg-bg-surface">
                       <td colSpan={5} className="px-4 py-2 text-xs text-text-tertiary">
                         Sales net {formatCurrency(txSummary.salesNet)}
                         {txSummary.refunds !== 0 && <> · Refunds {formatCurrency(txSummary.refunds)}</>}
                         {txSummary.fees !== 0 && <> · Fees {formatCurrency(txSummary.fees)}</>}
                         {txSummary.reimbursements !== 0 && <> · Reimb {formatCurrency(txSummary.reimbursements)}</>}
                       </td>
-                      <td className={`px-4 py-2 text-right text-sm font-mono font-semibold ${txSummary.net >= 0 ? 'text-positive' : 'text-negative'}`}>
+                      <td className={`px-4 py-2 text-right text-sm font-semibold tabular-nums ${txSummary.net >= 0 ? 'text-positive' : 'text-negative'}`}>
                         {txSummary.net >= 0 ? '+' : ''}{formatCurrency(txSummary.net)}
+                      </td>
+                      <td className={`px-4 py-2 text-right text-sm font-semibold tabular-nums ${(txSummary.salesProfit ?? 0) >= 0 ? 'text-positive' : 'text-negative'}`}
+                        title="Sales profit: revenue − fees − COGS − MFN label cost. Refunds, service fees and reimbursements are in the Net column only.">
+                        {(txSummary.salesProfit ?? 0) >= 0 ? '+' : ''}{formatCurrency(txSummary.salesProfit ?? 0)}
                       </td>
                     </tr>
                   </tfoot>
@@ -503,10 +500,10 @@ export default function Dashboard() {
 
       {/* Settlement fee note */}
       {stats.serviceFees > stats.totalRevenue * 0.3 && stats.serviceFees > 10000 && (
-        <div className="mb-6 p-3 bg-amber-500/10 border border-amber-500/20 rounded-lg flex items-start gap-2">
-          <span className="text-amber-400 text-sm mt-0.5">⚠</span>
-          <p className="text-xs text-amber-200/80">
-            <span className="font-medium text-amber-300">Settlement fees posted this period.</span>{' '}
+        <div className="flash mb-6 flex items-start gap-2">
+          <span className="text-sm">⚠</span>
+          <p className="text-xs text-text-secondary">
+            <span className="font-semibold text-text-primary">Settlement fees posted this period.</span>{' '}
             {formatCurrency(stats.serviceFees)} in service fees (storage, subscriptions, inbound shipping) posted in this date range.
             These fees may cover prior months and are batched by Amazon into settlement periods, making short date ranges appear less profitable than they actually are.
           </p>
@@ -516,112 +513,87 @@ export default function Dashboard() {
       {/* Charts Row */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 mb-6">
         {/* Revenue & Profit Chart */}
-        <div className="lg:col-span-2 bg-bg-surface border border-border-subtle rounded-lg p-5">
-          <div className="flex items-center justify-between mb-4">
-            <h3 className="text-sm font-medium text-text-secondary">Revenue & Profit</h3>
+        <div className="panel lg:col-span-2">
+          <div className="panel-bar">
+            <span>Revenue &amp; Profit <span className="panel-bar-caption ml-1">per {chartGrouping === 'monthly' ? 'month' : chartGrouping === 'weekly' ? 'week' : 'day'} · click a bar to open it</span></span>
             <button
               type="button"
               onClick={() => setSelectedDay(selectedDay === '__range__' ? null : '__range__')}
-              className={`text-xs px-2.5 py-1 rounded border transition-colors ${
+              aria-pressed={selectedDay === '__range__'}
+              className={`px-2 py-0.5 rounded-md border-[1.5px] transition-colors ${
                 selectedDay === '__range__'
-                  ? 'bg-accent/15 text-accent border-accent/30'
-                  : 'bg-bg-elevated text-text-tertiary border-border-default hover:text-text-secondary'
+                  ? 'bg-bar-fg text-bar-bg border-bar-fg'
+                  : 'border-bar-fg/40 hover:border-bar-fg'
               }`}
               title="View sales grouped by product for the selected date range"
             >
               {selectedDay === '__range__' ? '✕ Hide breakdown' : 'Sales by product'}
             </button>
           </div>
-          <ResponsiveContainer width="100%" height={280}>
-            <BarChart data={chartData} barGap={2} style={{ cursor: 'pointer' }}>
-              <CartesianGrid strokeDasharray="3 3" stroke="#1e1e24" />
-              <XAxis dataKey="day" tick={{ fontSize: 11, fill: '#606070' }} tickLine={false} axisLine={false} />
-              <YAxis tick={{ fontSize: 11, fill: '#606070' }} tickLine={false} axisLine={false} tickFormatter={(v) => `$${v >= 1000 ? `${(v/1000).toFixed(0)}k` : v}`} />
-              <Tooltip
-                contentStyle={{
-                  backgroundColor: '#18181c',
-                  border: '1px solid #2a2a33',
-                  borderRadius: '8px',
-                  fontSize: '12px',
-                  boxShadow: '0 4px 12px rgba(0,0,0,0.4)',
-                }}
-                labelStyle={{ color: '#a0a0b0' }}
-                cursor={{ fill: 'rgba(255,255,255,0.05)' }}
-                formatter={(value: any, name: any) => [`$${Number(value).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`, name]}
-              />
-              <Bar dataKey="revenue" fill="#6366f1" radius={[4, 4, 0, 0]} name="Revenue"
-                onClick={(data: any) => { if (data?.rawDate) setSelectedDay(data.rawDate); }}
-              />
-              <Bar dataKey="profit" fill="#22c55e" radius={[4, 4, 0, 0]} name="Profit"
-                onClick={(data: any) => { if (data?.rawDate) setSelectedDay(data.rawDate); }}
-              />
-              <Legend wrapperStyle={{ fontSize: '11px', color: '#606070' }} iconType="circle" iconSize={8} />
-            </BarChart>
-          </ResponsiveContainer>
-        </div>
-
-        {/* Expense Breakdown Donut */}
-        <div className="bg-bg-surface border border-border-subtle rounded-lg p-5">
-          <h3 className="text-sm font-medium text-text-secondary mb-4">Expense Breakdown</h3>
-          <div className="flex flex-col items-center gap-4">
-            <div className="flex-shrink-0" style={{ width: 180, height: 180 }}>
-              <ResponsiveContainer width="100%" height="100%">
-                <PieChart>
-                  <Pie
-                    data={donutData}
-                    cx="50%"
-                    cy="50%"
-                    innerRadius={55}
-                    outerRadius={85}
-                    paddingAngle={2}
-                    dataKey="value"
-                  >
-                    {donutData.map((_, index) => (
-                      <Cell key={index} fill={CHART_COLORS[index % CHART_COLORS.length]} />
-                    ))}
-                  </Pie>
-                  <Tooltip
-                    contentStyle={{
-                      backgroundColor: '#18181c',
-                      border: '1px solid #2a2a33',
-                      borderRadius: '8px',
-                      fontSize: '12px',
-                      boxShadow: '0 4px 12px rgba(0,0,0,0.4)',
-                    }}
-                    formatter={(value) => [`$${Number(value).toFixed(2)}`, '']}
-                  />
-                </PieChart>
-              </ResponsiveContainer>
-            </div>
-            <div className="w-full space-y-1.5 max-h-[220px] overflow-y-auto">
-              {(() => {
-                const total = donutData.reduce((s, d: any) => s + (d.value || 0), 0);
-                return donutData.map((d: any, i: number) => {
-                  const pct = total > 0 ? (d.value / total) * 100 : 0;
-                  return (
-                    <div key={i} className="flex items-center gap-2 text-xs">
-                      <span
-                        className="flex-shrink-0 w-2 h-2 rounded-full"
-                        style={{ backgroundColor: CHART_COLORS[i % CHART_COLORS.length] }}
-                      />
-                      <span className="flex-1 min-w-0 truncate text-text-secondary">{d.name}</span>
-                      <span className="font-mono text-text-primary tabular-nums">${(d.value).toFixed(0)}</span>
-                      <span className="font-mono text-text-tertiary tabular-nums w-10 text-right">{pct.toFixed(0)}%</span>
-                    </div>
-                  );
-                });
-              })()}
+          <div className="px-4 pt-4 pb-2">
+            <ResponsiveContainer width="100%" height={280}>
+              <BarChart data={chartData} barGap={2} style={{ cursor: 'pointer' }}>
+                <CartesianGrid stroke="var(--color-border-subtle)" vertical={false} />
+                <XAxis dataKey="day" tick={{ fontSize: 11, fill: 'var(--color-text-tertiary)' }} tickLine={false} axisLine={{ stroke: 'var(--color-border-strong)', strokeWidth: 1.5 }} />
+                <YAxis tick={{ fontSize: 11, fill: 'var(--color-text-tertiary)' }} tickLine={false} axisLine={false} tickFormatter={(v) => `$${v >= 1000 ? `${(v/1000).toFixed(0)}k` : v}`} />
+                <Tooltip
+                  content={<ChartTooltip format={(v) => `$${v.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`} />}
+                  cursor={{ fill: 'var(--color-accent-muted)' }}
+                />
+                <Bar dataKey="revenue" fill="var(--color-chart-1)" radius={[1, 1, 0, 0]} name="Revenue"
+                  onClick={(data: any) => { if (data?.rawDate) setSelectedDay(data.rawDate); }}
+                />
+                <Bar dataKey="profit" fill="var(--color-positive)" radius={[1, 1, 0, 0]} name="Profit"
+                  onClick={(data: any) => { if (data?.rawDate) setSelectedDay(data.rawDate); }}
+                >
+                  {chartData.map((d, i) => (
+                    <Cell key={i} fill={d.profit < 0 ? 'var(--color-negative)' : 'var(--color-positive)'} />
+                  ))}
+                </Bar>
+              </BarChart>
+            </ResponsiveContainer>
+            <div className="flex items-center justify-center gap-4 text-[11px] text-text-tertiary pb-1">
+              <span className="inline-flex items-center gap-1.5"><span className="w-2.5 h-2.5 rounded-[1px] bg-chart-1" />Revenue</span>
+              <span className="inline-flex items-center gap-1.5"><span className="w-2.5 h-2.5 rounded-[1px] bg-positive" />Profit</span>
+              <span className="inline-flex items-center gap-1.5"><span className="w-2.5 h-2.5 rounded-[1px] bg-negative" />Loss</span>
             </div>
           </div>
+        </div>
+
+        {/* Expense breakdown: a ranked meter list (name + amount + share over a 4px bar) */}
+        <div className="panel">
+          <div className="panel-bar">
+            <span>Expense breakdown</span>
+            <span className="panel-bar-caption">share of costs</span>
+          </div>
+          <ol className="py-1.5 max-h-[340px] overflow-y-auto">
+            {(() => {
+              const total = donutData.reduce((s, d) => s + (d.value || 0), 0);
+              if (donutData.length === 0) return <li className="px-4 py-6 text-sm text-text-tertiary text-center">No expenses in this range.</li>;
+              return donutData.map((d, i) => {
+                const pct = total > 0 ? (d.value / total) * 100 : 0;
+                return (
+                  <li key={i} className="grid grid-cols-[minmax(0,1fr)_auto] gap-x-2.5 gap-y-1 px-4 py-1.5">
+                    <span className="truncate text-[13px] font-semibold text-text-primary">{d.name}</span>
+                    <span className="text-[13px] font-semibold tabular-nums text-text-primary">
+                      ${d.value.toLocaleString('en-US', { maximumFractionDigits: 0 })}{' '}
+                      <span className="font-normal text-text-tertiary">{pct.toFixed(0)}%</span>
+                    </span>
+                    <span className="meter col-span-2"><b style={{ width: `${pct}%` }} /></span>
+                  </li>
+                );
+              });
+            })()}
+          </ol>
         </div>
       </div>
 
       {/* Day Detail Panel */}
       {selectedDay && (
-        <div className="bg-bg-surface border border-border-subtle rounded-lg overflow-hidden mb-6">
-          <div className="flex items-center justify-between px-4 py-3 border-b border-border-subtle">
-            <div className="flex items-center gap-2">
-              <span className="text-sm font-semibold text-text-primary">
+        <div className="panel overflow-hidden mb-6">
+          <div className="panel-bar">
+            <span>
+              <span>
                 {selectedDay === '__range__'
                   ? (() => {
                       // "All transactions: <preset label or date range>"
@@ -636,11 +608,11 @@ export default function Dashboard() {
                   ? `Week of ${new Date(selectedDay + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}`
                   : new Date(selectedDay + 'T00:00:00').toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })}
               </span>
-              <span className="text-xs text-text-tertiary">
+              <span className="panel-bar-caption ml-2">
                 {dayDetails.length} sale{dayDetails.length !== 1 ? 's' : ''}{dayRefunds.length > 0 ? ` · ${dayRefunds.length} return${dayRefunds.length !== 1 ? 's' : ''}` : ''}
               </span>
-            </div>
-            <button onClick={() => setSelectedDay(null)} className="text-xs text-text-tertiary hover:text-text-secondary">✕ Close</button>
+            </span>
+            <button onClick={() => setSelectedDay(null)} className="opacity-70 hover:opacity-100">✕ Close</button>
           </div>
           {dayDetailsLoading ? (
             <div className="p-4 text-sm text-text-tertiary">Loading...</div>
@@ -650,13 +622,13 @@ export default function Dashboard() {
             <div className="overflow-x-auto">
               <table className="w-full">
                 <thead>
-                  <tr className="bg-bg-elevated">
-                    <th className="px-4 py-2 text-left text-[11px] font-medium tracking-widest uppercase text-text-tertiary border-b border-border-subtle">Product</th>
-                    <th className="px-4 py-2 text-left text-[11px] font-medium tracking-widest uppercase text-text-tertiary border-b border-border-subtle w-16">Mkt</th>
-                    <th className="px-4 py-2 text-right text-[11px] font-medium tracking-widest uppercase text-text-tertiary border-b border-border-subtle w-14">Qty</th>
-                    <th className="px-4 py-2 text-right text-[11px] font-medium tracking-widest uppercase text-text-tertiary border-b border-border-subtle w-24">Revenue</th>
-                    <th className="px-4 py-2 text-right text-[11px] font-medium tracking-widest uppercase text-text-tertiary border-b border-border-subtle w-24">COGS</th>
-                    <th className="px-4 py-2 text-right text-[11px] font-medium tracking-widest uppercase text-text-tertiary border-b border-border-subtle w-24">Profit</th>
+                  <tr className="bg-bg-surface">
+                    <th className="px-4 py-2 text-left text-[11px] label-caps text-text-tertiary">Product</th>
+                    <th className="px-4 py-2 text-left text-[11px] label-caps text-text-tertiary w-16">Mkt</th>
+                    <th className="px-4 py-2 text-right text-[11px] label-caps text-text-tertiary w-14">Qty</th>
+                    <th className="px-4 py-2 text-right text-[11px] label-caps text-text-tertiary w-24">Revenue</th>
+                    <th className="px-4 py-2 text-right text-[11px] label-caps text-text-tertiary w-24">COGS</th>
+                    <th className="px-4 py-2 text-right text-[11px] label-caps text-text-tertiary w-24">Profit</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -667,20 +639,20 @@ export default function Dashboard() {
                         <div className="text-[11px] text-text-tertiary font-mono">{item.sku}</div>
                       </td>
                       <td className="px-4 py-2">
-                        <span className={`inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold uppercase tracking-wider ${
-                          item.marketplace === 'amazon' ? 'bg-orange-500/10 text-orange-400' :
-                          item.marketplace === 'walmart' ? 'bg-blue-500/10 text-blue-400' :
-                          item.marketplace === 'ebay' ? 'bg-green-500/10 text-green-400' :
-                          item.marketplace === 'paypal' ? 'bg-cyan-500/10 text-cyan-400' :
-                          'bg-purple-500/10 text-purple-400'
+                        <span className={`${
+                          item.marketplace === 'amazon' ? 'mkt mkt-amazon' :
+                          item.marketplace === 'walmart' ? 'mkt mkt-walmart' :
+                          item.marketplace === 'ebay' ? 'mkt mkt-ebay' :
+                          item.marketplace === 'paypal' ? 'mkt mkt-paypal' :
+                          'mkt'
                         }`}>
                           {item.marketplace === 'amazon' ? 'AMZ' : item.marketplace === 'walmart' ? 'WMT' : item.marketplace === 'ebay' ? 'EBAY' : item.marketplace === 'paypal' ? 'PP' : (item.marketplace || '').toUpperCase()}
                         </span>
                       </td>
-                      <td className="px-4 py-2 text-right text-sm font-mono text-text-secondary">{item.quantity}</td>
-                      <td className="px-4 py-2 text-right text-sm font-mono text-text-primary">{formatCurrency(item.revenue)}</td>
-                      <td className="px-4 py-2 text-right text-sm font-mono text-negative">{formatCurrency(-item.cogs)}</td>
-                      <td className={`px-4 py-2 text-right text-sm font-mono font-medium ${item.net_profit >= 0 ? 'text-positive' : 'text-negative'}`}>
+                      <td className="px-4 py-2 text-right text-sm text-text-secondary tabular-nums">{item.quantity}</td>
+                      <td className="px-4 py-2 text-right text-sm text-text-primary tabular-nums">{formatCurrency(item.revenue)}</td>
+                      <td className="px-4 py-2 text-right text-sm text-negative tabular-nums">{formatCurrency(-item.cogs)}</td>
+                      <td className={`px-4 py-2 text-right text-sm font-medium tabular-nums ${item.net_profit >= 0 ? 'text-positive' : 'text-negative'}`}>
                         {formatCurrency(item.net_profit)}
                       </td>
                     </tr>
@@ -693,8 +665,8 @@ export default function Dashboard() {
           {/* Refunds for this day */}
           {dayRefunds.length > 0 && (
             <div className="border-t border-border-subtle">
-              <div className="px-4 py-2 bg-bg-elevated">
-                <span className="text-xs font-semibold text-negative uppercase tracking-wider">Returns ({dayRefunds.length})</span>
+              <div className="px-4 py-2 border-b-[1.5px] border-border-strong">
+                <span className="label-caps text-negative">Returns ({dayRefunds.length})</span>
               </div>
               <div className="overflow-x-auto">
                 <table className="w-full">
@@ -706,20 +678,20 @@ export default function Dashboard() {
                           <div className="text-[11px] text-text-tertiary font-mono">{item.reason}</div>
                         </td>
                         <td className="px-4 py-2">
-                          <span className={`inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold uppercase tracking-wider ${
-                            item.marketplace === 'amazon' ? 'bg-orange-500/10 text-orange-400' :
-                            item.marketplace === 'walmart' ? 'bg-blue-500/10 text-blue-400' :
-                            item.marketplace === 'ebay' ? 'bg-green-500/10 text-green-400' :
-                            item.marketplace === 'paypal' ? 'bg-cyan-500/10 text-cyan-400' :
-                            'bg-purple-500/10 text-purple-400'
+                          <span className={`${
+                            item.marketplace === 'amazon' ? 'mkt mkt-amazon' :
+                            item.marketplace === 'walmart' ? 'mkt mkt-walmart' :
+                            item.marketplace === 'ebay' ? 'mkt mkt-ebay' :
+                            item.marketplace === 'paypal' ? 'mkt mkt-paypal' :
+                            'mkt'
                           }`}>
                             {item.marketplace === 'amazon' ? 'AMZ' : item.marketplace === 'walmart' ? 'WMT' : item.marketplace === 'ebay' ? 'EBAY' : item.marketplace === 'paypal' ? 'PP' : (item.marketplace || '').toUpperCase()}
                           </span>
                         </td>
-                        <td className="px-4 py-2 text-right text-sm font-mono text-text-secondary">{item.quantity}</td>
-                        <td className="px-4 py-2 text-right text-sm font-mono text-negative">{formatCurrency(-item.refund_amount)}</td>
-                        <td className="px-4 py-2 text-right text-sm font-mono text-positive">{formatCurrency(item.fee_clawback)}</td>
-                        <td className={`px-4 py-2 text-right text-sm font-mono font-medium text-negative`}>
+                        <td className="px-4 py-2 text-right text-sm text-text-secondary tabular-nums">{item.quantity}</td>
+                        <td className="px-4 py-2 text-right text-sm text-negative tabular-nums">{formatCurrency(-item.refund_amount)}</td>
+                        <td className="px-4 py-2 text-right text-sm text-positive tabular-nums">{formatCurrency(item.fee_clawback)}</td>
+                        <td className={`px-4 py-2 text-right text-sm font-medium text-negative tabular-nums`}>
                           {formatCurrency(-(item.refund_amount - item.fee_clawback))}
                         </td>
                       </tr>
@@ -735,19 +707,19 @@ export default function Dashboard() {
       {/* Bottom Row: Top/Worst Products + Inventory */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
         {/* Top Products */}
-        <div className="bg-bg-surface border border-border-subtle rounded-lg p-5">
-          <h3 className="text-sm font-medium text-text-secondary mb-3">Top 5 Profitable</h3>
-          <div className="space-y-2">
+        <div className="panel">
+          <div className="panel-bar"><span>Top 5 profitable</span></div>
+          <div className="px-4 py-2">
             {topProducts.map((p, i) => {
               const profit = p.revenue - p.cogs - (p.fees || 0);
               return (
-                <div key={`top-${i}`} className="flex items-center gap-3 py-1.5">
-                  <span className="text-xs font-mono text-text-tertiary w-4">{i + 1}</span>
+                <div key={`top-${i}`} className="flex items-center gap-3 py-2 border-t border-border-subtle first:border-t-0">
+                  <span className="text-xs text-text-tertiary w-4 tabular-nums">{i + 1}</span>
                   <div className="flex-1 min-w-0">
-                    <div className="text-sm text-text-primary truncate">{p.name || p.asin}</div>
+                    <div className="text-sm font-semibold text-text-primary truncate">{p.name || p.asin}</div>
                     <div className="text-xs text-text-tertiary font-mono">{p.asin}</div>
                   </div>
-                  <span className="text-sm font-mono text-positive shrink-0">
+                  <span className="text-sm font-semibold text-positive shrink-0 tabular-nums">
                     {formatCurrency(profit)}
                   </span>
                 </div>
@@ -757,19 +729,19 @@ export default function Dashboard() {
         </div>
 
         {/* Worst Products */}
-        <div className="bg-bg-surface border border-border-subtle rounded-lg p-5">
-          <h3 className="text-sm font-medium text-text-secondary mb-3">Bottom 5 Performers</h3>
-          <div className="space-y-2">
+        <div className="panel">
+          <div className="panel-bar"><span>Bottom 5 performers</span></div>
+          <div className="px-4 py-2">
             {worstProducts.map((p, i) => {
               const profit = p.revenue - p.cogs - (p.fees || 0);
               return (
-                <div key={`worst-${i}`} className="flex items-center gap-3 py-1.5">
-                  <span className="text-xs font-mono text-text-tertiary w-4">{i + 1}</span>
+                <div key={`worst-${i}`} className="flex items-center gap-3 py-2 border-t border-border-subtle first:border-t-0">
+                  <span className="text-xs text-text-tertiary w-4 tabular-nums">{i + 1}</span>
                   <div className="flex-1 min-w-0">
-                    <div className="text-sm text-text-primary truncate">{p.name || p.asin}</div>
+                    <div className="text-sm font-semibold text-text-primary truncate">{p.name || p.asin}</div>
                     <div className="text-xs text-text-tertiary font-mono">{p.asin}</div>
                   </div>
-                  <span className={`text-sm font-mono shrink-0 ${profit >= 0 ? 'text-positive' : 'text-negative'}`}>
+                  <span className={`text-sm font-semibold shrink-0 tabular-nums ${profit >= 0 ? 'text-positive' : 'text-negative'}`}>
                     {formatCurrency(profit)}
                   </span>
                 </div>
@@ -779,16 +751,16 @@ export default function Dashboard() {
         </div>
 
         {/* Inventory Value */}
-        <div className="bg-bg-surface border border-border-subtle rounded-lg p-5 border-t-2 border-t-amazon">
-          <h3 className="text-sm font-medium text-text-secondary mb-3">Inventory on Hand</h3>
-          <div className="space-y-4">
+        <div className="panel">
+          <div className="panel-bar"><span>Inventory on hand</span><span className="panel-bar-caption">fulfillable</span></div>
+          <div className="px-4 py-4 space-y-4">
             <div>
-              <div className="text-[11px] font-medium tracking-widest uppercase text-text-tertiary mb-1">Total Value (COGS)</div>
-              <div className="text-2xl font-bold font-mono text-text-primary">{formatCurrency(inventoryValue.totalValue)}</div>
+              <div className="label-caps text-text-tertiary mb-1">Total value (COGS)</div>
+              <div className="stat-num text-[22px] sm:text-[26px] text-text-primary"><Money cents={inventoryValue.totalValue} /></div>
             </div>
             <div>
-              <div className="text-[11px] font-medium tracking-widest uppercase text-text-tertiary mb-1">Total Units</div>
-              <div className="text-2xl font-bold font-mono text-text-primary">{formatNumber(inventoryValue.totalUnits)}</div>
+              <div className="label-caps text-text-tertiary mb-1">Total units</div>
+              <div className="stat-num text-[22px] sm:text-[26px] text-text-primary">{formatNumber(inventoryValue.totalUnits)}</div>
             </div>
           </div>
         </div>
@@ -809,18 +781,18 @@ function DashboardSkeleton() {
       </div>
       <div className="grid grid-cols-2 lg:grid-cols-5 gap-4 mb-6">
         {Array.from({ length: 5 }).map((_, i) => (
-          <div key={i} className="bg-bg-surface border border-border-subtle rounded-lg p-5">
+          <div key={i} className="panel px-4 py-3.5">
             <div className="skeleton h-3 w-20 mb-3" />
             <div className="skeleton h-8 w-28" />
           </div>
         ))}
       </div>
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 mb-6">
-        <div className="lg:col-span-2 bg-bg-surface border border-border-subtle rounded-lg p-5">
+        <div className="panel lg:col-span-2 p-5">
           <div className="skeleton h-4 w-32 mb-4" />
           <div className="skeleton h-[280px] w-full" />
         </div>
-        <div className="bg-bg-surface border border-border-subtle rounded-lg p-5">
+        <div className="panel p-5">
           <div className="skeleton h-4 w-36 mb-4" />
           <div className="skeleton h-[280px] w-full" />
         </div>

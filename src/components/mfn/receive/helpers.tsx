@@ -15,13 +15,13 @@ export function resolveShippingTemplate(value: string, templates: ShippingTempla
 export function liveStateBadge(status: string | null, qty: number | null) {
   if (!status) return null;
   if (status === 'Active' && (qty ?? 0) > 0) {
-    return <span className="inline-flex px-1.5 py-0.5 rounded text-[10px] font-medium bg-green-500/10 text-green-400 border border-green-500/20">Live</span>;
+    return <span className="tag text-positive">Live</span>;
   }
   if (status === 'Active' && (qty ?? 0) === 0) {
-    return <span className="inline-flex px-1.5 py-0.5 rounded text-[10px] font-medium bg-amber-500/10 text-amber-400 border border-amber-500/20">OOS</span>;
+    return <span className="tag text-warning">OOS</span>;
   }
   if (status === 'Inactive' || status === 'Incomplete') {
-    return <span className="inline-flex px-1.5 py-0.5 rounded text-[10px] font-medium bg-red-500/10 text-red-400 border border-red-500/20">{status}</span>;
+    return <span className="tag text-negative">{status}</span>;
   }
   return null;
 }

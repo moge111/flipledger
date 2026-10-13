@@ -7,7 +7,8 @@
  *
  * For every item in a draft batch this checks and persists:
  *   - Gating: GET /listings/2021-08-01/restrictions → GATED + approval link
- *   - Listing state: FNSKU assigned (FBA) / BUYABLE (MFN) → READY
+ *   - Listing state: FNSKU assigned (FBA) / BUYABLE (MFN) → READY; an MFN
+ *     item with quantity 0 is READY once Amazon holds its out-of-stock offer
  *   - Catalog defects: ERROR-severity issues that persist without an FNSKU
  *     (the "demand-but-reject" pattern — Monster High B0F974HHQ8,
  *     Giganotosaurus B0G3QFR36W) → CATALOG_ISSUE
@@ -35,6 +36,7 @@ import { getPrepDetails, setPrepDetails } from '@/lib/sp-api/inboundPlansV2';
 import type { SPAPICredentials } from '@/lib/sp-api/types';
 import { openDb } from '@/lib/db-conn';
 import { createLogger } from '@/lib/log';
+import { isItemListingReady, mfnQuantityToPut, offeredQuantity, mfnLiveQuantity } from '@/lib/listing-send-policy';
 
 const log = createLogger('listing-preflight');
 
@@ -71,6 +73,8 @@ export interface PreflightDetail {
   };
   errorIssues?: string[];
   catalogDefect?: boolean;   // the demand-but-reject signature
+  mfnAvailable?: number;     // MFN: units Amazon shows available on the offer
+  rePutAt?: string;          // one-time re-PUT of a listing whose offer never attached
 }
 
 export interface PreflightItemResult {
@@ -93,6 +97,8 @@ export interface PreflightSummary {
 }
 
 /** Minutes since an ISO timestamp; Infinity when missing/unparseable. */
+const REPUT_AFTER_MIN = 8;
+
 function minutesSince(iso: string | null | undefined): number {
   if (!iso) return Infinity;
   const t = Date.parse(iso);
@@ -186,7 +192,9 @@ export async function preflightBatch(batchId: number): Promise<{
              created_at as createdAt,
              fnsku, inbound_ready as inboundReady,
              prep_category as prepCategory,
-             preflight_detail as preflightDetail
+             preflight_detail as preflightDetail,
+             send_qty_to_amazon as sendQty,
+             (SELECT COALESCE(SUM(il.quantity_remaining), 0) FROM inventory_ledger il WHERE il.sku = listing_batch_items.sku) AS skuStock
       FROM listing_batch_items WHERE batch_id = ? ORDER BY id ASC
     `).all(batchId) as any[];
     creds = getAmazonCredentials(db);
@@ -212,6 +220,7 @@ export async function preflightBatch(batchId: number): Promise<{
     let fnsku: string | null = item.fnsku || null;
     let listingStatus: string | null = item.listingStatus || null;
     let listingError: string | null = item.listingError || null;
+    let listingUpdatedAt: string | null = item.listingUpdatedAt || null;
 
     try {
       // 1. Gating — check once per item, and re-check items previously GATED
@@ -249,7 +258,7 @@ export async function preflightBatch(batchId: number): Promise<{
               sku: item.sku,
               asin: item.asin,
               condition: item.condition,
-              quantity: item.quantity,
+              quantity: mfnQuantityToPut({ channel: batch.channel, sendQty: !!item.sendQty, skuStock: item.skuStock }, null),
               listPriceCents: item.listPriceCents,
               channel: batch.channel,
               productType,
@@ -264,13 +273,16 @@ export async function preflightBatch(batchId: number): Promise<{
               listingStatus = 'PROCESSING';
               listingError = null;
             }
+            // The registration clock starts at this PUT, not when the item was
+            // added — an item that sat gated for a day isn't STUCK seconds after
+            // its listing is finally created.
+            listingUpdatedAt = new Date().toISOString();
           } catch (err) {
             listingStatus = 'FAILED';
             listingError = String(err);
           }
         } else if (listing) {
           const summary = listing.summaries?.[0];
-          const summaryStatus: string[] = summary?.status || [];
           fnsku = summary?.fnSku || null;
 
           const issues: any[] = listing.issues || [];
@@ -280,19 +292,47 @@ export async function preflightBatch(batchId: number): Promise<{
           detail.errorIssues = errorIssues.length > 0 ? errorIssues : undefined;
           detail.catalogDefect = errorIssues.length > 0 && isCatalogDefectIssue(errorIssues) ? true : undefined;
 
-          const isReady = batch.channel === 'FBA' ? !!fnsku : summaryStatus.includes('BUYABLE');
+          // MFN qty 0 is ready once registered out of stock (never BUYABLE).
+          const isReady = isItemListingReady(batch.channel, offeredQuantity(!!item.sendQty, item.skuStock), listing);
+          detail.mfnAvailable = batch.channel === 'MFN' ? mfnLiveQuantity(listing) : undefined;
           if (isReady) {
             status = 'READY';
             listingStatus = 'ACTIVE';
             listingError = errorIssues.length > 0 ? errorIssues.join('; ') : null;
           } else {
             listingError = errorIssues.length > 0 ? errorIssues.join('; ') : listingError;
+            // Listing registered but Amazon never attached the offer (offers []
+            // and no FNSKU, no errors). A second PUT often kicks it — the send
+            // flow does the same mid-wait. Once per item, then the clock restarts.
+            const noOffer = (listing.offers || []).length === 0;
+            if (
+              noOffer && !gated && errorIssues.length === 0 && !detail.rePutAt &&
+              minutesSince(listingUpdatedAt || item.createdAt) > REPUT_AFTER_MIN
+            ) {
+              try {
+                const productType = await getProductType(creds, item.asin);
+                const result = await createOrUpdateListing(creds, sellerId, {
+                  sku: item.sku,
+                  asin: item.asin,
+                  condition: item.condition,
+                  quantity: mfnQuantityToPut({ channel: batch.channel, sendQty: !!item.sendQty, skuStock: item.skuStock }, listing),
+                  listPriceCents: item.listPriceCents,
+                  channel: batch.channel,
+                  productType,
+                });
+                detail.rePutAt = new Date().toISOString();
+                listingUpdatedAt = detail.rePutAt;
+                log.info(`re-PUT ${item.sku} (no offer after ${REPUT_AFTER_MIN} min): ${result.status}`);
+              } catch (err) {
+                log.warn(`re-PUT failed for ${item.sku}:`, String(err));
+              }
+            }
           }
         }
 
         // Classify the not-ready cases by precedence.
         if (status !== 'READY') {
-          const ageMin = minutesSince(item.listingUpdatedAt || item.createdAt);
+          const ageMin = minutesSince(listingUpdatedAt || item.createdAt);
           if (gated) {
             status = 'GATED';
           } else if (listingStatus === 'FAILED') {
@@ -332,7 +372,8 @@ export async function preflightBatch(batchId: number): Promise<{
           preflight_detail = ?,
           preflight_checked_at = ?,
           listing_status = COALESCE(?, listing_status),
-          listing_error = ?
+          listing_error = ?,
+          listing_updated_at = ?
         WHERE id = ? AND batch_id = ?
       `).run(
         fnsku,
@@ -342,6 +383,7 @@ export async function preflightBatch(batchId: number): Promise<{
         new Date().toISOString(),
         listingStatus,
         listingError,
+        listingUpdatedAt,
         item.id,
         batchId
       );

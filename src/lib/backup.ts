@@ -82,15 +82,15 @@ export function getBackupDir(): string {
 }
 
 /** Encode "now" into a sortable, filesystem-safe filename. */
-function backupFileName(date = new Date()): string {
+export function backupFileName(date = new Date(), prefix = FILE_PREFIX): string {
   const iso = date.toISOString().replace(/[:.]/g, '-').replace('Z', '');
-  return `${FILE_PREFIX}${iso}${FILE_SUFFIX}`;
+  return `${prefix}${iso}${FILE_SUFFIX}`;
 }
 
 /** Parse the timestamp back out of a backup filename. */
-function dateFromFileName(name: string): Date | null {
-  if (!name.startsWith(FILE_PREFIX) || !name.endsWith(FILE_SUFFIX)) return null;
-  const raw = name.slice(FILE_PREFIX.length, -FILE_SUFFIX.length);
+function dateFromFileName(name: string, prefix = FILE_PREFIX): Date | null {
+  if (!name.startsWith(prefix) || !name.endsWith(FILE_SUFFIX)) return null;
+  const raw = name.slice(prefix.length, -FILE_SUFFIX.length);
   // raw looks like 2026-05-14T15-32-05-123  → restore : and . then parse
   const m = raw.match(/^(\d{4}-\d{2}-\d{2})T(\d{2})-(\d{2})-(\d{2})-(\d{3})$/);
   if (!m) return null;
@@ -100,12 +100,12 @@ function dateFromFileName(name: string): Date | null {
 }
 
 /** List existing backups, newest first. */
-export function listBackups(): BackupFile[] {
+export function listBackups(prefix = FILE_PREFIX): BackupFile[] {
   const dir = getBackupDir();
   if (!fs.existsSync(dir)) return [];
   const out: BackupFile[] = [];
   for (const name of fs.readdirSync(dir)) {
-    const date = dateFromFileName(name);
+    const date = dateFromFileName(name, prefix);
     if (!date) continue;
     const full = path.join(dir, name);
     let sizeBytes = 0;
@@ -126,8 +126,8 @@ export function listBackups(): BackupFile[] {
  * directory small (well under ~1GB) while still covering "undo yesterday"
  * and "undo last month".
  */
-function pruneBackups(): number {
-  const backups = listBackups(); // newest first
+export function pruneBackups(prefix = FILE_PREFIX): number {
+  const backups = listBackups(prefix); // newest first
   const now = Date.now();
   const DAY = 86400000;
   const seenWeeks = new Set<string>();

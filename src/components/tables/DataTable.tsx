@@ -62,7 +62,7 @@ export default function DataTable<T>({ data, columns, searchPlaceholder = 'Searc
   const endRow = Math.min((currentPage + 1) * pageSize, totalRows);
 
   return (
-    <div className="bg-bg-surface border border-border-subtle rounded-lg overflow-hidden">
+    <div className="panel overflow-hidden">
       {/* Search Bar */}
       <div className="flex items-center gap-3 px-4 py-3 border-b border-border-subtle">
         <div className="relative flex-1 max-w-sm">
@@ -72,7 +72,7 @@ export default function DataTable<T>({ data, columns, searchPlaceholder = 'Searc
             value={globalFilter}
             onChange={e => setGlobalFilter(e.target.value)}
             placeholder={searchPlaceholder}
-            className="w-full h-8 pl-8 pr-3 bg-bg-input border border-border-default rounded-md text-sm text-text-primary placeholder-text-tertiary focus:border-accent focus:outline-none"
+            className="w-full h-9 pl-8 pr-3 bg-bg-input border border-border-strong rounded-md text-[13.5px] text-text-primary placeholder:text-text-tertiary focus:outline-none"
           />
         </div>
       </div>
@@ -82,13 +82,13 @@ export default function DataTable<T>({ data, columns, searchPlaceholder = 'Searc
         <table className="w-full">
           <thead>
             {table.getHeaderGroups().map(headerGroup => (
-              <tr key={headerGroup.id} className="bg-bg-elevated">
+              <tr key={headerGroup.id} className="bg-bg-surface">
                 {headerGroup.headers.map(header => (
                   <th
                     key={header.id}
                     onClick={header.column.getCanSort() ? header.column.getToggleSortingHandler() : undefined}
-                    className={`px-3 py-2.5 text-left text-[11px] font-medium tracking-widest uppercase text-text-tertiary border-b border-border-subtle ${
-                      header.column.getCanSort() ? 'cursor-pointer select-none hover:text-text-secondary' : ''
+                    className={`px-3 py-2.5 text-left text-[11px] label-caps text-text-tertiary ${
+                      header.column.getCanSort() ? 'cursor-pointer select-none hover:text-text-primary' : ''
                     }`}
                     style={{ width: header.getSize() !== 150 ? header.getSize() : undefined }}
                   >
@@ -124,9 +124,9 @@ export default function DataTable<T>({ data, columns, searchPlaceholder = 'Searc
           </tbody>
           {footerRow && (
             <tfoot>
-              <tr className="bg-bg-elevated border-t-2 border-border-strong sticky bottom-0">
+              <tr className="bg-bg-surface border-t-[1.5px] border-border-strong sticky bottom-0">
                 {table.getHeaderGroups()[0].headers.map(header => (
-                  <td key={header.id} className="px-3 py-2.5 text-sm font-semibold">
+                  <td key={header.id} className="px-3 py-2.5 text-sm font-bold tabular-nums">
                     {footerRow[header.id] || ''}
                   </td>
                 ))}
@@ -138,27 +138,27 @@ export default function DataTable<T>({ data, columns, searchPlaceholder = 'Searc
 
       {/* Pagination */}
       {pageCount > 1 && (
-        <div className="flex items-center justify-between px-4 py-3 border-t border-border-subtle">
-          <span className="text-sm text-text-tertiary font-mono">
+        <div className="flex items-center justify-between px-4 py-2.5 border-t-[1.5px] border-border-strong">
+          <span className="text-sm text-text-tertiary tabular-nums">
             {startRow}–{endRow} of {totalRows.toLocaleString()}
           </span>
           <div className="flex items-center gap-1">
             <button
               onClick={() => table.previousPage()}
               disabled={!table.getCanPreviousPage()}
-              className="p-1.5 rounded-md hover:bg-bg-hover disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+              className="p-1 rounded-md border-[1.5px] border-border-strong bg-bg-surface hover:bg-bg-hover disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
             >
-              <ChevronLeft size={16} className="text-text-secondary" />
+              <ChevronLeft size={16} className="text-text-primary" />
             </button>
-            <span className="text-sm text-text-secondary font-mono px-2">
+            <span className="text-sm text-text-secondary px-2 tabular-nums">
               {currentPage + 1} / {pageCount}
             </span>
             <button
               onClick={() => table.nextPage()}
               disabled={!table.getCanNextPage()}
-              className="p-1.5 rounded-md hover:bg-bg-hover disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+              className="p-1 rounded-md border-[1.5px] border-border-strong bg-bg-surface hover:bg-bg-hover disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
             >
-              <ChevronRight size={16} className="text-text-secondary" />
+              <ChevronRight size={16} className="text-text-primary" />
             </button>
           </div>
         </div>

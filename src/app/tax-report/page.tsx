@@ -160,7 +160,7 @@ export default function TaxReportPage() {
       {/* Header */}
       <div className="flex items-center justify-between mb-6">
         <div>
-          <h1 className="text-xl font-semibold tracking-tight flex items-center gap-2">
+          <h1 className="page-title flex items-center gap-2">
             <FileText size={20} className="text-accent" />
             Tax Report — {year}
           </h1>
@@ -169,7 +169,7 @@ export default function TaxReportPage() {
         <div className="flex items-center gap-3">
           <button
             onClick={exportAll}
-            className="flex items-center gap-2 h-9 px-4 bg-accent text-white rounded-md text-sm font-medium hover:bg-accent-hover transition-colors"
+            className="flex items-center gap-2 h-9 px-4 bg-accent text-text-inverse rounded-md text-sm font-bold hover:bg-accent-hover transition-colors"
           >
             <Download size={14} />
             Export All CSVs
@@ -192,10 +192,10 @@ export default function TaxReportPage() {
         <TaxSection title="Form 1120-S Summary" description="Maps to IRS Form 1120-S (S-Corporation) income and deductions" onExport={exportScheduleC}>
           <table className="w-full text-sm">
             <thead>
-              <tr className="border-b border-border-subtle">
-                <th className="text-left py-2 text-text-tertiary font-medium text-xs uppercase tracking-wider w-20">Line</th>
-                <th className="text-left py-2 text-text-tertiary font-medium text-xs uppercase tracking-wider">Description</th>
-                <th className="text-right py-2 text-text-tertiary font-medium text-xs uppercase tracking-wider w-40">Amount</th>
+              <tr>
+                <th className="text-left py-2 text-text-tertiary text-xs label-caps w-20">Line</th>
+                <th className="text-left py-2 text-text-tertiary text-xs label-caps">Description</th>
+                <th className="text-right py-2 text-text-tertiary text-xs label-caps w-40">Amount</th>
               </tr>
             </thead>
             <tbody>
@@ -208,8 +208,8 @@ export default function TaxReportPage() {
               <ScheduleRow line="6" label="Total Income" value={sc.line7_grossIncome} bold />
               <tr><td colSpan={3} className="py-2"></td></tr>
               <tr className="border-t border-border-subtle">
-                <td className="py-2 text-text-tertiary font-mono text-xs"></td>
-                <td className="py-2 text-text-secondary font-semibold text-xs uppercase tracking-wider">Deductions (Lines 7-19)</td>
+                <td className="py-2 text-text-tertiary text-xs tabular-nums"></td>
+                <td className="py-2 text-text-secondary text-xs label-caps">Deductions (Lines 7-19)</td>
                 <td></td>
               </tr>
               <ScheduleRow line="7-19" label="Marketplace Selling & Fulfillment Fees" value={sc.deductions.amazonFees} negative />
@@ -220,9 +220,9 @@ export default function TaxReportPage() {
               <ScheduleRow line="20" label="Total Deductions" value={sc.totalDeductions} bold negative />
               <tr><td colSpan={3} className="py-1"></td></tr>
               <tr className="border-t-2 border-accent">
-                <td className="py-3 font-mono text-xs text-accent">21</td>
+                <td className="py-3 text-xs text-text-primary tabular-nums">21</td>
                 <td className="py-3 font-semibold text-text-primary">Ordinary Business Income (or Loss)</td>
-                <td className={`py-3 text-right font-mono font-bold text-base ${sc.line31_netProfit >= 0 ? 'text-positive' : 'text-negative'}`}>
+                <td className={`py-3 text-right font-bold text-base tabular-nums ${sc.line31_netProfit >= 0 ? 'text-positive' : 'text-negative'}`}>
                   {formatCurrency(sc.line31_netProfit)}
                 </td>
               </tr>
@@ -246,14 +246,14 @@ export default function TaxReportPage() {
           }}>
             <table className="w-full text-sm">
               <thead>
-                <tr className="border-b border-border-subtle">
-                  <th className="text-left py-2 text-text-tertiary font-medium text-xs uppercase tracking-wider">Marketplace</th>
-                  <th className="text-right py-2 text-text-tertiary font-medium text-xs uppercase tracking-wider">Gross Receipts</th>
-                  <th className="text-right py-2 text-text-tertiary font-medium text-xs uppercase tracking-wider">COGS</th>
-                  <th className="text-right py-2 text-text-tertiary font-medium text-xs uppercase tracking-wider">Fees</th>
-                  <th className="text-right py-2 text-text-tertiary font-medium text-xs uppercase tracking-wider">Refunds</th>
-                  <th className="text-right py-2 text-text-tertiary font-medium text-xs uppercase tracking-wider">Shipping</th>
-                  <th className="text-right py-2 text-text-tertiary font-medium text-xs uppercase tracking-wider">Orders</th>
+                <tr>
+                  <th className="text-left py-2 text-text-tertiary text-xs label-caps">Marketplace</th>
+                  <th className="text-right py-2 text-text-tertiary text-xs label-caps">Gross Receipts</th>
+                  <th className="text-right py-2 text-text-tertiary text-xs label-caps">COGS</th>
+                  <th className="text-right py-2 text-text-tertiary text-xs label-caps">Fees</th>
+                  <th className="text-right py-2 text-text-tertiary text-xs label-caps">Refunds</th>
+                  <th className="text-right py-2 text-text-tertiary text-xs label-caps">Shipping</th>
+                  <th className="text-right py-2 text-text-tertiary text-xs label-caps">Orders</th>
                 </tr>
               </thead>
               <tbody>
@@ -262,23 +262,23 @@ export default function TaxReportPage() {
                   return (
                     <tr key={m.marketplace} className="border-b border-border-subtle/50 hover:bg-bg-hover transition-colors">
                       <td className="py-2 text-text-primary font-medium capitalize">{m.marketplace}</td>
-                      <td className="py-2 text-right font-mono text-text-primary">{formatCurrency(m.grossReceipts)}</td>
-                      <td className="py-2 text-right font-mono text-negative">{formatCurrency(m.cogs)}</td>
-                      <td className="py-2 text-right font-mono text-negative">{formatCurrency(m.fees)}</td>
-                      <td className="py-2 text-right font-mono text-negative">{formatCurrency(m.refunds)}</td>
-                      <td className="py-2 text-right font-mono text-negative">{formatCurrency(m.shippingCosts)}</td>
-                      <td className="py-2 text-right font-mono text-text-secondary">{formatNumber(m.orders)}</td>
+                      <td className="py-2 text-right text-text-primary tabular-nums">{formatCurrency(m.grossReceipts)}</td>
+                      <td className="py-2 text-right text-negative tabular-nums">{formatCurrency(m.cogs)}</td>
+                      <td className="py-2 text-right text-negative tabular-nums">{formatCurrency(m.fees)}</td>
+                      <td className="py-2 text-right text-negative tabular-nums">{formatCurrency(m.refunds)}</td>
+                      <td className="py-2 text-right text-negative tabular-nums">{formatCurrency(m.shippingCosts)}</td>
+                      <td className="py-2 text-right text-text-secondary tabular-nums">{formatNumber(m.orders)}</td>
                     </tr>
                   );
                 })}
                 <tr className="border-t-2 border-border-subtle font-semibold">
                   <td className="py-2 text-text-primary">Total</td>
-                  <td className="py-2 text-right font-mono">{formatCurrency(data.perMarketplace.reduce((s, m) => s + m.grossReceipts, 0))}</td>
-                  <td className="py-2 text-right font-mono">{formatCurrency(data.perMarketplace.reduce((s, m) => s + m.cogs, 0))}</td>
-                  <td className="py-2 text-right font-mono">{formatCurrency(data.perMarketplace.reduce((s, m) => s + m.fees, 0))}</td>
-                  <td className="py-2 text-right font-mono">{formatCurrency(data.perMarketplace.reduce((s, m) => s + m.refunds, 0))}</td>
-                  <td className="py-2 text-right font-mono">{formatCurrency(data.perMarketplace.reduce((s, m) => s + m.shippingCosts, 0))}</td>
-                  <td className="py-2 text-right font-mono">{formatNumber(data.perMarketplace.reduce((s, m) => s + m.orders, 0))}</td>
+                  <td className="py-2 text-right tabular-nums">{formatCurrency(data.perMarketplace.reduce((s, m) => s + m.grossReceipts, 0))}</td>
+                  <td className="py-2 text-right tabular-nums">{formatCurrency(data.perMarketplace.reduce((s, m) => s + m.cogs, 0))}</td>
+                  <td className="py-2 text-right tabular-nums">{formatCurrency(data.perMarketplace.reduce((s, m) => s + m.fees, 0))}</td>
+                  <td className="py-2 text-right tabular-nums">{formatCurrency(data.perMarketplace.reduce((s, m) => s + m.refunds, 0))}</td>
+                  <td className="py-2 text-right tabular-nums">{formatCurrency(data.perMarketplace.reduce((s, m) => s + m.shippingCosts, 0))}</td>
+                  <td className="py-2 text-right tabular-nums">{formatNumber(data.perMarketplace.reduce((s, m) => s + m.orders, 0))}</td>
                 </tr>
               </tbody>
             </table>
@@ -289,33 +289,33 @@ export default function TaxReportPage() {
         <TaxSection title="Income by Month" description="Monthly revenue breakdown for quarterly estimated tax planning" onExport={exportIncomeByMonth}>
           <table className="w-full text-sm">
             <thead>
-              <tr className="border-b border-border-subtle">
-                <th className="text-left py-2 text-text-tertiary font-medium text-xs uppercase tracking-wider">Month</th>
-                <th className="text-right py-2 text-text-tertiary font-medium text-xs uppercase tracking-wider">Product Sales</th>
-                <th className="text-right py-2 text-text-tertiary font-medium text-xs uppercase tracking-wider">Shipping</th>
-                <th className="text-right py-2 text-text-tertiary font-medium text-xs uppercase tracking-wider">Total</th>
-                <th className="text-right py-2 text-text-tertiary font-medium text-xs uppercase tracking-wider">Orders</th>
-                <th className="text-right py-2 text-text-tertiary font-medium text-xs uppercase tracking-wider">Units</th>
+              <tr>
+                <th className="text-left py-2 text-text-tertiary text-xs label-caps">Month</th>
+                <th className="text-right py-2 text-text-tertiary text-xs label-caps">Product Sales</th>
+                <th className="text-right py-2 text-text-tertiary text-xs label-caps">Shipping</th>
+                <th className="text-right py-2 text-text-tertiary text-xs label-caps">Total</th>
+                <th className="text-right py-2 text-text-tertiary text-xs label-caps">Orders</th>
+                <th className="text-right py-2 text-text-tertiary text-xs label-caps">Units</th>
               </tr>
             </thead>
             <tbody>
               {data.incomeByMonth.map(m => (
                 <tr key={m.month} className="border-b border-border-subtle/50 hover:bg-bg-hover transition-colors">
                   <td className="py-2 text-text-primary">{monthLabel(m.month)}</td>
-                  <td className="py-2 text-right font-mono text-text-primary">{formatCurrency(m.productSales)}</td>
-                  <td className="py-2 text-right font-mono text-text-secondary">{formatCurrency(m.shippingIncome)}</td>
-                  <td className="py-2 text-right font-mono text-text-primary font-medium">{formatCurrency(m.productSales + m.shippingIncome)}</td>
-                  <td className="py-2 text-right font-mono text-text-secondary">{formatNumber(m.orderCount)}</td>
-                  <td className="py-2 text-right font-mono text-text-secondary">{formatNumber(m.unitsSold)}</td>
+                  <td className="py-2 text-right text-text-primary tabular-nums">{formatCurrency(m.productSales)}</td>
+                  <td className="py-2 text-right text-text-secondary tabular-nums">{formatCurrency(m.shippingIncome)}</td>
+                  <td className="py-2 text-right text-text-primary font-medium tabular-nums">{formatCurrency(m.productSales + m.shippingIncome)}</td>
+                  <td className="py-2 text-right text-text-secondary tabular-nums">{formatNumber(m.orderCount)}</td>
+                  <td className="py-2 text-right text-text-secondary tabular-nums">{formatNumber(m.unitsSold)}</td>
                 </tr>
               ))}
               <tr className="border-t-2 border-border-subtle font-semibold">
                 <td className="py-2 text-text-primary">Total</td>
-                <td className="py-2 text-right font-mono">{formatCurrency(data.incomeByMonth.reduce((s, m) => s + m.productSales, 0))}</td>
-                <td className="py-2 text-right font-mono">{formatCurrency(data.incomeByMonth.reduce((s, m) => s + m.shippingIncome, 0))}</td>
-                <td className="py-2 text-right font-mono">{formatCurrency(data.incomeByMonth.reduce((s, m) => s + m.productSales + m.shippingIncome, 0))}</td>
-                <td className="py-2 text-right font-mono">{formatNumber(data.incomeByMonth.reduce((s, m) => s + m.orderCount, 0))}</td>
-                <td className="py-2 text-right font-mono">{formatNumber(data.incomeByMonth.reduce((s, m) => s + m.unitsSold, 0))}</td>
+                <td className="py-2 text-right tabular-nums">{formatCurrency(data.incomeByMonth.reduce((s, m) => s + m.productSales, 0))}</td>
+                <td className="py-2 text-right tabular-nums">{formatCurrency(data.incomeByMonth.reduce((s, m) => s + m.shippingIncome, 0))}</td>
+                <td className="py-2 text-right tabular-nums">{formatCurrency(data.incomeByMonth.reduce((s, m) => s + m.productSales + m.shippingIncome, 0))}</td>
+                <td className="py-2 text-right tabular-nums">{formatNumber(data.incomeByMonth.reduce((s, m) => s + m.orderCount, 0))}</td>
+                <td className="py-2 text-right tabular-nums">{formatNumber(data.incomeByMonth.reduce((s, m) => s + m.unitsSold, 0))}</td>
               </tr>
             </tbody>
           </table>
@@ -325,18 +325,18 @@ export default function TaxReportPage() {
         <TaxSection title="Cost of Goods Sold (Schedule A)" description="Form 1120-S Schedule A — Inventory and COGS calculation using FIFO method" onExport={exportCogs}>
           <table className="w-full text-sm">
             <thead>
-              <tr className="border-b border-border-subtle">
-                <th className="text-left py-2 text-text-tertiary font-medium text-xs uppercase tracking-wider w-20">Line</th>
-                <th className="text-left py-2 text-text-tertiary font-medium text-xs uppercase tracking-wider">Description</th>
-                <th className="text-right py-2 text-text-tertiary font-medium text-xs uppercase tracking-wider w-40">Amount</th>
+              <tr>
+                <th className="text-left py-2 text-text-tertiary text-xs label-caps w-20">Line</th>
+                <th className="text-left py-2 text-text-tertiary text-xs label-caps">Description</th>
+                <th className="text-right py-2 text-text-tertiary text-xs label-caps w-40">Amount</th>
               </tr>
             </thead>
             <tbody>
               <ScheduleRow line="5" label="Other Costs (Inbound Shipping)" value={data.cogs.inboundShipping} />
               <tr className="border-t-2 border-border-subtle">
-                <td className="py-2 font-mono text-xs text-accent">8</td>
+                <td className="py-2 text-xs text-text-primary tabular-nums">8</td>
                 <td className="py-2 font-semibold text-text-primary">Cost of Goods Sold (FIFO, computed per sale)</td>
-                <td className="py-2 text-right font-mono font-bold">{formatCurrency(data.cogs.costOfGoodsSold)}</td>
+                <td className="py-2 text-right font-bold tabular-nums">{formatCurrency(data.cogs.costOfGoodsSold)}</td>
               </tr>
               <ScheduleRow line="9a" label="Method of valuation: FIFO (First In, First Out)" value={0} hideValue />
             </tbody>
@@ -352,7 +352,7 @@ export default function TaxReportPage() {
           })}
           <div className="flex justify-between py-3 border-t-2 border-border-subtle font-semibold text-sm">
             <span>Total Marketplace Fees</span>
-            <span className="font-mono">{formatCurrency(data.amazonFeeSummary.reduce((s, c) => s + c.total, 0))}</span>
+            <span className="tabular-nums">{formatCurrency(data.amazonFeeSummary.reduce((s, c) => s + c.total, 0))}</span>
           </div>
         </TaxSection>
 
@@ -361,18 +361,18 @@ export default function TaxReportPage() {
           {data.otherExpenses.length > 0 ? (
             <table className="w-full text-sm">
               <thead>
-                <tr className="border-b border-border-subtle">
-                  <th className="text-left py-2 text-text-tertiary font-medium text-xs uppercase tracking-wider">Category</th>
-                  <th className="text-right py-2 text-text-tertiary font-medium text-xs uppercase tracking-wider">Amount</th>
-                  <th className="text-right py-2 text-text-tertiary font-medium text-xs uppercase tracking-wider">Transactions</th>
+                <tr>
+                  <th className="text-left py-2 text-text-tertiary text-xs label-caps">Category</th>
+                  <th className="text-right py-2 text-text-tertiary text-xs label-caps">Amount</th>
+                  <th className="text-right py-2 text-text-tertiary text-xs label-caps">Transactions</th>
                 </tr>
               </thead>
               <tbody>
                 {data.otherExpenses.map(e => (
                   <tr key={e.category} className="border-b border-border-subtle/50 hover:bg-bg-hover transition-colors">
                     <td className="py-2 text-text-primary">{e.category}</td>
-                    <td className="py-2 text-right font-mono text-negative">{formatCurrency(e.total)}</td>
-                    <td className="py-2 text-right font-mono text-text-secondary">{e.count}</td>
+                    <td className="py-2 text-right text-negative tabular-nums">{formatCurrency(e.total)}</td>
+                    <td className="py-2 text-right text-text-secondary tabular-nums">{e.count}</td>
                   </tr>
                 ))}
               </tbody>
@@ -388,27 +388,27 @@ export default function TaxReportPage() {
             <>
               <table className="w-full text-sm">
                 <thead>
-                  <tr className="border-b border-border-subtle">
-                    <th className="text-left py-2 text-text-tertiary font-medium text-xs uppercase tracking-wider">State</th>
-                    <th className="text-right py-2 text-text-tertiary font-medium text-xs uppercase tracking-wider">Tax Collected</th>
-                    <th className="text-right py-2 text-text-tertiary font-medium text-xs uppercase tracking-wider">Facilitator Tax</th>
-                    <th className="text-right py-2 text-text-tertiary font-medium text-xs uppercase tracking-wider">Orders</th>
+                  <tr>
+                    <th className="text-left py-2 text-text-tertiary text-xs label-caps">State</th>
+                    <th className="text-right py-2 text-text-tertiary text-xs label-caps">Tax Collected</th>
+                    <th className="text-right py-2 text-text-tertiary text-xs label-caps">Facilitator Tax</th>
+                    <th className="text-right py-2 text-text-tertiary text-xs label-caps">Orders</th>
                   </tr>
                 </thead>
                 <tbody>
                   {data.salesTaxByState.map(s => (
                     <tr key={s.state} className="border-b border-border-subtle/50 hover:bg-bg-hover transition-colors">
                       <td className="py-2 text-text-primary font-medium">{s.state}</td>
-                      <td className="py-2 text-right font-mono text-text-primary">{formatCurrency(s.taxCollected)}</td>
-                      <td className="py-2 text-right font-mono text-text-secondary">{formatCurrency(s.facilitatorTax)}</td>
-                      <td className="py-2 text-right font-mono text-text-secondary">{formatNumber(s.orderCount)}</td>
+                      <td className="py-2 text-right text-text-primary tabular-nums">{formatCurrency(s.taxCollected)}</td>
+                      <td className="py-2 text-right text-text-secondary tabular-nums">{formatCurrency(s.facilitatorTax)}</td>
+                      <td className="py-2 text-right text-text-secondary tabular-nums">{formatNumber(s.orderCount)}</td>
                     </tr>
                   ))}
                   <tr className="border-t-2 border-border-subtle font-semibold">
                     <td className="py-2">Total</td>
-                    <td className="py-2 text-right font-mono">{formatCurrency(data.totalTaxCollected)}</td>
-                    <td className="py-2 text-right font-mono">{formatCurrency(data.salesTaxByState.reduce((s, r) => s + r.facilitatorTax, 0))}</td>
-                    <td className="py-2 text-right font-mono">{formatNumber(data.salesTaxByState.reduce((s, r) => s + r.orderCount, 0))}</td>
+                    <td className="py-2 text-right tabular-nums">{formatCurrency(data.totalTaxCollected)}</td>
+                    <td className="py-2 text-right tabular-nums">{formatCurrency(data.salesTaxByState.reduce((s, r) => s + r.facilitatorTax, 0))}</td>
+                    <td className="py-2 text-right tabular-nums">{formatNumber(data.salesTaxByState.reduce((s, r) => s + r.orderCount, 0))}</td>
                   </tr>
                 </tbody>
               </table>
@@ -424,39 +424,39 @@ export default function TaxReportPage() {
 
         {/* Refunds & Adjustments */}
         <TaxSection title="Refunds & Adjustments" description="Customer refunds reduce gross receipts; fee clawbacks are included in other income" onExport={exportRefunds}>
-          <div className="grid grid-cols-3 gap-4 mb-4">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-4">
             <div className="bg-bg-root rounded-lg p-3">
-              <div className="text-[10px] font-medium tracking-widest uppercase text-text-tertiary mb-1">Total Refunded</div>
-              <div className="text-lg font-bold font-mono text-negative">{formatCurrency(data.refundsByMonth.reduce((s, r) => s + r.totalRefunded, 0))}</div>
+              <div className="text-[10px] label-caps text-text-tertiary mb-1">Total Refunded</div>
+              <div className="stat-num text-lg text-negative">{formatCurrency(data.refundsByMonth.reduce((s, r) => s + r.totalRefunded, 0))}</div>
             </div>
             <div className="bg-bg-root rounded-lg p-3">
-              <div className="text-[10px] font-medium tracking-widest uppercase text-text-tertiary mb-1">Fee Clawbacks</div>
-              <div className="text-lg font-bold font-mono text-positive">{formatCurrency(data.refundsByMonth.reduce((s, r) => s + r.feeClawbacks, 0))}</div>
+              <div className="text-[10px] label-caps text-text-tertiary mb-1">Fee Clawbacks</div>
+              <div className="stat-num text-lg text-positive">{formatCurrency(data.refundsByMonth.reduce((s, r) => s + r.feeClawbacks, 0))}</div>
             </div>
             <div className="bg-bg-root rounded-lg p-3">
-              <div className="text-[10px] font-medium tracking-widest uppercase text-text-tertiary mb-1">Reimbursements</div>
-              <div className="text-lg font-bold font-mono text-positive">{formatCurrency(data.reimbursements.total)}</div>
+              <div className="text-[10px] label-caps text-text-tertiary mb-1">Reimbursements</div>
+              <div className="stat-num text-lg text-positive">{formatCurrency(data.reimbursements.total)}</div>
             </div>
           </div>
           {data.refundsByMonth.length > 0 ? (
             <table className="w-full text-sm">
               <thead>
-                <tr className="border-b border-border-subtle">
-                  <th className="text-left py-2 text-text-tertiary font-medium text-xs uppercase tracking-wider">Month</th>
-                  <th className="text-right py-2 text-text-tertiary font-medium text-xs uppercase tracking-wider">Refunds</th>
-                  <th className="text-right py-2 text-text-tertiary font-medium text-xs uppercase tracking-wider">Refunded</th>
-                  <th className="text-right py-2 text-text-tertiary font-medium text-xs uppercase tracking-wider">Clawbacks</th>
-                  <th className="text-right py-2 text-text-tertiary font-medium text-xs uppercase tracking-wider">Net Cost</th>
+                <tr>
+                  <th className="text-left py-2 text-text-tertiary text-xs label-caps">Month</th>
+                  <th className="text-right py-2 text-text-tertiary text-xs label-caps">Refunds</th>
+                  <th className="text-right py-2 text-text-tertiary text-xs label-caps">Refunded</th>
+                  <th className="text-right py-2 text-text-tertiary text-xs label-caps">Clawbacks</th>
+                  <th className="text-right py-2 text-text-tertiary text-xs label-caps">Net Cost</th>
                 </tr>
               </thead>
               <tbody>
                 {data.refundsByMonth.map(r => (
                   <tr key={r.month} className="border-b border-border-subtle/50 hover:bg-bg-hover transition-colors">
                     <td className="py-2 text-text-primary">{monthLabel(r.month)}</td>
-                    <td className="py-2 text-right font-mono text-text-secondary">{r.count}</td>
-                    <td className="py-2 text-right font-mono text-negative">{formatCurrency(r.totalRefunded)}</td>
-                    <td className="py-2 text-right font-mono text-positive">{formatCurrency(r.feeClawbacks)}</td>
-                    <td className="py-2 text-right font-mono text-negative">{formatCurrency(r.netCost)}</td>
+                    <td className="py-2 text-right text-text-secondary tabular-nums">{r.count}</td>
+                    <td className="py-2 text-right text-negative tabular-nums">{formatCurrency(r.totalRefunded)}</td>
+                    <td className="py-2 text-right text-positive tabular-nums">{formatCurrency(r.feeClawbacks)}</td>
+                    <td className="py-2 text-right text-negative tabular-nums">{formatCurrency(r.netCost)}</td>
                   </tr>
                 ))}
               </tbody>
@@ -477,30 +477,28 @@ function TaxSection({ title, description, onExport, children }: {
 }) {
   const [open, setOpen] = useState(true);
   return (
-    <div className="bg-bg-surface border border-border-subtle rounded-lg overflow-hidden">
+    <div className="panel overflow-hidden">
       {/* Header row: left side (collapse toggle) and right side (CSV export) are
           siblings, not nested buttons. Nesting a <button> inside another
           <button> is invalid HTML and causes a React hydration error. */}
-      <div className="flex items-center justify-between p-4 hover:bg-bg-hover transition-colors">
+      <div className="panel-bar">
         <button
           onClick={() => setOpen(!open)}
           className="flex items-center gap-2 flex-1 min-w-0 text-left"
           aria-expanded={open}
         >
-          {open ? <ChevronDown size={16} className="text-text-tertiary shrink-0" /> : <ChevronRight size={16} className="text-text-tertiary shrink-0" />}
-          <div className="min-w-0">
-            <div className="text-sm font-semibold text-text-primary">{title}</div>
-            <div className="text-xs text-text-tertiary mt-0.5">{description}</div>
-          </div>
+          {open ? <ChevronDown size={14} className="shrink-0" /> : <ChevronRight size={14} className="shrink-0" />}
+          <span className="truncate">{title}</span>
         </button>
         <button
           onClick={onExport}
-          className="flex items-center gap-1.5 h-7 px-3 bg-bg-elevated border border-border-default rounded-md text-xs text-text-secondary hover:text-text-primary hover:bg-bg-hover transition-colors shrink-0 ml-3"
+          className="flex items-center gap-1.5 h-6 px-2 rounded-md border-[1.5px] border-bar-fg/40 hover:border-bar-fg transition-colors shrink-0 ml-3"
         >
-          <Download size={12} />
+          <Download size={11} />
           CSV
         </button>
       </div>
+      <div className="px-4 pt-2.5 text-xs text-text-tertiary">{description}</div>
       {open && <div className="px-4 pb-4">{children}</div>}
     </div>
   );
@@ -511,9 +509,9 @@ function ScheduleRow({ line, label, value, bold, negative, hideValue }: {
 }) {
   return (
     <tr className="border-b border-border-subtle/50 hover:bg-bg-hover transition-colors">
-      <td className="py-2 font-mono text-xs text-text-tertiary">{line}</td>
+      <td className="py-2 text-xs text-text-tertiary tabular-nums">{line}</td>
       <td className={`py-2 ${bold ? 'font-semibold text-text-primary' : 'text-text-secondary'}`}>{label}</td>
-      <td className={`py-2 text-right font-mono ${hideValue ? '' : bold ? 'font-semibold' : ''} ${negative && value > 0 ? 'text-negative' : ''}`}>
+      <td className={`py-2 text-right tabular-nums ${hideValue ? '' : bold ? 'font-semibold' : ''} ${negative && value > 0 ? 'text-negative' : ''}`}>
         {hideValue ? '' : formatCurrency(value)}
       </td>
     </tr>
@@ -532,14 +530,14 @@ function FeeCategory({ category, total, rows }: {
           <span className="text-text-primary font-medium">{category}</span>
           <span className="text-text-tertiary text-xs">({rows.length} fee types)</span>
         </div>
-        <span className="font-mono text-negative">{formatCurrency(total)}</span>
+        <span className="text-negative tabular-nums">{formatCurrency(total)}</span>
       </button>
       {open && (
         <div className="pl-7 pb-2 space-y-1">
           {rows.map((f, i) => (
             <div key={i} className="flex justify-between text-xs text-text-secondary py-0.5">
               <span>{f.feeType} <span className="text-text-tertiary">({f.count})</span></span>
-              <span className="font-mono">{formatCurrency(f.total)}</span>
+              <span className="tabular-nums">{formatCurrency(f.total)}</span>
             </div>
           ))}
         </div>
@@ -563,7 +561,7 @@ function TaxReportSkeleton() {
       </div>
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
         {Array.from({ length: 4 }).map((_, i) => (
-          <div key={i} className="bg-bg-surface border border-border-subtle rounded-lg p-5">
+          <div key={i} className="panel p-5">
             <div className="skeleton h-3 w-24 mb-3" />
             <div className="skeleton h-8 w-32" />
           </div>
@@ -571,7 +569,7 @@ function TaxReportSkeleton() {
       </div>
       <div className="space-y-4">
         {Array.from({ length: 4 }).map((_, i) => (
-          <div key={i} className="bg-bg-surface border border-border-subtle rounded-lg p-4">
+          <div key={i} className="panel p-4">
             <div className="skeleton h-5 w-48 mb-2" />
             <div className="skeleton h-3 w-72" />
           </div>

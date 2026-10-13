@@ -6,6 +6,7 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import { openDb } from '@/lib/db-conn';
+import { replacementReasonLabel } from '@/lib/sp-api/replacementsReport';
 
 export async function GET(_request: NextRequest, context: { params: Promise<{ id: string }> }) {
   const { id: rawId } = await context.params;
@@ -15,9 +16,10 @@ export async function GET(_request: NextRequest, context: { params: Promise<{ id
 
   try {
     const order = db.prepare(`
-      SELECT order_id, purchase_date, status, marketplace, fulfillment_channel, is_estimated, created_at
+      SELECT order_id, purchase_date, status, marketplace, fulfillment_channel, is_estimated, created_at,
+             COALESCE(is_replacement, 0) AS is_replacement, replaced_order_id, replacement_reason_code
       FROM orders WHERE order_id = ?
-    `).get(orderId) as { order_id: string; purchase_date: string; status: string; marketplace: string; fulfillment_channel: string; is_estimated: number; created_at: string } | undefined;
+    `).get(orderId) as { order_id: string; purchase_date: string; status: string; marketplace: string; fulfillment_channel: string; is_estimated: number; created_at: string; is_replacement: number; replaced_order_id: string | null; replacement_reason_code: number | null } | undefined;
 
     if (!order) {
       return NextResponse.json({ error: 'Order not found' }, { status: 404 });
@@ -102,12 +104,30 @@ export async function GET(_request: NextRequest, context: { params: Promise<{ id
       `).all(...refundIds) as typeof walmartDisputes;
     }
 
+    // Replacement linkage, both directions: what this order replaces, and any
+    // replacement orders shipped against it.
+    const replacedBy = db.prepare(`
+      SELECT order_id, status, replacement_reason_code FROM orders WHERE replaced_order_id = ? ORDER BY purchase_date
+    `).all(orderId) as Array<{ order_id: string; status: string; replacement_reason_code: number | null }>;
+    const replacement = {
+      isReplacement: order.is_replacement === 1,
+      replacesOrderId: order.replaced_order_id,
+      reasonCode: order.replacement_reason_code,
+      reasonLabel: replacementReasonLabel(order.replacement_reason_code),
+      replacedBy: replacedBy.map((r) => ({
+        orderId: r.order_id,
+        status: r.status,
+        reasonLabel: replacementReasonLabel(r.replacement_reason_code),
+      })),
+    };
+
     // Net P&L computed from financial_events (signed)
     const netCents = financialEvents.reduce((sum, e) => sum + e.total_amount, 0);
     const totalCogsCents = items.reduce((sum, i) => sum + (i.cogs_per_unit * i.quantity), 0);
 
     return NextResponse.json({
       order,
+      replacement,
       items,
       events,
       fees,

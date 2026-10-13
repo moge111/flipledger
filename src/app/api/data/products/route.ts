@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { recalculateFIFO } from '@/lib/fifo';
+import { resolveSupplierId } from '@/lib/suppliers';
 import { openDb } from '@/lib/db-conn';
 
 const getDb = () => openDb();
@@ -54,14 +55,19 @@ export async function GET() {
         -- lot. Counting them flagged every SKU that ever had a return as
         -- "DEPLETED LOT" (false positive). A real >0 here means bump the lot
         -- quantity or add a new lot at the right cost basis.
+        -- Paired Multi-Channel Fulfillment lines are excluded too: their cost
+        -- sits on the Walmart/eBay sale they fulfilled, so $0 is correct.
         (SELECT COUNT(*) FROM order_items oi_zc
            WHERE oi_zc.sku = il.sku AND oi_zc.cogs_per_unit = 0
              AND NOT EXISTS (
                SELECT 1 FROM refunds r
                WHERE r.order_id = oi_zc.order_id AND COALESCE(r.item_returned, 0) = 1
              )
+             AND NOT EXISTS (SELECT 1 FROM mcf_fulfillments m WHERE m.mcf_order_id = oi_zc.order_id)
         ) as unitsZeroCogs,
-        COALESCE(il.intentional_zero_cogs, 0) as intentionalZeroCogs
+        COALESCE(il.intentional_zero_cogs, 0) as intentionalZeroCogs,
+        CASE WHEN il.notes LIKE '[auto-cost]%' THEN il.notes END as autoCostNote,
+        il.id as lotId
       FROM inventory_ledger il
       LEFT JOIN products p ON il.asin = p.asin
       LEFT JOIN products p2 ON il.sku = p2.sku AND p.asin IS NULL
@@ -89,7 +95,9 @@ export async function GET() {
         0 as hasLedger,
         oi_missing.unitsSold,
         oi_missing.unitsSold as unitsZeroCogs,
-        0 as intentionalZeroCogs
+        0 as intentionalZeroCogs,
+        NULL as autoCostNote,
+        NULL as lotId
       FROM (
         SELECT
           oi.sku,
@@ -131,10 +139,14 @@ export async function GET() {
 
 export async function POST(request: NextRequest) {
   const body = await request.json();
-  const { sku, asin, buyPrice, supplier, datePurchased, quantity, intentionalZeroCogs } = body;
+  const { sku, asin, buyPrice, supplier, datePurchased, quantity, intentionalZeroCogs, lotId } = body;
 
   if (!sku && !asin) {
     return NextResponse.json({ error: 'SKU or ASIN required' }, { status: 400 });
+  }
+  const price = Number(buyPrice ?? 0);
+  if (!Number.isFinite(price) || price < 0) {
+    return NextResponse.json({ error: 'buyPrice must be a number ≥ 0' }, { status: 400 });
   }
 
   const db = getDb();
@@ -143,76 +155,70 @@ export async function POST(request: NextRequest) {
     // Self-pulled / gift / no-cost-basis items: force buy_price to 0 and mark
     // the row so the UI knows the $0 is intentional (no "MISSING COGS" warning).
     const isIntentionalZero = !!intentionalZeroCogs;
-    const buyPriceCents = isIntentionalZero ? 0 : Math.round((buyPrice || 0) * 100);
+    const buyPriceCents = isIntentionalZero ? 0 : Math.round(price * 100);
 
     // Upsert supplier if name provided
-    let supplierId = null;
-    if (supplier) {
-      db.prepare('INSERT OR IGNORE INTO suppliers (name, created_at) VALUES (?, ?)').run(supplier, now);
-      const row = db.prepare('SELECT id FROM suppliers WHERE name = ?').get(supplier) as any;
-      supplierId = row?.id;
-    }
+    const supplierId = resolveSupplierId(db, supplier, now);
 
-    // Upsert inventory ledger entry
-    if (sku) {
-      const existing = db.prepare('SELECT id, quantity, quantity_remaining FROM inventory_ledger WHERE sku = ?').get(sku) as any;
-      if (existing) {
-        // Make sure quantity covers all sold units so FIFO can allocate COGS to
-        // them. No extra headroom beyond units_sold: the FIFO overflow fallback
-        // costs any future overflow sale at the latest lot price, and a +1 pad
-        // here leaves a phantom unit in local inventory (Aug 6 sweep removed
-        // 129 of them).
-        const soldRow = db.prepare(`
-          SELECT COALESCE(SUM(oi.quantity), 0) as units_sold
-          FROM order_items oi
-          WHERE oi.sku = ?
-        `).get(sku) as { units_sold: number };
-        const unitsSold = soldRow?.units_sold || 0;
-        const desiredQty = Math.max(existing.quantity, unitsSold);
-        const qtyDelta = desiredQty - existing.quantity;
-        db.prepare(`
-          UPDATE inventory_ledger SET
-            buy_price = ?,
-            quantity = ?,
-            quantity_remaining = quantity_remaining + ?,
-            supplier_id = COALESCE(?, supplier_id),
-            date_purchased = COALESCE(?, date_purchased),
-            intentional_zero_cogs = ?
-          WHERE sku = ?
-        `).run(buyPriceCents, desiredQty, qtyDelta, supplierId, datePurchased, isIntentionalZero ? 1 : 0, sku);
+    // Editing an existing cost touches exactly ONE lot. It used to run
+    // `UPDATE ... WHERE sku = ?`, rewriting price, date and quantity on every
+    // lot of a multi-lot SKU: one Save on Yoshi's $15 row would have moved
+    // 2026 COGS by -$2,200 (Sept 22 2026 review, A-latent-1). Quantity is
+    // never written here: the FIFO overflow fallback already costs sales
+    // beyond a lot at the latest lot price, and bumping quantity revived
+    // deliberately zeroed lots (Px7/Px8) as phantom stock.
+    const lots = db.prepare(`
+      SELECT id FROM inventory_ledger WHERE ${sku ? 'sku' : 'asin'} = ?
+      ORDER BY date_purchased DESC, id DESC
+    `).all(sku || asin) as { id: number }[];
+
+    if (lots.length > 0) {
+      let targetId: number;
+      if (lotId != null) {
+        if (!lots.some(l => l.id === Number(lotId))) {
+          db.close();
+          return NextResponse.json({ error: `Lot ${lotId} does not belong to ${sku || asin}` }, { status: 400 });
+        }
+        targetId = Number(lotId);
       } else {
-        // New ledger row. If the user is back-filling COGS for a SKU that has
-        // already been SOLD (common for eBay items that were never pre-entered),
-        // we need quantity >= units_sold so FIFO can allocate COGS to those
-        // historical sales. Look up the sold count and seed accordingly.
-        const soldRow = db.prepare(`
-          SELECT COALESCE(SUM(oi.quantity), 0) as units_sold
-          FROM order_items oi
-          WHERE oi.sku = ?
-        `).get(sku) as { units_sold: number };
-
-        const unitsSold = soldRow?.units_sold || 0;
-        const qtyRequested = quantity || 1;
-        // Seed quantity = max(requested qty, units_sold) — enough for FIFO to
-        // cost every historical sale, without the old +1 pad that left a
-        // phantom unit in local inventory (see Aug 6 phantom sweep).
-        const seedQty = Math.max(qtyRequested, unitsSold);
-
-        // quantity_remaining starts at the seed qty; the FIFO recalc below
-        // will immediately decrement it to reflect past sales.
-        db.prepare(`
-          INSERT INTO inventory_ledger (asin, sku, buy_price, quantity, quantity_remaining, supplier_id, date_purchased, intentional_zero_cogs, created_at)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-        `).run(asin || sku, sku, buyPriceCents, seedQty, seedQty, supplierId, datePurchased || now, isIntentionalZero ? 1 : 0, now);
+        // No lot context (Inventory Valuation inline edit): update the latest
+        // lot, which is the price every valuation view displays.
+        targetId = lots[0].id;
       }
-    } else if (asin) {
-      // Update all entries for this ASIN
       db.prepare(`
         UPDATE inventory_ledger SET
           buy_price = ?,
-          supplier_id = COALESCE(?, supplier_id)
-        WHERE asin = ?
-      `).run(buyPriceCents, supplierId, asin);
+          supplier_id = COALESCE(?, supplier_id),
+          date_purchased = COALESCE(?, date_purchased),
+          intentional_zero_cogs = ?,
+          -- Saving a copied cost confirms it.
+          notes = CASE WHEN notes LIKE '[auto-cost]%' THEN NULL ELSE notes END
+        WHERE id = ?
+      `).run(buyPriceCents, supplierId, datePurchased || null, isIntentionalZero ? 1 : 0, targetId);
+    } else if (sku) {
+      // New ledger row. If the user is back-filling COGS for a SKU that has
+      // already been SOLD (common for eBay items that were never pre-entered),
+      // we need quantity >= units_sold so FIFO can allocate COGS to those
+      // historical sales. Look up the sold count and seed accordingly.
+      const soldRow = db.prepare(`
+        SELECT COALESCE(SUM(oi.quantity), 0) as units_sold
+        FROM order_items oi
+        WHERE oi.sku = ?
+      `).get(sku) as { units_sold: number };
+
+      const unitsSold = soldRow?.units_sold || 0;
+      const qtyRequested = quantity || 1;
+      // Seed quantity = max(requested qty, units_sold) — enough for FIFO to
+      // cost every historical sale, without the old +1 pad that left a
+      // phantom unit in local inventory (see Aug 6 phantom sweep).
+      const seedQty = Math.max(qtyRequested, unitsSold);
+
+      // quantity_remaining starts at the seed qty; the FIFO recalc below
+      // will immediately decrement it to reflect past sales.
+      db.prepare(`
+        INSERT INTO inventory_ledger (asin, sku, buy_price, quantity, quantity_remaining, supplier_id, date_purchased, intentional_zero_cogs, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(asin || sku, sku, buyPriceCents, seedQty, seedQty, supplierId, datePurchased || now, isIntentionalZero ? 1 : 0, now);
     }
 
     db.close();

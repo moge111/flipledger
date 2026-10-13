@@ -1,461 +1,166 @@
-# DESIGN_SYSTEM.md — FlipLedger UI
+# DESIGN_SYSTEM.md — FlipLedger UI: "Paper"
 
-This is the design bible. Every component, every page, every pixel references this file. Read it before writing any CSS or JSX. If your output looks like a default Tailwind dashboard template or a shadcn starter kit, you have failed. FlipLedger should feel like a tool built by a designer who trades on Amazon, not a generic SaaS boilerplate.
+This is the design bible. Read it before writing any CSS or JSX. Every color, radius, shadow and type decision below is already implemented as tokens and component classes in `src/app/globals.css` and as React primitives in `src/components/ui/Paper.tsx`. Use those; don't eyeball values.
 
----
-
-## Aesthetic Direction
-
-**Inspiration:** Linear.app, Raycast, Vercel Dashboard, Lemon Squeezy, Mercury (banking). Study what these have in common: depth without clutter, information density without chaos, dark themes that feel warm not cold, subtle gradients that catch the eye without distracting from data.
-
-**Vibe:** Premium dark. Like a cockpit for money. The user stares at this app for hours — it should feel calm, confident, and sharp. Not sterile. Not playful. Not enterprise. Think "high-end trading terminal designed by someone with taste."
-
-**The rule:** If you squint at a page and it looks like every other React dashboard on the internet — redesign it. Something on every page should make someone say "that's nice."
+FlipLedger shares its look with Parker's Order Tracker (the reference implementation lives in `~/order tracker/templates/base.html`). Parker chose this direction, **Paper**, on Sept 23, 2026, over a soft rounded "Slate" option, a "Navy" option, and a first draft on a kraft-brown page. It replaced the old "premium dark / indigo / Linear-style glow" direction, which is retired. Don't reintroduce anything from it.
 
 ---
 
-## Color System
+## 1. The look
 
-Do NOT use Tailwind's default palette. These are the exact colors. Use CSS variables so the entire theme is swappable.
+A **printed shipping label**. White label stock on a neutral gray table, black print, black label-bar headers, crisp outlines. It's flat and high-contrast.
 
-```css
-:root {
-  /* Backgrounds — layered depth system */
-  --bg-root: #0a0a0c;           /* Deepest background — app shell */
-  --bg-surface: #111114;         /* Cards, panels, sidebar */
-  --bg-elevated: #18181c;        /* Modals, dropdowns, popovers */
-  --bg-hover: #1e1e24;           /* Hover states on surfaces */
-  --bg-active: #25252d;          /* Active/selected states */
-  --bg-input: #111114;           /* Input fields */
-
-  /* Borders — barely visible structure */
-  --border-subtle: #1e1e24;      /* Default borders — cards, dividers */
-  --border-default: #2a2a33;     /* Stronger borders — inputs, focused elements */
-  --border-strong: #3a3a44;      /* Emphasis borders — active tabs, selected items */
-
-  /* Text — high contrast hierarchy */
-  --text-primary: #f0f0f3;       /* Headlines, important numbers */
-  --text-secondary: #a0a0b0;     /* Body text, labels */
-  --text-tertiary: #606070;      /* Placeholder, disabled, captions */
-  --text-inverse: #0a0a0c;       /* Text on bright backgrounds */
-
-  /* Brand accent — used sparingly */
-  --accent: #6366f1;             /* Indigo — primary actions, active states */
-  --accent-hover: #818cf8;       /* Lighter on hover */
-  --accent-muted: rgba(99, 102, 241, 0.12);  /* Subtle backgrounds */
-  --accent-glow: rgba(99, 102, 241, 0.25);   /* Focus rings, glows */
-
-  /* Semantic colors — for data */
-  --positive: #22c55e;           /* Profit, gains, success */
-  --positive-muted: rgba(34, 197, 94, 0.12);
-  --negative: #ef4444;           /* Loss, errors, alerts */
-  --negative-muted: rgba(239, 68, 68, 0.12);
-  --warning: #f59e0b;            /* Warnings, caution */
-  --warning-muted: rgba(245, 158, 11, 0.12);
-  --info: #3b82f6;               /* Informational, links */
-
-  /* Chart palette — distinct, readable on dark bg */
-  --chart-1: #6366f1;            /* Indigo */
-  --chart-2: #22c55e;            /* Green */
-  --chart-3: #f59e0b;            /* Amber */
-  --chart-4: #ec4899;            /* Pink */
-  --chart-5: #06b6d4;            /* Cyan */
-  --chart-6: #a855f7;            /* Purple */
-  --chart-7: #f97316;            /* Orange */
-
-  /* Marketplace-specific colors — always consistent */
-  --amazon: #ff9900;
-  --walmart: #0071dc;
-  --ebay: #e53238;
-
-  /* Shadows — subtle depth */
-  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
-  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.4);
-  --shadow-lg: 0 8px 24px rgba(0, 0, 0, 0.5);
-  --shadow-glow: 0 0 20px var(--accent-glow);
-
-  /* Radii */
-  --radius-sm: 6px;
-  --radius-md: 8px;
-  --radius-lg: 12px;
-  --radius-xl: 16px;
-
-  /* Transitions */
-  --transition-fast: 120ms ease;
-  --transition-default: 200ms ease;
-  --transition-slow: 300ms ease;
-}
-```
-
-### Color Rules
-- **Never use pure white (`#fff`) for text.** `--text-primary` is the brightest anything gets. Pure white on dark backgrounds causes eye strain during long sessions.
-- **Never use pure black (`#000`) for backgrounds.** `--bg-root` has a subtle blue-gray tint that feels less harsh.
-- **Profit is always `--positive` (green). Loss is always `--negative` (red).** No exceptions. No other colors for financial positive/negative. The user needs to glance at a number and instantly know if it's good or bad.
-- **Marketplace colors are sacred.** Amazon is always orange. Walmart is always blue. eBay is always red. These match the brands and the user already associates them this way.
-- **The accent color is for interactive elements only.** Buttons, links, active states, focus rings. NOT decorative. NOT data. If accent is everywhere, nothing stands out.
+1. **Ink is the brand color.** Primary buttons, active tabs, selected rows in menus, chart bars and progress fills are near-black (`#111213`), flipping to near-white in dark mode. There is no indigo and no second brand hue.
+2. **Cobalt blue is for links, focus rings and "in transit / in progress".** Nothing else (not buttons, not decoration).
+3. **Semantic color only means something.** Green = delivered / profit / eligible / done. Red = cancelled / loss / error. Highlighter yellow = "needs your attention". Yellow is the one loud color and appears **only** where Parker has to act (missing COGS, a claim to file, an approval to request, a required setting that's empty).
+4. **Panels are labels.** White, a 1.5px ink outline, a 4px radius and a hard 2px offset shadow (`0 2px 0`), never a blur. A card with a title gets a solid black **label bar** header with condensed uppercase white text.
+5. **No gradients, glows, blurs, soft drop shadows or pastel fills.** Everything is flat print. (The skeleton shimmer is the only gradient, and it's a loading state.)
+6. **Three type voices, one variable family** (Archivo, `wdth` 62–125):
+   - **Archivo** for all UI text.
+   - **Condensed caps** (Archivo `wdth` 75, weight 700, uppercase, letter-spacing .06em, ~11px) for every label: table headers, label bars, field labels, tags, eyebrows. It's the print on a carton.
+   - **Expanded heavy** (Archivo `wdth` 112–125, weight 800–850) for big numbers and page titles. Hero money shows the cents at half size, raised: `$16,789` + small `.63`.
+   - **JetBrains Mono** only for identifiers: order #, ASIN, SKU, MSKU, FNSKU, tracking numbers, reimbursement/shipment/plan IDs, bin locations, file paths, reason codes. Money, quantities, percentages and dates stay in Archivo with `font-variant-numeric: tabular-nums` (the `.tabular-nums` class does exactly that and nothing else).
+7. **Small radii everywhere:** 2px tags, 3px inputs/buttons, 4px panels. `rounded-full` is for dots and round icon buttons only.
+8. **Density stays.** Compact 13px tables, 10–12px cell padding. Paper is not an excuse for fat padding.
 
 ---
 
-## Typography
+## 2. Light and dark
 
-```css
-:root {
-  /* Font stack — Geist for that Vercel/Linear feel */
-  --font-sans: 'Geist', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-  --font-mono: 'Geist Mono', 'SF Mono', 'Fira Code', 'Fira Mono', monospace;
+Both modes are first-class. The mode follows the OS; the **◐** button (sidebar footer on desktop, top bar on mobile) pins a choice in `localStorage` under `fl-theme`. A script in `src/app/layout.tsx` sets `data-mode` on `<html>` **before first paint**, so there is no flash.
 
-  /* Scale — tight and dense for dashboard data */
-  --text-xs: 0.6875rem;     /* 11px — fine print, timestamps */
-  --text-sm: 0.75rem;       /* 12px — table cells, secondary labels */
-  --text-base: 0.8125rem;   /* 13px — body text, primary labels */
-  --text-md: 0.875rem;      /* 14px — emphasized body */
-  --text-lg: 1rem;          /* 16px — section headers */
-  --text-xl: 1.25rem;       /* 20px — page titles */
-  --text-2xl: 1.5rem;       /* 24px — dashboard big numbers */
-  --text-3xl: 2rem;         /* 32px — hero stats */
-
-  /* Weight */
-  --font-normal: 400;
-  --font-medium: 500;
-  --font-semibold: 600;
-  --font-bold: 700;
-
-  /* Line height */
-  --leading-tight: 1.2;
-  --leading-normal: 1.5;
-  --leading-relaxed: 1.65;
-
-  /* Letter spacing */
-  --tracking-tight: -0.02em;    /* Headlines */
-  --tracking-normal: 0;          /* Body */
-  --tracking-wide: 0.04em;       /* All-caps labels */
-}
-```
-
-Import Geist:
-```html
-<link href="https://cdn.jsdelivr.net/npm/geist@1.3.0/dist/fonts/geist-sans/style.min.css" rel="stylesheet">
-<link href="https://cdn.jsdelivr.net/npm/geist@1.3.0/dist/fonts/geist-mono/style.min.css" rel="stylesheet">
-```
-
-### Typography Rules
-- **Numbers are monospace.** Always. Financial figures, dates, percentages, quantities — all in `--font-mono`. This is functional: monospace numbers align vertically in tables and make columns scannable. It also looks sharp.
-- **Big dashboard stats use `--font-bold` + `--tracking-tight` + `--text-3xl` or `--text-2xl`.** These are the first things the eye hits. Make them feel weighty.
-- **Table headers are `--text-xs` + `--font-medium` + `--tracking-wide` + uppercase + `--text-tertiary`.** Small, quiet, structural. The data speaks, not the headers.
-- **Don't mix too many sizes on one page.** A typical page uses 3-4 sizes max. More than that is visual noise.
-- **Never use Inter, Roboto, Arial, or system-default sans-serif.** Geist or bust. It's what separates "designed" from "generated."
+Dark mode is a near-black neutral, not an inversion: label bars go charcoal (`#2A2C30`), the sidebar goes black, the panel shadow disappears, ink becomes near-white, and the yellow highlight becomes a tint with yellow text.
 
 ---
 
-## Layout Patterns
+## 3. Tokens
 
-### Sidebar Navigation
-- Width: 240px (desktop), collapsible to 64px (icon-only), hidden with hamburger on mobile
-- Background: `--bg-surface` with a 1px `--border-subtle` right border
-- Logo/app name at top: `--text-lg` + `--font-semibold`
-- Nav sections grouped with small uppercase labels ("ANALYZE", "BOOKKEEPING", "INVENTORY")
-- Nav items: 32px height, `--radius-sm` rounded, `--text-sm`, icon + label
-- Active item: `--bg-active` background + `--accent` left border (2px) + `--text-primary` text
-- Hover: `--bg-hover` background
-- Transition: `--transition-fast` on all state changes
-- Bottom of sidebar: sync status ("Last synced 2h ago") + settings link
+All tokens are CSS variables on `:root` (light) and `:root[data-mode="dark"]`, exposed to Tailwind through `@theme inline` in `globals.css`. Component code only uses the Tailwind names.
 
-### Page Layout
-```
-┌─────────────────────────────────────────────┐
-│ Page Title                    [Date Range ▾] │  ← Page header: 56px height
-│ Subtitle / breadcrumb         [Filter] [Export]│
-├─────────────────────────────────────────────┤
-│                                             │
-│  ┌──────┐ ┌──────┐ ┌──────┐ ┌──────┐      │  ← Stat cards row (if applicable)
-│  │ Stat │ │ Stat │ │ Stat │ │ Stat │      │
-│  └──────┘ └──────┘ └──────┘ └──────┘      │
-│                                             │
-│  ┌─────────────────────────────────────┐   │  ← Chart (if applicable)
-│  │          Chart Area                  │   │
-│  └─────────────────────────────────────┘   │
-│                                             │
-│  ┌─────────────────────────────────────┐   │  ← Data table
-│  │  Search  │ Filters │     │ Export   │   │
-│  ├─────────────────────────────────────┤   │
-│  │  Column │ Column │ Column │ Column  │   │
-│  │  data   │ data   │ data   │ data    │   │
-│  │  ...    │ ...    │ ...    │ ...     │   │
-│  └─────────────────────────────────────┘   │
-│                                             │
-└─────────────────────────────────────────────┘
-```
+| Role | Tailwind name | Light | Dark |
+|---|---|---|---|
+| Page (the table) | `bg-bg-root` | `#ECEDEE` | `#0B0C0D` |
+| Panel / label stock | `bg-bg-surface` | `#FFFFFF` | `#17181A` |
+| Popover / modal | `bg-bg-elevated` | `#FFFFFF` | `#1F2023` |
+| Hover / active | `bg-bg-hover`, `bg-bg-active` | `#F4F5F6`, `#E6E7E9` | `#1F2023`, `#28292D` |
+| Input | `bg-bg-input` | `#FFFFFF` | `#17181A` |
+| Rules in a panel | `border-border-subtle` | `#E6E7E9` | `#28292D` |
+| Input borders | `border-border-default` | `#CDD0D5` | `#3A3C41` |
+| Panel outline, table-header rule | `border-border-strong` | `#111213` | `#3A3C41` |
+| Text | `text-text-primary / -secondary / -tertiary` | `#111213 / #43464B / #6E737A` | `#EDEEEF / #C4C7CC / #8C9199` |
+| Text on ink | `text-text-inverse` | `#FFFFFF` | `#111213` |
+| **Ink** (brand, primary actions, active) | `bg-accent`, `hover:bg-accent-hover`, `bg-accent-muted` | `#111213` | `#EDEEEF` |
+| **Cobalt** (links, focus, in transit) | `text-link`, `bg-link-muted` | `#2446D8` | `#8FA7FF` |
+| Profit / eligible / done | `text-positive`, `bg-positive-muted` | `#1E7A46` | `#5DC98C` |
+| Loss / error | `text-negative`, `bg-negative-muted` | `#BF3A2B` | `#F07C6C` |
+| Warning text (text-safe amber) | `text-warning`, `bg-warning-muted` | `#9A6B00` | `#F2CE6B` |
+| Needs attention (fill) | `bg-highlight`, `text-highlight-fg` | `#F4C21B` / `#17140F` | tint / `#F2CE6B` |
+| Label bar | `bg-bar-bg`, `text-bar-fg` | `#111213` / white | `#2A2C30` / `#EDEEEF` |
+| Sidebar / top bar | `bg-top-bg`, `text-top-fg` | `#111213` / white | `#000000` / `#EDEEEF` |
+| Chart series | `chart-1` … `chart-7` | ink, cobalt, gray, green, amber, violet, red | lightened equivalents |
+| Marketplaces | `amazon`, `walmart`, `ebay`, `paypal` | `#FF9900`, `#0071DC`, `#E53238`, `#009CDE` | same |
 
-- Page padding: 24px on all sides. 32px on large screens.
-- Section gaps: 20px between stat cards and chart, 20px between chart and table.
-- Max content width: none — dashboard pages should use full width. Data tables need room.
-- Scroll: page scrolls, not individual sections (except the table body on very long datasets).
+Shadows: `shadow-sm` = the hard panel shadow (`0 2px 0`, none in dark). `shadow-md/lg/xl/2xl` = the popover shadow (`0 12px 30px`), for dropdowns and modals only. `shadow-glow` is `none`.
 
-### Stat Cards
-- Background: `--bg-surface`
-- Border: 1px `--border-subtle`
-- Radius: `--radius-lg`
-- Padding: 20px
-- Value: `--text-2xl` + `--font-bold` + `--font-mono` + `--text-primary`
-- Label: `--text-xs` + `--font-medium` + `--tracking-wide` + uppercase + `--text-tertiary`
-- Trend indicator: small `--text-xs` badge showing +/- % change from previous period, colored `--positive` or `--negative`
-- Subtle top border gradient: 2px linear-gradient using `--accent` to transparent, or marketplace color — gives each card a premium touch
+Radii: `rounded-sm` 2px, `rounded-md` 3px, `rounded-lg`/`xl`/`2xl` 4px.
 
-### Data Tables
-This is the single most important component. The user will spend 80% of their time in tables. They must be fast, dense, and scannable.
+Fonts: `font-sans` = Archivo (`--font-archivo`), `font-mono` = JetBrains Mono (`--font-jbmono`), both loaded with `next/font/google` in `layout.tsx`. Archivo is variable, so it's loaded without a `weight` option.
 
-- Background: `--bg-surface`
-- Border: 1px `--border-subtle`, `--radius-lg`
-- Header row: `--bg-elevated`, sticky, `--text-xs` uppercase, `--text-tertiary`, `--font-medium`
-- Body rows: `--text-sm`, `--font-mono` for numbers, `--text-secondary` for text
-- Row height: 40px — dense but not cramped
-- Row hover: `--bg-hover`
-- Row borders: 1px `--border-subtle` between rows
-- Alternating row colors: NO. Hover highlight is enough. Zebra striping looks dated.
-- Selected row: `--accent-muted` background
-- Pagination: bottom of table, `--text-sm`, showing "1-50 of 1,234 results"
-- Column resizing: grab handle on header border, cursor changes to col-resize
-- Sort indicators: subtle arrow icon in header, `--text-tertiary` when inactive, `--text-primary` when active
-- Totals row: sticky bottom, `--bg-elevated`, `--font-semibold`, separated by a 2px `--border-strong` top border. This row shows column totals for financial data. It must ALWAYS be visible.
-
-### Charts (Recharts)
-- Background: transparent (sits on the page background or inside a card)
-- Grid lines: `--border-subtle`, dashed, 1px
-- Axis labels: `--text-xs`, `--text-tertiary`, `--font-mono` for values
-- Line charts: 2px stroke, rounded line joins, dot on hover only (not always visible)
-- Bar charts: `--radius-sm` on top corners, 2px gap between bars
-- Tooltips: `--bg-elevated` background, `--border-default` border, `--shadow-md`, `--radius-md`, `--text-sm`
-- Legend: `--text-xs`, colored dots (not squares), positioned top-right or below chart
-- Area under lines: gradient fill from line color at 20% opacity to transparent
-- Animate on load: bars grow from bottom, lines draw left to right, 400ms ease-out
+**Never** use Tailwind's raw palette (`green-500`, `amber-400`, `slate-800`, `blue-600`…) or hex values in TSX. If a meaning isn't covered by the table, it probably shouldn't be colored.
 
 ---
 
-## Component Patterns
+## 4. Components
+
+Class recipes live in `globals.css` under `@layer components`; the React wrappers are in `src/components/ui/Paper.tsx`.
+
+### Panel and label bar
+```tsx
+<section className="panel">                         {/* white, 1.5px ink outline, 4px radius, hard shadow */}
+  <div className="panel-bar">                       {/* black bar, condensed caps */}
+    <span>Revenue &amp; profit</span>
+    <span className="panel-bar-caption">per day</span>   {/* right side at 70% */}
+  </div>
+  <div className="p-4">…</div>
+</section>
+```
+Or `<Panel title="Revenue & profit" caption="per day">…</Panel>`.
+- Any card with a title gets a label bar. Small stat tiles use an eyebrow (`label-caps text-text-tertiary`) instead.
+- The bar is a dark surface in both modes, so it re-scopes the text and semantic tokens inside it: `text-text-primary`, `text-positive`, `text-link` etc. stay readable there. Controls in a bar are outlined (`border-[1.5px] border-bar-fg/40`), never white stickers.
+- Modals are panels with `shadow-xl`, a `bg-black/60` scrim (no blur), and either a label bar (simple title) or a header row separated by a strong 1.5px rule (title + subtitle).
+
+### Type
+- `page-title`: every page `<h1>` (26px, 800, `wdth` 112). `PageHeader` renders it.
+- `label-caps`: every label, eyebrow, field label.
+- `section-title`: a caps heading between panels.
+- `hero-num` / `stat-num`: big numbers (expanded heavy, tabular). Wrap money in `<Money cents={…} />` to get the half-size raised cents.
 
 ### Buttons
-```
-Primary:   bg: --accent        text: white          hover: --accent-hover     radius: --radius-md
-Secondary: bg: --bg-elevated   text: --text-primary  hover: --bg-hover        border: --border-default
-Ghost:     bg: transparent     text: --text-secondary hover: --bg-hover        no border
-Danger:    bg: --negative-muted text: --negative      hover: bg --negative/20%
-```
-- Height: 32px (sm), 36px (md), 40px (lg)
-- Padding: 12px horizontal (sm), 16px (md), 20px (lg)
-- Font: `--text-sm`, `--font-medium`
-- Transition: `--transition-fast` on background and border
-- Focus ring: 2px `--accent-glow` outline, 2px offset
-- Icons in buttons: 16px, 4px gap from text
+- **Solid (primary)**: `bg-accent text-text-inverse font-bold hover:bg-accent-hover rounded-md` (or `.btn`). One per area. **Always `text-text-inverse` on `bg-accent`**, never `text-white`: ink turns near-white in dark mode.
+- **Ghost (secondary)**: `bg-bg-surface border-[1.5px] border-border-strong text-text-primary font-semibold hover:bg-bg-hover` (or `.btn .btn-ghost`).
+- **Quiet**: text only, `hover:bg-bg-hover` (or `.btn-quiet`).
+- Never a colored (green/blue/amber) button.
 
 ### Inputs
-- Height: 36px
-- Background: `--bg-input`
-- Border: 1px `--border-default`
-- Radius: `--radius-md`
-- Text: `--text-sm`, `--text-primary`
-- Placeholder: `--text-tertiary`
-- Focus: border becomes `--accent`, subtle `--shadow-glow`
-- Padding: 10px horizontal
+White (`bg-bg-input`), `border border-border-default` (rendered 1.5px), 3px radius, 34px tall. Focus is cobalt: border `--link` plus a 3px `--link-muted` ring. `globals.css` applies the 1.5px width and the focus treatment to every `input/select/textarea` that has a `border` class, so pages don't repeat it.
 
-### Date Range Picker
-- Looks like a button/input hybrid: shows the current range as text ("Last 30 days" or "Mar 1 – Mar 31, 2026")
-- Click opens a dropdown with preset options (Today, 7d, 30d, This Month, Last Month, This Quarter, YTD, Custom)
-- Custom opens a calendar
-- Calendar: dark themed, `--bg-elevated`, current day highlighted with `--accent`, selected range has `--accent-muted` background fill
-- This component appears on EVERY report page. Build it once, beautifully, and reuse it.
+### Segmented toggle
+Date basis, marketplace filters, location/status/channel tabs, month windows: `<Seg options value onChange />` or `.seg` with `aria-current="true"` on the active child. Outlined label with the hard shadow; the active option prints in solid ink.
 
-### Badges / Tags
-- Small inline indicators for status, marketplace, category
-- Height: 22px
-- Padding: 6px horizontal
-- Radius: `--radius-sm`
-- Font: `--text-xs`, `--font-medium`
-- Marketplace badges use marketplace colors on muted backgrounds:
-  - Amazon: `--amazon` text on `rgba(255, 153, 0, 0.12)` bg
-  - Walmart: `--walmart` text on `rgba(0, 113, 220, 0.12)` bg
-  - eBay: `--ebay` text on `rgba(229, 50, 56, 0.12)` bg
-- Status badges:
-  - Profit: `--positive` text on `--positive-muted` bg
-  - Loss: `--negative` text on `--negative-muted` bg
+### Tags (badges, statuses)
+`<span className="tag …">` = an outlined condensed-caps stamp, 2px radius, border in `currentColor`. The color class sets the variant:
+- neutral (default), `tag-green` / `text-positive`, `tag-red` / `text-negative`, `tag-blue` / `text-link` (in transit, processing, registering), `text-warning` (caution),
+- `tag-attn`: solid yellow, **only** for things that need action (MISSING COGS, NEEDS APPROVAL, CATALOG ISSUE, CLAIM DUE, No COGS).
+- Marketplace: `mkt mkt-amazon | mkt-walmart | mkt-ebay | mkt-paypal`: a neutral stamp with a small brand-colored square. Marketplace colors never fill anything larger than that square.
 
-### Empty States
-- When a page has no data (pre-sync, no results for filters):
-- Centered in the content area
-- Subtle icon (outline style, 48px, `--text-tertiary`)
-- Headline: `--text-md`, `--text-secondary`
-- Description: `--text-sm`, `--text-tertiary`
-- CTA if applicable: primary button ("Sync Now", "Import Data", "Adjust Filters")
-- Do NOT show a blank white/dark void. Every page must handle the empty state.
-
-### Loading / Skeleton States
-- Skeleton elements: `--bg-hover` background with a subtle shimmer animation (left-to-right gradient sweep)
-- Match the EXACT layout of the loaded state — same heights, widths, positions
-- Skeleton for stat cards: rectangle where the number goes, smaller rectangle for the label
-- Skeleton for tables: rows of rectangles matching column widths
-- Skeleton for charts: rectangle matching chart dimensions
-- Animation: `@keyframes shimmer` — translateX from -100% to 100%, 1.5s infinite
-
-```css
-@keyframes shimmer {
-  0% { background-position: -200% 0; }
-  100% { background-position: 200% 0; }
-}
-.skeleton {
-  background: linear-gradient(
-    90deg,
-    var(--bg-hover) 25%,
-    var(--bg-active) 50%,
-    var(--bg-hover) 75%
-  );
-  background-size: 200% 100%;
-  animation: shimmer 1.5s infinite;
-  border-radius: var(--radius-sm);
-}
+### Status rail (signature)
+Three sequential stages next to a bold status word; use it only where the stages really are sequential. Listing batches use it: Draft → sent to Amazon (sending/ready/boxing/placement/shipping, cobalt) → Shipped/Closed (green); failed batches are struck through in red.
+```tsx
+<Rail step={1} label="Boxing" />      {/* step 0/1/2, failed */}
 ```
+Detail pages can use the large version (`.journey` with three `.step` columns: 6px top bar, caps label, date).
+
+### Banners
+- `attn-banner`: the yellow "you need to do something" banner (missing COGS, required ship-from fields, unassigned box items, claims to file, runway when burning cash). Text inside reads in the highlight ink automatically.
+- `flash`: a sticker for information and results (a 6px ink left edge). `flash-bad` for errors (red edge); add `border-l-positive` for success, `border-l-link` for in-progress.
+
+### Tables
+- Header row on the panel stock; `th` is condensed caps (10.5px, tertiary) over a **1.5px ink rule**. Both come from the base styles in `globals.css`, so a plain `<th>` is already right.
+- Rows: 1px `border-border-subtle` dividers, `hover:bg-bg-hover`. No zebra stripes.
+- Totals row: a 1.5px `border-border-strong` top rule, bold, tabular.
+- Money and quantities right-aligned and `tabular-nums`; identifiers in `font-mono`.
+- `DataTable` (TanStack) already implements all of this plus the search box and the pager.
+
+### Charts (Recharts)
+- Pass colors as CSS variables so they follow the mode: `fill="var(--color-chart-1)"`, grid `stroke="var(--color-border-subtle)"`.
+- **Monochrome first**: one series = ink. Two = ink + cobalt. Use `--color-positive` / `--color-negative` for profit/loss (per-bar `Cell` when a value can go negative). `chart-3…7` only for real categorical splits.
+- Bars: square tops (`radius={[1, 1, 0, 0]}`), no gradients, a solid 1.5px baseline in `--color-border-strong`, horizontal gridlines only.
+- Tooltips are panels: `content={<ChartTooltip format={…} />}` from `src/components/charts/ChartTooltip.tsx`.
+- Prefer a **ranked meter list** (name + amount + % over a 4px `.meter` bar) to a pie or donut. The Dashboard's expense breakdown is the example.
+
+### Sidebar and mobile bar
+The sidebar is the app's header, on `bg-top-bg` / `text-top-fg` in both modes: the brand in expanded 900-weight caps next to a small carton mark, section titles in caps at 45%, nav links at 62% opacity going to 100% when active with a gray pill behind the active one. Under 1024px a 52px black top bar shows the menu button, the brand and ◐.
+
+### Loading
+Skeletons use `.skeleton` inside panels, matching the loaded layout.
 
 ---
 
-## Special Touches
+## 5. Guardrails
 
-These are the details that separate "built by AI" from "designed by a human." Apply them.
+- Don't add warm, cream, kraft or brown backgrounds (rejected).
+- Don't soften Paper into rounded (8–16px) cards, blurred shadows or pastel fills (that was "Slate").
+- Don't bring back indigo, glows, gradients or a second brand hue. Ink is the brand.
+- Keep yellow rare: it means "act here" and nothing else.
+- Cobalt is not a button color.
+- Keep FlipLedger's density.
+- Printed labels are not UI: `/api/labels/print`, the FNSKU/box/shipping label PDFs and bwip-js barcodes keep their own output format.
 
-### 1. Gradient Top Bar on Cards
-A thin (2px) gradient line across the top of stat cards and section cards. Uses `--accent` fading to transparent, or contextual colors (green for profit card, red for loss card, marketplace color for marketplace-specific cards). Barely visible but adds premium feel.
+## 6. Checklist for a new or changed page
 
-```css
-.card-profit { border-top: 2px solid var(--positive); }
-.card-loss { border-top: 2px solid var(--negative); }
-.card-default { border-image: linear-gradient(to right, var(--accent), transparent) 1; }
-```
-
-### 2. Monochrome Icons with Color on Hover
-Sidebar icons and table action icons are `--text-tertiary` by default. On hover, they transition to `--text-primary` or `--accent`. Subtle but alive.
-
-### 3. Smooth Number Transitions
-When switching date ranges or filters, big dashboard numbers should animate from old value to new value using a counting animation (like a slot machine). Not instant replacement. This makes the app feel responsive and alive.
-
-```javascript
-// Concept — use framer-motion or a counter hook
-<AnimatedNumber value={totalProfit} duration={400} />
-```
-
-### 4. Contextual Row Coloring
-In profitability tables, rows with negative profit get a barely-visible `--negative-muted` background tint. Not a harsh red row — just a 5-8% opacity wash. Enough to make losing products scannable at a glance without making the table look like a Christmas tree.
-
-### 5. Micro-interactions on Filters
-When a filter is applied and the table updates, add a brief (200ms) fade-in on the new data. Not a full page transition — just the table body content. Prevents the jarring "data just teleported" feel.
-
-### 6. "Breathing" Sync Indicator
-In the sidebar footer, the sync status has a small dot. When syncing: the dot pulses gently (opacity 0.4 → 1.0 → 0.4, 2s infinite). When idle: solid `--positive` dot. When error: solid `--negative` dot. When stale (>6 hours): `--warning` dot.
-
-### 7. Totals Row Shadow
-The sticky totals row at the bottom of tables gets a subtle upward shadow (`0 -4px 12px rgba(0,0,0,0.3)`) so it looks like it's floating above the scrolled data. This is what Linear does and it feels great.
-
----
-
-## Anti-Patterns — Visual
-
-These will make the app look AI-generated. Avoid all of them.
-
-- **Purple gradient backgrounds.** The #1 tell of AI-generated UI. Our accent is indigo and it's used for interactive elements only, never as a decorative background gradient.
-- **Rounded everything (border-radius: 9999px).** Pill shapes on cards and containers look juvenile. Use `--radius-md` (8px) and `--radius-lg` (12px). Reserve full rounding for small badges and avatars only.
-- **Card shadows on dark backgrounds.** On dark themes, shadows are barely visible and add visual mud. Use borders (`--border-subtle`) for card definition instead. Reserve shadows for elevated elements (modals, dropdowns, tooltips).
-- **Gradient text.** Never. Financial data is not a tech startup landing page.
-- **Too many colors at once.** A dashboard page should be 90% neutral (grays/dark), 8% semantic (green/red for data), 2% accent (indigo for interactive). If the page looks colorful, something is wrong.
-- **Fat padding on everything.** Dashboard UIs should feel dense and efficient. 20px card padding, 10px cell padding, 12px button padding. Not 32px everywhere.
-- **Default Tailwind grays.** Tailwind's gray-800/gray-900 are a different tint than our custom palette. Use the CSS variables. Every time.
-- **Centered body text.** Left-align everything except hero stats and empty states. Centered paragraphs of text look amateurish.
-- **Icon-only buttons without tooltips.** If a button is icon-only, it needs a tooltip on hover. Otherwise it's a mystery meat navigation.
-- **Scrollbars that don't match the theme.** Style the scrollbars dark. Webkit supports `::webkit-scrollbar` customization.
-
-```css
-::-webkit-scrollbar { width: 8px; height: 8px; }
-::-webkit-scrollbar-track { background: var(--bg-root); }
-::-webkit-scrollbar-thumb { background: var(--border-default); border-radius: 4px; }
-::-webkit-scrollbar-thumb:hover { background: var(--border-strong); }
-```
-
----
-
-## Tailwind Config
-
-Override Tailwind defaults to match this design system exactly:
-
-```javascript
-// tailwind.config.js — key overrides (not exhaustive, Claude Code should complete this)
-module.exports = {
-  darkMode: 'class',
-  theme: {
-    extend: {
-      colors: {
-        bg: {
-          root: '#0a0a0c',
-          surface: '#111114',
-          elevated: '#18181c',
-          hover: '#1e1e24',
-          active: '#25252d',
-          input: '#111114',
-        },
-        border: {
-          subtle: '#1e1e24',
-          default: '#2a2a33',
-          strong: '#3a3a44',
-        },
-        text: {
-          primary: '#f0f0f3',
-          secondary: '#a0a0b0',
-          tertiary: '#606070',
-        },
-        accent: {
-          DEFAULT: '#6366f1',
-          hover: '#818cf8',
-          muted: 'rgba(99, 102, 241, 0.12)',
-        },
-        positive: {
-          DEFAULT: '#22c55e',
-          muted: 'rgba(34, 197, 94, 0.12)',
-        },
-        negative: {
-          DEFAULT: '#ef4444',
-          muted: 'rgba(239, 68, 68, 0.12)',
-        },
-        amazon: '#ff9900',
-        walmart: '#0071dc',
-        ebay: '#e53238',
-      },
-      fontFamily: {
-        sans: ['Geist', '-apple-system', 'BlinkMacSystemFont', 'sans-serif'],
-        mono: ['Geist Mono', 'SF Mono', 'Fira Code', 'monospace'],
-      },
-      borderRadius: {
-        sm: '6px',
-        md: '8px',
-        lg: '12px',
-        xl: '16px',
-      },
-      fontSize: {
-        xs: '0.6875rem',
-        sm: '0.75rem',
-        base: '0.8125rem',
-        md: '0.875rem',
-        lg: '1rem',
-        xl: '1.25rem',
-        '2xl': '1.5rem',
-        '3xl': '2rem',
-      },
-    },
-  },
-}
-```
-
----
-
-## Reference This File
-
-When building any page, Claude Code should:
-1. Check this file for the component pattern (table? stat card? chart?)
-2. Use the exact CSS variables — not Tailwind defaults, not eyeballed values
-3. Apply the special touches (gradient top bars, monospace numbers, contextual row colors)
-4. Run the anti-pattern checklist before marking a page done
-
-If a page looks like it was generated by ChatGPT or a shadcn template — it needs to be redesigned. This app should look like it cost $50K to design. It didn't, but it should look like it did.
+1. `PageHeader` (or a `page-title` h1) and `StatCard`s for the headline numbers.
+2. Every titled card is a `panel` with a `panel-bar`.
+3. Tables use `DataTable` or plain `<th>`s (base styles do the rest), identifiers in mono, numbers tabular.
+4. Status = `tag` (or `Rail` for a real sequence); only needs-action states are `tag-attn` / `attn-banner`.
+5. No raw palette classes, no hex, no `text-white` on ink, no `shadow-lg` on cards, no blur.
+6. Look at it in light **and** dark, at desktop width and at 375px.

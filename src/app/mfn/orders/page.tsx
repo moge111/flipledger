@@ -66,14 +66,14 @@ function IdentifierChip({ label, value, href }: { label: string; value: string |
   if (!value) return null;
   return (
     <div className="flex items-center gap-1 min-w-0">
-      <span className="text-text-tertiary/60 uppercase tracking-wide shrink-0">{label}</span>
+      <span className="text-text-tertiary/60 label-caps shrink-0">{label}</span>
       {href
         ? <a
             href={href}
             target="_blank"
             rel="noopener noreferrer"
             onClick={e => e.stopPropagation()}
-            className="text-accent truncate hover:underline"
+            className="text-link truncate hover:underline"
             title={`Open ${label} in Seller Central: ${value}`}
           >
             {value}
@@ -138,30 +138,34 @@ export default function MfnOrdersPage() {
     });
   }, [orders, store, search, dateFilter]);
 
-  const stores: { key: StoreFilter; label: string; n: number; tone: string }[] = [
-    { key: 'all', label: 'All Stores', n: counts.all, tone: 'text-text-primary' },
-    { key: 'amazon', label: 'Amazon', n: counts.amazon, tone: 'text-amazon' },
-    { key: 'walmart', label: 'Walmart', n: counts.walmart, tone: 'text-walmart' },
-    { key: 'ebay', label: 'eBay', n: counts.ebay, tone: 'text-ebay' },
+  // marketplace colors stay small: a square next to the name, never colored text
+  const stores: { key: StoreFilter; label: string; n: number; dot: string }[] = [
+    { key: 'all', label: 'All Stores', n: counts.all, dot: '' },
+    { key: 'amazon', label: 'Amazon', n: counts.amazon, dot: 'bg-amazon' },
+    { key: 'walmart', label: 'Walmart', n: counts.walmart, dot: 'bg-walmart' },
+    { key: 'ebay', label: 'eBay', n: counts.ebay, dot: 'bg-ebay' },
   ];
 
   return (
-    <div className="flex h-full gap-4 p-4">
+    <div className="flex h-full flex-col gap-4 p-4 lg:flex-row">
       {/* Stores sidebar */}
-      <aside className="w-56 shrink-0 rounded-lg border border-border-default bg-bg-surface p-3">
-        <div className="mb-2 px-1 text-xs font-semibold uppercase tracking-wide text-text-tertiary">Stores</div>
-        <div className="space-y-1">
+      <aside className="panel w-full shrink-0 self-start lg:w-56">
+        <div className="panel-bar"><span>Stores</span></div>
+        <div className="space-y-1 p-2">
           {stores.map((s) => (
             <button
               key={s.key}
               type="button"
               onClick={() => setStore(s.key)}
               className={`flex w-full items-center justify-between rounded-md px-3 py-2 text-sm transition-colors ${
-                store === s.key ? 'border border-accent/40 bg-accent/5' : 'border border-transparent hover:bg-bg-elevated'
+                store === s.key ? 'bg-accent text-text-inverse' : 'text-text-primary hover:bg-bg-hover'
               }`}
             >
-              <span className={`font-medium ${s.tone}`}>{s.label}</span>
-              <span className="font-mono text-text-secondary">{s.n}</span>
+              <span className="flex items-center gap-2 font-semibold">
+                {s.dot && <span className={`h-2 w-2 rounded-[1px] ${s.dot}`} />}
+                {s.label}
+              </span>
+              <span className="tabular-nums opacity-80">{s.n}</span>
             </button>
           ))}
         </div>
@@ -170,14 +174,14 @@ export default function MfnOrdersPage() {
       {/* Main */}
       <div className="flex min-w-0 flex-1 flex-col">
         {/* Header + toolbar */}
-        <div className="mb-3 flex items-center justify-between">
+        <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
           <div>
-            <h1 className="text-lg font-semibold text-text-primary">MFN Orders</h1>
+            <h1 className="page-title">MFN Orders</h1>
             <p className="text-sm text-text-tertiary">Merchant-fulfilled orders awaiting shipment</p>
           </div>
           <button
             onClick={() => load()}
-            className="flex items-center gap-2 rounded-md border border-border-default bg-bg-surface px-3 py-1.5 text-sm text-text-secondary hover:bg-bg-elevated"
+            className="flex items-center gap-2 rounded-md border-[1.5px] border-border-strong bg-bg-surface px-3 py-1.5 text-sm text-text-secondary hover:bg-bg-hover"
           >
             <RefreshCw size={14} className={loading ? 'animate-spin' : ''} />
             Refresh
@@ -191,18 +195,16 @@ export default function MfnOrdersPage() {
               value={search}
               onChange={(e) => setSearch(e.target.value)}
               placeholder="Search order number, SKU, or title…"
-              className="h-9 w-full rounded-md border border-border-default bg-bg-input pl-9 pr-3 text-sm text-text-primary placeholder-text-tertiary focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent/25"
+              className="h-9 w-full rounded-md border border-border-default bg-bg-input pl-9 pr-3 text-sm text-text-primary placeholder-text-tertiary focus:border-link focus:outline-none focus:ring-[3px] focus:ring-link-muted"
             />
           </div>
 
-          <div className="flex rounded-md border border-border-default bg-bg-surface p-0.5">
+          <div className="seg" role="group" aria-label="Status">
             {STATUS_TABS.map((t) => (
               <button
                 key={t.value}
                 onClick={() => setStatus(t.value)}
-                className={`rounded px-3 py-1.5 text-sm font-medium transition-colors ${
-                  status === t.value ? 'bg-accent text-white' : 'text-text-secondary hover:text-text-primary'
-                }`}
+                aria-current={status === t.value ? 'true' : undefined}
               >
                 {t.label}
               </button>
@@ -212,7 +214,7 @@ export default function MfnOrdersPage() {
           <select
             value={dateFilter}
             onChange={(e) => setDateFilter(e.target.value as DateFilter)}
-            className="h-9 rounded-md border border-border-default bg-bg-surface px-3 text-sm text-text-secondary focus:border-accent focus:outline-none"
+            className="h-9 rounded-md border border-border-default bg-bg-surface px-3 text-sm text-text-secondary focus:border-link focus:outline-none"
           >
             <option value="all">All Times</option>
             <option value="today">Today</option>
@@ -220,8 +222,11 @@ export default function MfnOrdersPage() {
           </select>
         </div>
 
+        {/* Column header + rows scroll sideways together on narrow screens */}
+        <div className="flex min-h-0 flex-1 flex-col overflow-x-auto">
+        <div className="flex min-h-0 min-w-[640px] flex-1 flex-col">
         {/* Column header */}
-        <div className="grid grid-cols-[1fr_180px_120px_110px_90px] gap-3 border-b border-border-default px-3 pb-2 text-xs font-semibold uppercase tracking-wide text-text-tertiary">
+        <div className="grid grid-cols-[1fr_180px_120px_110px_90px] gap-3 border-b-[1.5px] border-border-strong px-3 pb-2 text-[10.5px] label-caps text-text-tertiary">
           <div>Order Details</div>
           <div>Status</div>
           <div>Items</div>
@@ -242,7 +247,7 @@ export default function MfnOrdersPage() {
             visible.map((o) => (
               <div
                 key={o.orderId}
-                className="grid grid-cols-[1fr_180px_120px_110px_90px] items-center gap-3 border-b border-border-subtle px-3 py-3 hover:bg-bg-elevated/50"
+                className="grid grid-cols-[1fr_180px_120px_110px_90px] items-center gap-3 border-b border-border-subtle px-3 py-3 hover:bg-bg-hover"
               >
                 {/* Order Details */}
                 <div className="flex min-w-0 items-center gap-3">
@@ -265,7 +270,7 @@ export default function MfnOrdersPage() {
                       href={orderUrl(o.orderId, o.marketplace)}
                       target="_blank"
                       rel="noopener noreferrer"
-                      className="inline-flex items-center gap-1 font-mono text-sm font-semibold text-accent hover:underline"
+                      className="inline-flex items-center gap-1 font-mono text-sm font-semibold text-link hover:underline"
                     >
                       #{o.orderId}
                       <ExternalLink size={12} className="opacity-70" />
@@ -275,7 +280,7 @@ export default function MfnOrdersPage() {
                     </div>
                     <div className="mt-0.5 flex items-center gap-2 text-xs font-mono text-text-tertiary">
                       <IdentifierChip label="MSKU" value={o.sku || o.asin} href={sellerCentralSkuUrl(o.sku || o.asin, o.marketplace)} />
-                      {o.bin && <span className="shrink-0 rounded bg-accent/15 px-1.5 py-0.5 font-semibold text-accent">Bin {o.bin}</span>}
+                      {o.bin && <span className="shrink-0 rounded bg-accent px-1.5 py-0.5 font-semibold text-text-inverse">Bin {o.bin}</span>}
                       {o.itemCount > 1 && <span className="shrink-0">· {o.itemCount} items</span>}
                     </div>
                   </div>
@@ -299,7 +304,7 @@ export default function MfnOrdersPage() {
 
                 {/* Items */}
                 <div className="text-sm text-text-secondary">
-                  <div>Ordered: <span className="font-mono text-text-primary">{o.quantity ?? 0}</span></div>
+                  <div>Ordered: <span className="text-text-primary tabular-nums">{o.quantity ?? 0}</span></div>
                 </div>
 
                 {/* Shipping */}
@@ -311,11 +316,13 @@ export default function MfnOrdersPage() {
             ))
           )}
         </div>
+        </div>
+        </div>
       </div>
 
       {lightbox && (
         <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4"
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4"
           onClick={() => setLightbox(null)}
         >
           <div
@@ -329,7 +336,7 @@ export default function MfnOrdersPage() {
                   {lightbox.asin && <span>ASIN {lightbox.asin}</span>}
                   {lightbox.sku && (
                     sellerCentralSkuUrl(lightbox.sku, lightbox.marketplace)
-                      ? <a href={sellerCentralSkuUrl(lightbox.sku, lightbox.marketplace)!} target="_blank" rel="noopener noreferrer" className="text-accent hover:underline" title={`Open MSKU in Seller Central: ${lightbox.sku}`}>MSKU {lightbox.sku}</a>
+                      ? <a href={sellerCentralSkuUrl(lightbox.sku, lightbox.marketplace)!} target="_blank" rel="noopener noreferrer" className="text-link hover:underline" title={`Open MSKU in Seller Central: ${lightbox.sku}`}>MSKU {lightbox.sku}</a>
                       : <span>MSKU {lightbox.sku}</span>
                   )}
                 </div>

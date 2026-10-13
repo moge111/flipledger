@@ -7,12 +7,15 @@ import { syncFinancialEvents, resetServiceFeeTracker } from './finances';
 import { syncFinancesV2024Transactions } from './financesV2024';
 import { dedupAmazonReimbursements } from './dedupReimbursements';
 import { dedupServiceFees } from './dedupServiceFees';
+import { syncAmazonServiceFeesFromV2024 } from './serviceFeesV2024';
+import { rebuildLostInventoryOffsets } from './lostInventoryOffsets';
 import { syncOrders } from './orders';
 import { syncFBAInventory } from './inventory';
 import { enrichProductCatalog } from './catalog';
 import { syncSettlementReports } from './reports';
 import { estimateAndBackfillFees, overrideEstimatedFees } from './fee-estimator';
 import { generateRecurringExpenses } from '../recurring-expenses';
+import { costNewSales } from '../fifo';
 import type { SPAPICredentials, SyncResult, SyncStatus } from './types';
 import { openDb } from '@/lib/db-conn';
 import { createLogger } from '@/lib/log';
@@ -99,6 +102,10 @@ export async function runFullSync(
     totalRecords += finResult.eventsProcessed;
     log.info(`Financial events: ${finResult.eventsProcessed} events, ${finResult.errors.length} errors`);
 
+    // Real fees just landed — drop their estimates now rather than at step 6,
+    // or an order carries both for the rest of the sync and reads double.
+    overrideEstimatedFees();
+
     // 2b. Finances v2024 — per-transaction deferral status + maturityDate.
     // The v0 sync above doesn't expose DD7 hold info; v2024 does. Keeps both
     // in sync — we use v0 for event ingestion and v2024 for cash-flow timing.
@@ -171,6 +178,20 @@ export async function runFullSync(
     // numeric reimbursements (from FBA Reimbursements Report). Idempotent.
     dedupAmazonReimbursements();
 
+    // Cost any sales this sync wrote, now rather than at the end of the tick.
+    costNewSales('Amazon');
+
+    // Cost offsets for inventory lost before it sold (rebuilt from the
+    // reimbursements each run; see lostInventoryOffsets.ts).
+    try {
+      const lioDb = getDb();
+      let lio: ReturnType<typeof rebuildLostInventoryOffsets>;
+      try { lio = rebuildLostInventoryOffsets(lioDb); } finally { lioDb.close(); }
+      if (lio.offsets) log.info(`Lost-inventory offsets: ${lio.offsets} rows, $${(lio.totalCents / 100).toFixed(2)}`);
+    } catch (err) {
+      log.error('Lost-inventory offset rebuild error:', err);
+    }
+
     // Self-healing dedup: ServiceFeeEvent rolling-date duplicates. Amazon
     // re-dates pending service fees on every poll; if a stale module ever
     // re-introduces day-scoped dedup behavior we collapse them here.
@@ -186,6 +207,16 @@ export async function runFullSync(
       }
     } catch (err) {
       log.error('Service-fee dedup error:', err);
+    }
+
+    // Amazon order-less service fees from the cutover on are a projection of
+    // the v2024 ledger (stable transaction IDs, real dates). Rebuilt after the
+    // settlement parser and v2024 sync so it reflects both. Idempotent.
+    try {
+      const v2 = syncAmazonServiceFeesFromV2024();
+      log.info(`Service fees (v2024): ${v2.transactions} transactions → ${v2.groups} rows, $${(-v2.totalCents / 100).toFixed(2)}`);
+    } catch (err) {
+      log.error('v2024 service-fee rebuild error:', err);
     }
 
     // Collect all errors

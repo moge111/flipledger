@@ -12,7 +12,7 @@ export async function GET(req: NextRequest) {
   const where = status === 'all' ? '' : `WHERE status = '${status.replace(/'/g, "''")}'`;
 
   const rows = db.prepare(`
-    SELECT id, reimbursement_id as reimbursementId, reimbursement_date as reimbursementDate,
+    SELECT id, CASE WHEN instr(reimbursement_id, ':') > 0 THEN substr(reimbursement_id, 1, instr(reimbursement_id, ':') - 1) ELSE reimbursement_id END as reimbursementId, reimbursement_date as reimbursementDate,
            asin, sku, product_name as productName, quantity,
            paid_cents as paidCents, expected_cents as expectedCents, gap_cents as gapCents,
            reason, status, filed_at as filedAt, claim_notes as claimNotes

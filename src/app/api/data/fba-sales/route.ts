@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { MKT_DATE, marketToday, marketDaysAgo, addDays } from '@/lib/market-day';
 import { openDb } from '@/lib/db-conn';
+import { lineSettledRefundExpr } from '@/lib/accounting-sql';
+import { replacementReasonLabel } from '@/lib/sp-api/replacementsReport';
 import { marketplaceParam } from '@/lib/request-params';
 import { createLogger } from '@/lib/log';
 
@@ -38,12 +40,17 @@ export async function GET(request: NextRequest) {
         COALESCE(p.name, oi.asin) as productName,
         oi.quantity,
         oi.total_price as salePrice,
+        -- Settled refunds against this line (review C3).
+        CAST(ROUND(${lineSettledRefundExpr()}) AS INTEGER) as refunded,
         COALESCE(oi.cogs_per_unit, 0) as buyCostPerUnit,
         CASE WHEN ot.order_total > 0
           THEN CAST(COALESCE(fd.totalFees, 0) * oi.total_price * 1.0 / ot.order_total AS INTEGER)
           ELSE COALESCE(fd.totalFees, 0)
         END as fees,
-        o.is_estimated as isEstimated
+        o.is_estimated as isEstimated,
+        COALESCE(o.is_replacement, 0) as isReplacement,
+        o.replaced_order_id as replacedOrderId,
+        o.replacement_reason_code as replacementReasonCode
       FROM orders o
       JOIN order_items oi ON o.order_id = oi.order_id
       JOIN (SELECT order_id, MIN(posted_date) as posted_date FROM financial_events WHERE event_type = 'ShipmentEvent' AND order_id IS NOT NULL GROUP BY order_id) fep ON o.order_id = fep.order_id
@@ -61,7 +68,8 @@ export async function GET(request: NextRequest) {
 
     const items = rows.map((row) => {
       const buyCost = row.buyCostPerUnit * row.quantity;
-      const profit = row.salePrice - buyCost - row.fees;
+      const refunded = row.refunded || 0;
+      const profit = row.salePrice - buyCost - row.fees - refunded;
       const profitPercent = row.salePrice > 0 ? (profit / row.salePrice) * 100 : 0;
       const roiPercent = buyCost > 0 ? (profit / buyCost) * 100 : 0;
       return {
@@ -72,16 +80,22 @@ export async function GET(request: NextRequest) {
         productName: row.productName,
         quantity: row.quantity,
         salePrice: row.salePrice,
+        refunded,
         buyCost,
         fees: row.fees,
         profit,
         profitPercent,
         roiPercent,
         isEstimated: !!row.isEstimated,
+        // Amazon's own flag; the $0-price check covers orders synced before it was captured.
+        isReplacement: row.isReplacement === 1 || row.salePrice === 0,
+        replacedOrderId: row.replacedOrderId || null,
+        replacementReason: replacementReasonLabel(row.replacementReasonCode),
       };
     });
 
     const totalSales = items.reduce((s, i) => s + i.salePrice, 0);
+    const totalRefunded = items.reduce((s, i) => s + i.refunded, 0);
     const totalFees = items.reduce((s, i) => s + i.fees, 0);
     const totalProfit = items.reduce((s, i) => s + i.profit, 0);
     const totalBuyCost = items.reduce((s, i) => s + i.buyCost, 0);
@@ -97,6 +111,7 @@ export async function GET(request: NextRequest) {
       totals: {
         count,
         totalSales,
+        totalRefunded,
         totalFees,
         totalProfit,
         totalBuyCost,

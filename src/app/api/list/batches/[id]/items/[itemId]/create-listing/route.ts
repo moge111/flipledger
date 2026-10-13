@@ -23,6 +23,7 @@ import Database from 'better-sqlite3';
 import { getSellerId, getListing, getProductType, createOrUpdateListing } from '@/lib/sp-api/listingsItems';
 import type { SPAPICredentials } from '@/lib/sp-api/types';
 import { openDb } from '@/lib/db-conn';
+import { mfnQuantityToPut } from '@/lib/listing-send-policy';
 
 const getDb = () => openDb();
 
@@ -73,7 +74,9 @@ export async function POST(_request: NextRequest, { params }: { params: Promise<
     if (batch.channel !== 'FBA' && batch.channel !== 'MFN') { db.close(); return NextResponse.json({ skipped: true, reason: `channel ${batch.channel}` }); }
 
     item = db.prepare(`
-      SELECT id, asin, sku, condition, quantity, list_price_cents as listPriceCents, listing_status as listingStatus
+      SELECT id, asin, sku, condition, quantity, list_price_cents as listPriceCents, listing_status as listingStatus,
+             send_qty_to_amazon AS sendQty,
+             (SELECT COALESCE(SUM(il.quantity_remaining), 0) FROM inventory_ledger il WHERE il.sku = listing_batch_items.sku) AS skuStock
       FROM listing_batch_items WHERE id = ? AND batch_id = ?
     `).get(itId, batchId);
     if (!item) { db.close(); return NextResponse.json({ error: 'Item not found' }, { status: 404 }); }
@@ -105,13 +108,16 @@ export async function POST(_request: NextRequest, { params }: { params: Promise<
   try {
     const sellerId = await getSellerId(creds);
     const existing = await getListing(creds, sellerId, item.sku);
+    // Qty → Amazon ON: the SKU's stock in FlipLedger. OFF: 0 for a new offer,
+    // Amazon's own count for an existing one (a PUT SETS the quantity).
+    const offerQty = mfnQuantityToPut({ channel: batch.channel, sendQty: !!item.sendQty, skuStock: item.skuStock }, existing);
     const productType = existing?.productTypes?.[0]?.productType || await getProductType(creds, item.asin);
 
     const result = await createOrUpdateListing(creds, sellerId, {
       sku: item.sku,
       asin: item.asin,
       condition: item.condition,
-      quantity: item.quantity,
+      quantity: offerQty,
       listPriceCents: item.listPriceCents,
       channel: batch.channel,
       productType,

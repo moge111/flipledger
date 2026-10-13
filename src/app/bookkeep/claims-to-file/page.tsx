@@ -123,7 +123,7 @@ export default function ClaimsToFilePage() {
     <div className="p-6 max-w-[1600px] mx-auto">
       <div className="flex items-center justify-between mb-6">
         <div>
-          <h1 className="text-2xl font-semibold tracking-tight">Claims to File</h1>
+          <h1 className="page-title">Claims to File</h1>
           <p className="text-sm text-text-tertiary mt-0.5">
             FBA inventory losses Amazon owes you for. Cross-checked against payouts you&apos;ve already received.
             {lastSync && (
@@ -135,7 +135,7 @@ export default function ClaimsToFilePage() {
           <button
             onClick={runSync}
             disabled={syncing}
-            className="flex items-center gap-2 h-9 px-4 bg-accent text-white rounded-md text-sm font-medium hover:bg-accent/90 disabled:opacity-50 transition-colors"
+            className="flex items-center gap-2 h-9 px-4 bg-accent text-text-inverse rounded-md text-sm font-bold hover:bg-accent/90 disabled:opacity-50 transition-colors"
           >
             {syncing ? <Loader2 size={14} className="animate-spin" /> : <RefreshCw size={14} />}
             {syncing ? 'Syncing…' : 'Sync from Amazon'}
@@ -145,35 +145,35 @@ export default function ClaimsToFilePage() {
 
       {totals && (
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-6">
-          <div className="bg-bg-surface border border-border-subtle rounded-lg p-5 border-t-2 border-t-accent">
-            <div className="text-[11px] font-medium tracking-widest uppercase text-text-tertiary mb-2">To File</div>
-            <div className="text-2xl font-bold font-mono text-text-primary tracking-tight">{formatNumber(totals.pendingCount)}</div>
+          <div className="panel p-5">
+            <div className="text-[11px] label-caps text-text-tertiary mb-2">To File</div>
+            <div className="stat-num text-xl sm:text-2xl text-text-primary">{formatNumber(totals.pendingCount)}</div>
             <div className="text-xs text-text-tertiary mt-1.5">{formatCurrency(totals.pendingValueCents)} estimated</div>
           </div>
-          <div className={`bg-bg-surface border border-border-subtle rounded-lg p-5 border-t-2 ${totals.urgentCount > 0 ? 'border-t-negative' : 'border-t-border-default'}`}>
-            <div className="text-[11px] font-medium tracking-widest uppercase text-text-tertiary mb-2">Closing Soon (≤14d)</div>
-            <div className={`text-2xl font-bold font-mono tracking-tight ${totals.urgentCount > 0 ? 'text-negative' : 'text-text-primary'}`}>{formatNumber(totals.urgentCount)}</div>
+          <div className={`panel p-5 ${totals.urgentCount > 0 ? 'border-t-negative' : 'border-t-border-default'}`}>
+            <div className="text-[11px] label-caps text-text-tertiary mb-2">Closing Soon (≤14d)</div>
+            <div className={`stat-num text-xl sm:text-2xl ${totals.urgentCount > 0 ? 'text-negative' : 'text-text-primary'}`}>{formatNumber(totals.urgentCount)}</div>
             <div className="text-xs text-text-tertiary mt-1.5">File before deadline</div>
           </div>
-          <div className="bg-bg-surface border border-border-subtle rounded-lg p-5 border-t-2 border-t-border-default">
-            <div className="text-[11px] font-medium tracking-widest uppercase text-text-tertiary mb-2">Already Filed</div>
-            <div className="text-2xl font-bold font-mono text-text-primary tracking-tight">{formatNumber(totals.filedCount)}</div>
+          <div className="panel p-5">
+            <div className="text-[11px] label-caps text-text-tertiary mb-2">Already Filed</div>
+            <div className="stat-num text-xl sm:text-2xl text-text-primary">{formatNumber(totals.filedCount)}</div>
             <div className="text-xs text-text-tertiary mt-1.5">Awaiting Amazon</div>
           </div>
-          <div className={`bg-bg-surface border border-border-subtle rounded-lg p-5 border-t-2 ${totals.expiredCount > 0 ? 'border-t-negative' : 'border-t-border-default'}`}>
-            <div className="text-[11px] font-medium tracking-widest uppercase text-text-tertiary mb-2">Expired</div>
-            <div className={`text-2xl font-bold font-mono tracking-tight ${totals.expiredCount > 0 ? 'text-negative' : 'text-text-primary'}`}>{formatNumber(totals.expiredCount)}</div>
+          <div className={`panel p-5 ${totals.expiredCount > 0 ? 'border-t-negative' : 'border-t-border-default'}`}>
+            <div className="text-[11px] label-caps text-text-tertiary mb-2">Expired</div>
+            <div className={`stat-num text-xl sm:text-2xl ${totals.expiredCount > 0 ? 'text-negative' : 'text-text-primary'}`}>{formatNumber(totals.expiredCount)}</div>
             <div className="text-xs text-text-tertiary mt-1.5">Past 60-day window</div>
           </div>
         </div>
       )}
 
-      <div className="flex items-center gap-2 mb-4 border-b border-border-subtle">
+      <div className="flex items-center gap-2 mb-4 border-b border-border-subtle overflow-x-auto">
         {STATUS_TABS.map((t) => (
           <button
             key={t.key}
             onClick={() => setTab(t.key)}
-            className={`px-4 h-9 text-sm font-medium border-b-2 transition-colors ${
+            className={`px-4 h-9 text-sm font-medium border-b-2 transition-colors whitespace-nowrap shrink-0 ${
               tab === t.key
                 ? 'border-accent text-text-primary'
                 : 'border-transparent text-text-tertiary hover:text-text-secondary'
@@ -192,17 +192,17 @@ export default function ClaimsToFilePage() {
           <span>{tab === 'pending' ? 'No pending claims. Nice.' : 'Nothing here.'}</span>
         </div>
       ) : (
-        <div className="bg-bg-surface border border-border-subtle rounded-lg overflow-hidden">
+        <div className="panel overflow-hidden">
           <table className="w-full text-sm">
-            <thead className="bg-bg-elevated text-[11px] uppercase tracking-wider text-text-tertiary">
+            <thead className="bg-bg-elevated text-[11px] label-caps text-text-tertiary">
               <tr>
-                <th className="text-left px-4 py-2 font-medium">Date</th>
-                <th className="text-left px-4 py-2 font-medium">Product</th>
-                <th className="text-left px-4 py-2 font-medium">Reason</th>
-                <th className="text-right px-4 py-2 font-medium">Units</th>
-                <th className="text-right px-4 py-2 font-medium">Est. Value</th>
-                <th className="text-left px-4 py-2 font-medium">Eligible Until</th>
-                <th className="text-right px-4 py-2 font-medium">Actions</th>
+                <th className="text-left px-4 py-2">Date</th>
+                <th className="text-left px-4 py-2">Product</th>
+                <th className="text-left px-4 py-2">Reason</th>
+                <th className="text-right px-4 py-2">Units</th>
+                <th className="text-right px-4 py-2">Est. Value</th>
+                <th className="text-left px-4 py-2">Eligible Until</th>
+                <th className="text-right px-4 py-2">Actions</th>
               </tr>
             </thead>
             <tbody>
@@ -217,7 +217,7 @@ export default function ClaimsToFilePage() {
                     className={`border-t border-border-subtle hover:bg-bg-elevated/50 ${c.status === 'pending' ? 'cursor-pointer' : ''}`}
                     onClick={() => { if (c.status === 'pending') openTemplate(c); }}
                   >
-                    <td className="px-4 py-3 text-text-secondary font-mono text-xs">
+                    <td className="px-4 py-3 text-text-secondary text-xs tabular-nums">
                       {formatDate(c.adjustmentDate)}
                     </td>
                     <td className="px-4 py-3">
@@ -236,13 +236,13 @@ export default function ClaimsToFilePage() {
                         <div className="text-[10px] text-text-tertiary">{c.disposition}</div>
                       )}
                     </td>
-                    <td className="px-4 py-3 text-right font-mono text-text-primary">
+                    <td className="px-4 py-3 text-right text-text-primary tabular-nums">
                       {Math.abs(c.quantity)}
                     </td>
-                    <td className="px-4 py-3 text-right font-mono text-text-primary">
+                    <td className="px-4 py-3 text-right text-text-primary tabular-nums">
                       {c.estimatedValueCents ? formatCurrency(c.estimatedValueCents) : '—'}
                     </td>
-                    <td className="px-4 py-3 font-mono text-xs">
+                    <td className="px-4 py-3 text-xs tabular-nums">
                       {c.eligibleUntil ? (
                         <span className={urgent ? 'text-negative font-semibold' : 'text-text-secondary'}>
                           {formatDate(c.eligibleUntil)}
@@ -258,21 +258,21 @@ export default function ClaimsToFilePage() {
                           <>
                             <button
                               onClick={(e) => { e.stopPropagation(); openTemplate(c); }}
-                              className="inline-flex items-center gap-1 px-2 h-7 text-[11px] bg-accent/10 border border-accent/30 rounded text-accent hover:bg-accent/20 transition-colors"
+                              className="inline-flex items-center gap-1 px-2 h-7 text-[11px] rounded-sm text-accent hover:bg-bg-hover transition-colors border-[1.2px] border-current"
                               title="View claim details + filing template"
                             >
                               <FileText size={11} /> View
                             </button>
                             <button
                               onClick={(e) => { e.stopPropagation(); patchCandidate(c.id, 'file'); }}
-                              className="px-2 h-7 text-[11px] bg-bg-elevated border border-border-default rounded text-text-secondary hover:text-text-primary transition-colors"
+                              className="px-2 h-7 text-[11px] rounded text-text-primary hover:text-text-primary transition-colors font-semibold hover:bg-bg-hover bg-bg-surface border-[1.5px] border-border-strong"
                               title="Mark as filed (skip template)"
                             >
                               <CheckCircle2 size={11} />
                             </button>
                             <button
                               onClick={(e) => { e.stopPropagation(); patchCandidate(c.id, 'dismiss'); }}
-                              className="px-2 h-7 text-[11px] bg-bg-elevated border border-border-default rounded text-text-tertiary hover:text-negative transition-colors"
+                              className="px-2 h-7 text-[11px] rounded text-text-primary hover:text-negative transition-colors font-semibold hover:bg-bg-hover bg-bg-surface border-[1.5px] border-border-strong"
                               title="Dismiss — won't show as a claim"
                             >
                               <XCircle size={11} />
@@ -284,14 +284,14 @@ export default function ClaimsToFilePage() {
                             <span className="text-[10px] text-accent">Filed {c.filedAt ? formatDate(c.filedAt) : ''}</span>
                             <button
                               onClick={(e) => { e.stopPropagation(); patchCandidate(c.id, 'received'); }}
-                              className="px-2 h-7 text-[11px] bg-positive/10 border border-positive/30 rounded text-positive hover:bg-positive/20 transition-colors"
+                              className="px-2 h-7 text-[11px] rounded-sm text-positive hover:bg-positive/20 transition-colors border-[1.2px] border-current"
                               title="Mark as reimbursed by Amazon"
                             >
                               Received
                             </button>
                             <button
                               onClick={(e) => { e.stopPropagation(); patchCandidate(c.id, 'reopen'); }}
-                              className="px-2 h-7 text-[11px] bg-bg-elevated border border-border-default rounded text-text-tertiary hover:text-text-primary transition-colors"
+                              className="px-2 h-7 text-[11px] rounded text-text-primary hover:text-text-primary transition-colors font-semibold hover:bg-bg-hover bg-bg-surface border-[1.5px] border-border-strong"
                               title="Reopen — move back to pending"
                             >
                               Reopen
@@ -329,15 +329,15 @@ export default function ClaimsToFilePage() {
         const claim = classifyClaim(openCandidate.reason, openCandidate.disposition);
         return (
           <div
-            className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4"
+            className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4"
             onClick={() => setOpenCandidate(null)}
           >
             <div
-              className="bg-bg-surface border border-border-subtle rounded-lg max-w-3xl w-full max-h-[90vh] overflow-hidden flex flex-col"
+              className="panel max-w-3xl w-full max-h-[90vh] overflow-hidden flex flex-col"
               onClick={(e) => e.stopPropagation()}
             >
               {/* Header */}
-              <div className="px-5 py-4 border-b border-border-subtle flex items-start justify-between">
+              <div className="px-5 py-4 border-b-[1.5px] border-border-strong flex items-start justify-between">
                 <div>
                   <h2 className="text-lg font-semibold tracking-tight">{claim.category}</h2>
                   <p className="text-xs text-text-tertiary mt-0.5 truncate max-w-[500px]">
@@ -363,13 +363,13 @@ export default function ClaimsToFilePage() {
 
                 {/* How to file */}
                 <div>
-                  <label className="text-[11px] uppercase tracking-widest text-text-tertiary font-medium block mb-2">
+                  <label className="text-[11px] label-caps text-text-tertiary block mb-2">
                     How to file (4-5 minutes)
                   </label>
                   <ol className="space-y-1.5">
                     {FILING_INSTRUCTIONS.map((step, i) => (
                       <li key={i} className="text-xs text-text-secondary flex items-start gap-2">
-                        <span className="text-accent font-mono font-medium mt-0.5">{i + 1}.</span>
+                        <span className="text-text-primary font-medium mt-0.5 tabular-nums">{i + 1}.</span>
                         <span>{step}</span>
                       </li>
                     ))}
@@ -378,34 +378,34 @@ export default function ClaimsToFilePage() {
 
                 {/* Claim message */}
                 <div>
-                  <label className="text-[11px] uppercase tracking-widest text-text-tertiary font-medium block mb-2">
+                  <label className="text-[11px] label-caps text-text-tertiary block mb-2">
                     Claim message (paste into Amazon&apos;s case form)
                   </label>
                   <textarea
                     value={editedBody}
                     onChange={(e) => setEditedBody(e.target.value)}
-                    className="w-full h-72 px-3 py-2 bg-bg-elevated border border-border-default rounded text-sm font-mono text-text-primary focus:outline-none focus:border-accent resize-y"
+                    className="w-full h-72 px-3 py-2 bg-bg-elevated border border-border-default rounded text-sm text-text-primary focus:outline-none focus:border-link resize-y tabular-nums"
                   />
                 </div>
 
                 {/* Detail grid */}
                 <div className="grid grid-cols-2 gap-3 text-xs">
                   <div>
-                    <div className="text-text-tertiary uppercase tracking-widest text-[10px]">ASIN / FNSKU</div>
-                    <div>{openCandidate.asin ? <CopyableText text={openCandidate.asin} className="text-text-primary" /> : <span className="font-mono text-text-tertiary">—</span>}</div>
-                    <div>{openCandidate.fnsku ? <CopyableText text={openCandidate.fnsku} className="text-text-tertiary" /> : <span className="font-mono text-text-tertiary">—</span>}</div>
+                    <div className="text-text-tertiary label-caps text-[10px]">ASIN / FNSKU</div>
+                    <div>{openCandidate.asin ? <CopyableText text={openCandidate.asin} className="text-text-primary" /> : <span className="text-text-tertiary tabular-nums">—</span>}</div>
+                    <div>{openCandidate.fnsku ? <CopyableText text={openCandidate.fnsku} className="text-text-tertiary" /> : <span className="text-text-tertiary tabular-nums">—</span>}</div>
                   </div>
                   <div>
-                    <div className="text-text-tertiary uppercase tracking-widest text-[10px]">FC</div>
+                    <div className="text-text-tertiary label-caps text-[10px]">FC</div>
                     <div className="font-mono text-text-primary">{openCandidate.fcId || '—'}</div>
                   </div>
                   <div>
-                    <div className="text-text-tertiary uppercase tracking-widest text-[10px]">Adjustment Date</div>
-                    <div className="font-mono text-text-primary">{formatDate(openCandidate.adjustmentDate)}</div>
+                    <div className="text-text-tertiary label-caps text-[10px]">Adjustment Date</div>
+                    <div className="text-text-primary tabular-nums">{formatDate(openCandidate.adjustmentDate)}</div>
                   </div>
                   <div>
-                    <div className="text-text-tertiary uppercase tracking-widest text-[10px]">Eligible Until</div>
-                    <div className="font-mono text-text-primary">{openCandidate.eligibleUntil ? formatDate(openCandidate.eligibleUntil) : '—'}</div>
+                    <div className="text-text-tertiary label-caps text-[10px]">Eligible Until</div>
+                    <div className="text-text-primary tabular-nums">{openCandidate.eligibleUntil ? formatDate(openCandidate.eligibleUntil) : '—'}</div>
                   </div>
                 </div>
               </div>
@@ -428,7 +428,7 @@ export default function ClaimsToFilePage() {
                     onClick={copyToClipboard}
                     className={`flex items-center gap-1.5 px-3 h-8 text-xs rounded border transition-colors ${
                       copied
-                        ? 'bg-positive/10 border-positive/30 text-positive'
+                        ? 'bg-bg-surface border-positive text-positive'
                         : 'bg-bg-elevated border-border-default text-text-secondary hover:text-text-primary'
                     }`}
                   >
@@ -442,7 +442,7 @@ export default function ClaimsToFilePage() {
                     onClick={() => {
                       if (openCandidate) patchCandidate(openCandidate.id, 'file');
                     }}
-                    className="inline-flex items-center gap-1.5 px-3 h-8 text-xs bg-accent text-white rounded font-medium hover:bg-accent/90 transition-colors"
+                    className="inline-flex items-center gap-1.5 px-3 h-8 text-xs bg-accent text-text-inverse rounded font-bold hover:bg-accent/90 transition-colors"
                   >
                     <ExternalLink size={12} /> Open Amazon & mark filed
                   </a>

@@ -8,6 +8,7 @@ import { EbaySettings } from '@/components/settings/EbaySettings';
 import { ImportTransactionReport, WalmartServiceFeeImport } from '@/components/settings/ImportPanels';
 import { ShipFromSettings } from '@/components/settings/ShipFromSettings';
 import { WalmartSettings } from '@/components/settings/WalmartSettings';
+import { AiSettings } from '@/components/settings/AiSettings';
 import { SettingsData, SyncStatus } from '@/components/settings/types';
 export default function SettingsPage() {
   const [settings, setSettings] = useState<SettingsData>({
@@ -123,16 +124,17 @@ export default function SettingsPage() {
   return (
     <div className="max-w-2xl">
       <div className="mb-6">
-        <h1 className="text-xl font-semibold tracking-tight">Settings</h1>
+        <h1 className="page-title">Settings</h1>
         <p className="text-sm text-text-tertiary mt-0.5">Configure your Amazon SP-API connection</p>
       </div>
 
       {/* SP-API Credentials */}
-      <div className="bg-bg-surface border border-border-subtle rounded-lg p-6 mb-6">
-        <h2 className="text-md font-medium text-text-primary mb-4">SP-API Credentials</h2>
+      <div className="panel mb-6">
+        <h2 className="panel-bar"><span className="flex items-center gap-2">SP-API Credentials</span></h2>
+<div className="p-6">
         <div className="space-y-4">
           <div>
-            <label className="block text-xs font-medium tracking-wide uppercase text-text-tertiary mb-1.5">
+            <label className="block text-xs label-caps text-text-tertiary mb-1.5">
               Client ID
             </label>
             <input
@@ -140,11 +142,11 @@ export default function SettingsPage() {
               value={settings.clientId}
               onChange={e => setSettings(s => ({ ...s, clientId: e.target.value }))}
               placeholder="amzn1.application-oa2-client.xxxx"
-              className="w-full h-9 px-3 bg-bg-input border border-border-default rounded-md text-sm text-text-primary placeholder-text-tertiary focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent/25"
+              className="w-full h-9 px-3 bg-bg-input border border-border-default rounded-md text-sm text-text-primary placeholder-text-tertiary focus:border-link focus:outline-none focus:ring-[3px] focus:ring-link-muted"
             />
           </div>
           <div>
-            <label className="block text-xs font-medium tracking-wide uppercase text-text-tertiary mb-1.5">
+            <label className="block text-xs label-caps text-text-tertiary mb-1.5">
               Client Secret
             </label>
             <input
@@ -152,11 +154,11 @@ export default function SettingsPage() {
               value={settings.clientSecret}
               onChange={e => setSettings(s => ({ ...s, clientSecret: e.target.value }))}
               placeholder="amzn1.oa2-cs.v1.xxxx"
-              className="w-full h-9 px-3 bg-bg-input border border-border-default rounded-md text-sm text-text-primary placeholder-text-tertiary focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent/25"
+              className="w-full h-9 px-3 bg-bg-input border border-border-default rounded-md text-sm text-text-primary placeholder-text-tertiary focus:border-link focus:outline-none focus:ring-[3px] focus:ring-link-muted"
             />
           </div>
           <div>
-            <label className="block text-xs font-medium tracking-wide uppercase text-text-tertiary mb-1.5">
+            <label className="block text-xs label-caps text-text-tertiary mb-1.5">
               Refresh Token
             </label>
             <input
@@ -164,17 +166,17 @@ export default function SettingsPage() {
               value={settings.refreshToken}
               onChange={e => setSettings(s => ({ ...s, refreshToken: e.target.value }))}
               placeholder="Atzr|xxxx"
-              className="w-full h-9 px-3 bg-bg-input border border-border-default rounded-md text-sm text-text-primary placeholder-text-tertiary focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent/25"
+              className="w-full h-9 px-3 bg-bg-input border border-border-default rounded-md text-sm text-text-primary placeholder-text-tertiary focus:border-link focus:outline-none focus:ring-[3px] focus:ring-link-muted"
             />
           </div>
           <div>
-            <label className="block text-xs font-medium tracking-wide uppercase text-text-tertiary mb-1.5">
+            <label className="block text-xs label-caps text-text-tertiary mb-1.5">
               Marketplace
             </label>
             <select
               value={settings.marketplaceId}
               onChange={e => setSettings(s => ({ ...s, marketplaceId: e.target.value }))}
-              className="w-full h-9 px-3 bg-bg-input border border-border-default rounded-md text-sm text-text-primary focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent/25"
+              className="w-full h-9 px-3 bg-bg-input border border-border-default rounded-md text-sm text-text-primary focus:border-link focus:outline-none focus:ring-[3px] focus:ring-link-muted"
             >
               <option value="ATVPDKIKX0DER">Amazon.com (US)</option>
               <option value="A2EUQ1WTGCTBG2">Amazon.ca (Canada)</option>
@@ -187,7 +189,7 @@ export default function SettingsPage() {
           <button
             onClick={handleSave}
             disabled={saving}
-            className="flex items-center gap-2 h-9 px-4 bg-accent text-white rounded-md text-sm font-medium hover:bg-accent-hover transition-colors disabled:opacity-50"
+            className="flex items-center gap-2 h-9 px-4 bg-accent text-text-inverse rounded-md text-sm font-bold hover:bg-accent-hover transition-colors disabled:opacity-50"
           >
             <Save size={14} />
             {saving ? 'Saving...' : 'Save Credentials'}
@@ -195,7 +197,7 @@ export default function SettingsPage() {
           <button
             onClick={handleTest}
             disabled={testing || !settings.clientId}
-            className="flex items-center gap-2 h-9 px-4 bg-bg-elevated border border-border-default text-text-primary rounded-md text-sm font-medium hover:bg-bg-hover transition-colors disabled:opacity-50"
+            className="flex items-center gap-2 h-9 px-4 bg-bg-surface border-[1.5px] border-border-strong text-text-primary rounded-md text-sm font-semibold hover:bg-bg-hover transition-colors disabled:opacity-50"
           >
             <TestTube size={14} />
             {testing ? 'Testing...' : 'Test Connection'}
@@ -217,20 +219,22 @@ export default function SettingsPage() {
           )}
         </div>
         {testResult && !testResult.success && testResult.error && (
-          <div className="mt-3 p-3 bg-negative-muted rounded-md text-xs text-negative font-mono break-all">
+          <div className="mt-3 p-3 rounded-sm text-xs text-negative font-mono break-all border-[1.2px] border-current">
             {testResult.error}
           </div>
         )}
       </div>
+</div>
 
       {/* Sync */}
-      <div className="bg-bg-surface border border-border-subtle rounded-lg p-6 mb-6">
-        <h2 className="text-md font-medium text-text-primary mb-4">Data Sync</h2>
+      <div className="panel mb-6">
+        <h2 className="panel-bar"><span className="flex items-center gap-2">Data Sync</span></h2>
+<div className="p-6">
 
         <div className="flex items-center justify-between mb-4">
           <div>
             <div className="text-sm text-text-secondary">Last synced</div>
-            <div className="text-sm font-mono text-text-tertiary mt-0.5">
+            <div className="text-sm text-text-tertiary mt-0.5 tabular-nums">
               {settings.lastSync ? formatRelativeTime(settings.lastSync) : 'Never — no data synced yet'}
             </div>
           </div>
@@ -259,7 +263,7 @@ export default function SettingsPage() {
             <button
               onClick={handleSync}
               disabled={syncing || !settings.clientId}
-              className="flex items-center gap-2 h-9 px-4 bg-accent text-white rounded-md text-sm font-medium hover:bg-accent-hover transition-colors disabled:opacity-50"
+              className="flex items-center gap-2 h-9 px-4 bg-accent text-text-inverse rounded-md text-sm font-bold hover:bg-accent-hover transition-colors disabled:opacity-50"
             >
               <RefreshCw size={14} className={syncing ? 'animate-spin' : ''} />
               {syncing ? 'Syncing...' : 'Sync Now'}
@@ -276,7 +280,7 @@ export default function SettingsPage() {
         {/* Sync Progress */}
         {syncStatus && (
           <div className="mt-4 space-y-2">
-            <div className="text-xs font-medium tracking-wide uppercase text-text-tertiary mb-2">
+            <div className="text-xs label-caps text-text-tertiary mb-2">
               {syncStatus.running ? 'Sync in progress...' : 'Last sync results'}
             </div>
             {syncStatus.results.map((result, i) => (
@@ -292,10 +296,10 @@ export default function SettingsPage() {
                   </span>
                 </div>
                 <div className="flex items-center gap-4">
-                  <span className="text-xs font-mono text-text-secondary">
+                  <span className="text-xs text-text-secondary tabular-nums">
                     {result.recordsFetched} records
                   </span>
-                  <span className="text-xs font-mono text-text-tertiary">
+                  <span className="text-xs text-text-tertiary tabular-nums">
                     {(result.duration / 1000).toFixed(1)}s
                   </span>
                 </div>
@@ -307,7 +311,7 @@ export default function SettingsPage() {
                 <div className="text-xs font-medium text-warning mb-1">
                   {syncStatus.totalErrors.length} warning{syncStatus.totalErrors.length > 1 ? 's' : ''}
                 </div>
-                <div className="max-h-32 overflow-y-auto p-3 bg-warning-muted rounded-md text-xs text-warning font-mono space-y-1">
+                <div className="max-h-32 overflow-y-auto p-3 rounded-sm text-xs text-warning font-mono space-y-1 border-[1.2px] border-current">
                   {syncStatus.totalErrors.slice(0, 10).map((err, i) => (
                     <div key={i}>{err}</div>
                   ))}
@@ -326,12 +330,16 @@ export default function SettingsPage() {
           </div>
         )}
       </div>
+</div>
 
       {/* Backups */}
       <BackupSettings />
 
       {/* Walmart Credentials */}
       <WalmartSettings />
+
+      {/* Claude: suggests Walmart setup fields */}
+      <AiSettings />
 
       {/* eBay Credentials */}
       <EbaySettings />
@@ -343,23 +351,27 @@ export default function SettingsPage() {
       <WalmartServiceFeeImport />
 
       {/* Transaction Report Import */}
-      <div className="bg-bg-surface border border-border-subtle rounded-lg p-6 mb-6">
-        <h2 className="text-md font-medium text-text-primary mb-2">Import Transaction Report</h2>
+      <div className="panel mb-6">
+        <h2 className="panel-bar"><span className="flex items-center gap-2">Import Transaction Report</span></h2>
+<div className="p-6">
         <p className="text-xs text-text-tertiary mb-4">
           Upload a Date Range Transaction Report from Seller Central (Payments → Reports Repository) to get exact fees and shipping costs.
         </p>
         <ImportTransactionReport />
       </div>
+</div>
 
       {/* About */}
-      <div className="bg-bg-surface border border-border-subtle rounded-lg p-6">
-        <h2 className="text-md font-medium text-text-primary mb-4">About</h2>
+      <div className="panel">
+        <h2 className="panel-bar"><span className="flex items-center gap-2">About</span></h2>
+<div className="p-6">
         <div className="space-y-2 text-sm text-text-secondary">
           <p>FlipLedger connects to Amazon&apos;s Selling Partner API to pull your sales, fees, refunds, reimbursements, and inventory data.</p>
           <p>All data is stored locally in a SQLite database on your machine. Nothing is sent to any external server.</p>
           <p className="text-text-tertiary text-xs font-mono mt-3">Database: data/flipledger.db</p>
         </div>
       </div>
+</div>
     </div>
   );
 }

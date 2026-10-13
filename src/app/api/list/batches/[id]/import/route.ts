@@ -24,6 +24,7 @@ import { parseBuyListCsv, type ColumnMapping } from '@/lib/imports/airtable-buyl
 import { recalculateFIFO } from '@/lib/fifo';
 import { backfillBatchImages } from '@/lib/sp-api/catalog';
 import type { SPAPICredentials } from '@/lib/sp-api/types';
+import { resolveSupplierId } from '@/lib/suppliers';
 import { openDb } from '@/lib/db-conn';
 import { createLogger } from '@/lib/log';
 
@@ -147,8 +148,6 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     const nowIso = now.toISOString();
     const today = nowIso.slice(0, 10);
 
-    const upsertSupplier = db.prepare('INSERT OR IGNORE INTO suppliers (name, created_at) VALUES (?, ?)');
-    const selectSupplier = db.prepare('SELECT id FROM suppliers WHERE name = ?');
 
     const insertLotMfn = db.prepare(`
       INSERT INTO inventory_ledger (
@@ -196,9 +195,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
           const cached = supplierIdByName.get(supplierName);
           if (cached != null) supplierId = cached;
           else {
-            upsertSupplier.run(supplierName, nowIso);
-            const sRow = selectSupplier.get(supplierName) as { id?: number } | undefined;
-            supplierId = sRow?.id ?? null;
+            supplierId = resolveSupplierId(db, supplierName, nowIso);
             if (supplierId != null) supplierIdByName.set(supplierName, supplierId);
           }
         }

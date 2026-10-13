@@ -7,6 +7,7 @@ import { syncEbayOrders } from './orders';
 import type { EbayCredentials, EbaySyncStatus, SyncResult } from './types';
 import { openDb } from '@/lib/db-conn';
 import { createLogger } from '@/lib/log';
+import { costNewSales } from '../fifo';
 
 const log = createLogger('ebay-api/sync');
 
@@ -57,7 +58,11 @@ export async function runEbaySync(
     log.info(`Orders: ${orderResult.recordsFetched} fetched, ${orderResult.errors.length} errors`);
 
     // Fees are extracted directly from order data (totalMarketplaceFee field)
-    // No separate Finances API call needed — eBay Fulfillment API includes fee breakdown per order
+    // Shipping labels and order-less fees (Promoted Listings, insertion) come
+    // from the Finances API in a separate daily job: ebay-api/payoutCosts.ts.
+
+    // Cost any sales this sync wrote, now rather than at the end of the tick.
+    costNewSales('eBay');
 
     // Update last sync timestamp
     const db = openDb();

@@ -6,6 +6,7 @@
 
 import { spApiRequest } from './auth';
 import type { SPAPICredentials } from './types';
+import { isV2024CoveredServiceFee } from './serviceFeesV2024';
 import { openDb } from '@/lib/db-conn';
 import { createLogger } from '@/lib/log';
 
@@ -279,19 +280,25 @@ function parseSettlementReport(content: string): number {
           feeDate = `${yyyy}-${mm}-${dd}`;
         }
 
-        // Reimbursements go to the reimbursements table, not fee_details
-        if (amountType === 'FBA Inventory Reimbursement' && feeCents > 0) {
+        // Reimbursements go to the reimbursements table, not fee_details.
+        // That includes NEGATIVE rows: Amazon labels a reimbursement reversal
+        // COMPENSATED_CLAWBACK. Those used to fall through to the fee path and
+        // were booked as a fee on top of the canonical Reimbursement_Reversal,
+        // counting each clawback twice ($87.75 in Jun-Jul 2026, review A5).
+        if (amountType === 'FBA Inventory Reimbursement' || amountDescription === 'COMPENSATED_CLAWBACK') {
           // Skip if the canonical FBA Reimbursements Report already has this
           // entry (same date + amount). Settlement rows have no sku/asin so
-          // we match on date+amount only — canonical numeric IDs win.
+          // we match on date+amount only — canonical numeric IDs win. A
+          // clawback may post a day away from its canonical row, hence ±1 day.
+          const dayWindow = feeCents < 0 ? 1 : 0;
           const canonical = db.prepare(`
             SELECT 1 FROM reimbursements
             WHERE marketplace = 'amazon'
               AND reimbursement_id GLOB '[0-9]*'
-              AND date(reimbursement_date) = date(?)
+              AND abs(julianday(date(reimbursement_date)) - julianday(date(?))) <= ?
               AND amount = ?
             LIMIT 1
-          `).get(feeDate, feeCents);
+          `).get(feeDate, dayWindow, feeCents);
 
           if (!canonical) {
             const reimbId = `SETTLEMENT-${amountDescription.replace(/\s+/g, '-')}-${feeDate}-${feeCents}`;
@@ -303,6 +310,11 @@ function parseSettlementReport(content: string): number {
           }
           continue;
         }
+
+        // From the cutover on, service fees are booked from the v2024 ledger.
+        // Settlement placement lines are per item while v2024 is per shipment,
+        // so no amount check can match them; they must not be written at all.
+        if (isV2024CoveredServiceFee(amountDescription, feeDate)) continue;
 
         // Skip if this fee already exists from ANY Amazon source (settlement,
         // transaction report import, or live Financial Events API). Sources use

@@ -16,18 +16,18 @@ interface LookupResult {
 }
 
 const typeMeta: Record<LookupResult['type'], { label: string; icon: React.ReactNode; color: string }> = {
-  order: { label: 'Order', icon: <ShoppingCart size={14} />, color: 'text-accent' },
+  order: { label: 'Order', icon: <ShoppingCart size={14} />, color: 'text-link' },
   reimbursement: { label: 'Reimb', icon: <HandCoins size={14} />, color: 'text-positive' },
   product: { label: 'Product', icon: <ShoppingBag size={14} />, color: 'text-text-secondary' },
   refund: { label: 'Refund', icon: <HandCoins size={14} />, color: 'text-warning' },
-  batch: { label: 'Batch', icon: <ScanBarcode size={14} />, color: 'text-accent' },
+  batch: { label: 'Batch', icon: <ScanBarcode size={14} />, color: 'text-link' },
 };
 
 const marketplaceBadge: Record<string, { label: string; cls: string }> = {
-  amazon: { label: 'AMZ', cls: 'bg-orange-500/10 text-orange-400' },
-  walmart: { label: 'WMT', cls: 'bg-blue-500/10 text-blue-400' },
-  ebay: { label: 'EBAY', cls: 'bg-green-500/10 text-green-400' },
-  paypal: { label: 'PP', cls: 'bg-cyan-500/10 text-cyan-400' },
+  amazon: { label: 'AMZ', cls: 'mkt mkt-amazon' },
+  walmart: { label: 'WMT', cls: 'mkt mkt-walmart' },
+  ebay: { label: 'EBAY', cls: 'mkt mkt-ebay' },
+  paypal: { label: 'PP', cls: 'mkt mkt-paypal' },
 };
 
 function formatCents(cents?: number): string {
@@ -137,7 +137,7 @@ export default function GlobalSearch({ collapsed = false }: Props) {
           inputRef.current?.focus();
           setOpen(true);
         }}
-        className="w-full flex items-center justify-center h-8 rounded-md text-text-tertiary hover:bg-bg-hover hover:text-text-primary transition-colors"
+        className="w-full flex items-center justify-center h-8 rounded-md text-top-fg/60 hover:bg-top-fg/10 hover:text-top-fg transition-colors"
         title="Search (⌘K)"
       >
         <Search size={18} />
@@ -148,7 +148,7 @@ export default function GlobalSearch({ collapsed = false }: Props) {
   return (
     <div ref={containerRef} className="relative">
       <div className="relative">
-        <Search size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-text-tertiary pointer-events-none" />
+        <Search size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-top-fg/55 pointer-events-none" />
         <input
           ref={inputRef}
           type="text"
@@ -157,13 +157,13 @@ export default function GlobalSearch({ collapsed = false }: Props) {
           onChange={handleChange}
           onFocus={() => setOpen(true)}
           onKeyDown={handleKeyDown}
-          className="w-full h-8 pl-8 pr-12 bg-bg-elevated border border-border-subtle rounded-md text-sm text-text-primary placeholder:text-text-tertiary focus:outline-none focus:border-accent transition-colors"
+          className="w-full h-8 pl-8 pr-12 bg-top-fg/10 border-[1.5px] border-top-fg/25 rounded-md text-[13px] text-top-fg placeholder:text-top-fg/50 hover:border-top-fg/45 focus:outline-none focus:border-link focus:ring-[3px] focus:ring-link-muted transition-colors"
         />
-        <kbd className="absolute right-2 top-1/2 -translate-y-1/2 text-[10px] text-text-tertiary px-1.5 py-0.5 rounded bg-bg-surface border border-border-subtle pointer-events-none">⌘K</kbd>
+        <kbd className="absolute right-2 top-1/2 -translate-y-1/2 font-mono text-[10px] font-semibold text-top-fg/55 px-1.5 rounded-md border border-top-fg/25 pointer-events-none">⌘K</kbd>
       </div>
 
       {open && query.trim().length >= 2 && (
-        <div className="absolute left-0 right-0 mt-1 z-50 bg-bg-surface border border-border-subtle rounded-md shadow-lg max-h-[28rem] overflow-y-auto">
+        <div className="absolute left-0 right-0 mt-1 z-50 bg-bg-elevated text-text-primary border-[1.5px] border-border-strong rounded-lg shadow-lg max-h-[28rem] overflow-y-auto">
           {loading && results.length === 0 && (
             <div className="flex items-center gap-2 px-3 py-3 text-sm text-text-tertiary">
               <Loader2 size={14} className="animate-spin" />
@@ -183,28 +183,28 @@ export default function GlobalSearch({ collapsed = false }: Props) {
                 onMouseEnter={() => setActiveIdx(i)}
                 className={`w-full flex items-start gap-2 px-3 py-2 text-left border-l-2 transition-colors ${
                   i === activeIdx
-                    ? 'bg-bg-active border-accent'
+                    ? 'bg-bg-active border-link'
                     : 'border-transparent hover:bg-bg-hover'
                 }`}
               >
                 <span className={`shrink-0 mt-0.5 ${tm.color}`}>{tm.icon}</span>
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-1.5 mb-0.5">
-                    <span className="text-[10px] font-medium tracking-wider uppercase text-text-tertiary">
+                    <span className="label-caps text-[10px] text-text-tertiary">
                       {tm.label}
                     </span>
                     {mb && (
-                      <span className={`px-1 py-0.5 text-[9px] font-medium rounded ${mb.cls}`}>
+                      <span className={`text-[9.5px] ${mb.cls}`}>
                         {mb.label}
                       </span>
                     )}
                     {r.amountCents !== undefined && (
-                      <span className={`ml-auto text-xs ${r.amountCents < 0 ? 'text-negative' : 'text-text-secondary'}`}>
+                      <span className={`ml-auto text-xs tabular-nums ${r.amountCents < 0 ? 'text-negative' : 'text-text-secondary'}`}>
                         {formatCents(r.amountCents)}
                       </span>
                     )}
                   </div>
-                  <div className="text-sm text-text-primary truncate font-mono">{r.title}</div>
+                  <div className={`text-sm text-text-primary truncate ${r.type === 'product' || r.type === 'batch' ? 'font-semibold' : 'font-mono'}`}>{r.title}</div>
                   {r.subtitle && (
                     <div className="text-xs text-text-tertiary truncate mt-0.5">{r.subtitle}</div>
                   )}

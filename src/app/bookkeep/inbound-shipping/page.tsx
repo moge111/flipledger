@@ -30,17 +30,17 @@ export default function InboundShippingPage() {
   const totals: any = data?.totals || null;
 
   const columns = useMemo<ColumnDef<ShipmentRow, any>[]>(() => [
-    { id: 'dateShipped', header: 'Date', accessorKey: 'dateShipped', cell: ({ getValue }) => <span className="font-mono text-sm text-text-secondary">{formatDate(getValue() as string)}</span>, size: 110 },
-    { id: 'shipmentId', header: 'Shipment ID', accessorKey: 'shipmentId', cell: ({ getValue }) => <span className="font-mono text-sm text-accent">{getValue() as string}</span>, size: 150 },
+    { id: 'dateShipped', header: 'Date', accessorKey: 'dateShipped', cell: ({ getValue }) => <span className="text-sm text-text-secondary tabular-nums">{formatDate(getValue() as string)}</span>, size: 110 },
+    { id: 'shipmentId', header: 'Shipment ID', accessorKey: 'shipmentId', cell: ({ getValue }) => <span className="font-mono text-sm text-text-primary">{getValue() as string}</span>, size: 150 },
     { id: 'carrier', header: 'Carrier', accessorKey: 'carrier', cell: ({ getValue }) => <span className="text-sm text-text-primary">{getValue() as string}</span>, size: 160 },
     { id: 'tracking', header: 'Tracking', accessorKey: 'tracking', cell: ({ getValue }) => <span className="font-mono text-xs text-text-tertiary">{getValue() as string}</span>, size: 150 },
-    { id: 'totalUnits', header: 'Units', accessorKey: 'totalUnits', cell: ({ getValue }) => <span className="font-mono">{formatNumber(getValue() as number)}</span>, size: 70 },
+    { id: 'totalUnits', header: 'Units', accessorKey: 'totalUnits', cell: ({ getValue }) => <span className="tabular-nums">{formatNumber(getValue() as number)}</span>, size: 70 },
     {
       id: 'status', header: 'Status', accessorKey: 'status',
       cell: ({ getValue }) => {
         const v = getValue() as string;
-        const styles = v === 'Closed' ? 'bg-positive-muted text-positive' : v === 'Delivered' || v === 'Receiving' ? 'bg-accent-muted text-accent' : 'bg-warning-muted text-warning';
-        return <span className={`text-xs font-medium px-2 py-0.5 rounded ${styles}`}>{v}</span>;
+        const styles = v === 'Closed' ? 'tag-green' : v === 'Working' ? '' : 'tag-blue';
+        return <span className={`tag ${styles}`}>{v}</span>;
       }, size: 100,
     },
   ], []);

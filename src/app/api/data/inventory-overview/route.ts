@@ -74,8 +74,9 @@ export async function GET() {
 
     // ---- Local / unsynced stock (eBay cards, on-hand not sent anywhere) ----
     // Estimated from inventory_ledger remaining on real (small) lots for SKUs
-    // that live_inventory doesn't track. Placeholder headroom lots (qty > 20)
-    // are excluded — they exist for FIFO coverage, not as physical stock.
+    // with no units at Amazon/Walmart (a zero-quantity live_inventory row does not
+    // count as tracked). No lot-size filter: placeholder headroom lots were
+    // removed Sept 23 2026, so every lot is a real purchase.
     const localRows = db.prepare(`
       SELECT
         il.sku,
@@ -93,11 +94,10 @@ export async function GET() {
         SELECT sku, product_name FROM live_inventory GROUP BY sku
       ) li_name ON li_name.sku = il.sku
       WHERE il.quantity_remaining > 0
-        AND il.quantity <= 20
         AND il.buy_price > 0
         AND NOT EXISTS (
           SELECT 1 FROM live_inventory li
-          WHERE li.sku = il.sku OR (il.asin IS NOT NULL AND il.asin != '' AND li.asin = il.asin)
+          WHERE li.total_qty > 0 AND (li.sku = il.sku OR (il.asin IS NOT NULL AND il.asin != '' AND li.asin = il.asin))
         )
       GROUP BY il.sku
       HAVING localQty > 0

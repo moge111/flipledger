@@ -8,6 +8,8 @@ import { syncWalmartReturns } from './returns';
 import { syncAllReconReports } from './recon';
 import { dedupWalmartReconEvents } from './dedupRecon';
 import { syncWalmartInventory } from './inventory';
+import { refreshWalmartFeeEstimates } from './feeEstimates';
+import { costNewSales } from '../fifo';
 import type { WalmartCredentials, SyncResult } from './types';
 import { openDb } from '@/lib/db-conn';
 import { createLogger } from '@/lib/log';
@@ -112,6 +114,17 @@ export async function runWalmartSync(
     // shows a Refund or Dispute Settlement transaction (those should be
     // WalmartRefundEvent / WalmartDisputeSettlement instead).
     dedupWalmartReconEvents();
+
+    // Estimated referral + WFS fees for orders recon hasn't settled yet
+    // (rebuilt every run; real recon fees replace them as reports arrive).
+    try {
+      refreshWalmartFeeEstimates();
+    } catch (err: any) {
+      currentSync.totalErrors.push(`Walmart fee estimates: ${err.message}`);
+    }
+
+    // Cost any sales this sync wrote, now rather than at the end of the tick.
+    costNewSales('Walmart');
 
     // Update last sync timestamp
     const db = openDb();

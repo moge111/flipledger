@@ -26,6 +26,7 @@
 // Critical: no INSERT OR IGNORE without a matching UNIQUE index. No floats.
 import { NextRequest, NextResponse } from 'next/server';
 import { parseFbmCsv } from '@/lib/imports/inventorylab-fbm';
+import { resolveSupplierId } from '@/lib/suppliers';
 import { openDb } from '@/lib/db-conn';
 
 const getDb = () => openDb({ foreignKeys: true });
@@ -139,13 +140,6 @@ export async function POST(request: NextRequest) {
       VALUES (?, 'draft', 'MFN', 'amazon', ?, ?)
     `);
 
-    // suppliers.name has a real UNIQUE constraint → ON CONFLICT(name) is safe.
-    const upsertSupplier = db.prepare(`
-      INSERT INTO suppliers (name, created_at) VALUES (?, ?)
-      ON CONFLICT(name) DO UPDATE SET name = excluded.name
-      RETURNING id
-    `);
-
     // products has only a non-unique idx_products_asin index, so ON CONFLICT
     // is unsafe. Use manual select-then-insert/update keyed by asin.
     const selectProduct = db.prepare(`SELECT id, name, sku, marketplace FROM products WHERE asin = ? LIMIT 1`);
@@ -194,11 +188,8 @@ export async function POST(request: NextRequest) {
           if (cached != null) {
             supplierId = cached;
           } else {
-            const sRow = upsertSupplier.get(supplierName, nowIso) as { id: number } | undefined;
-            if (sRow?.id != null) {
-              supplierId = sRow.id;
-              supplierIdByName.set(supplierName, supplierId);
-            }
+            supplierId = resolveSupplierId(db, supplierName, nowIso);
+            if (supplierId != null) supplierIdByName.set(supplierName, supplierId);
           }
         }
 

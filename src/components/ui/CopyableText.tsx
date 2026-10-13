@@ -53,7 +53,7 @@ export default function CopyableText({ text, copyValue, variant = 'inline', clas
     <button
       onClick={handleCopy}
       title={title || `Click to copy: ${text}`}
-      className={`inline-flex items-center gap-1 font-mono hover:text-accent transition-colors group ${className}`}
+      className={`inline-flex items-center gap-1 font-mono hover:text-text-primary transition-colors group ${className}`}
     >
       <span>{text}</span>
       {copied ? (

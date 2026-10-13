@@ -14,6 +14,13 @@ interface OrderDetail {
     is_estimated: number;
     created_at: string;
   };
+  replacement?: {
+    isReplacement: boolean;
+    replacesOrderId: string | null;
+    reasonCode: number | null;
+    reasonLabel: string | null;
+    replacedBy: Array<{ orderId: string; status: string; reasonLabel: string | null }>;
+  };
   items: Array<{
     id: number;
     asin: string;
@@ -65,10 +72,10 @@ function fmtDate(iso: string): string {
 }
 
 const marketplaceBadge: Record<string, { label: string; cls: string }> = {
-  amazon: { label: 'AMZ', cls: 'bg-orange-500/10 text-orange-400' },
-  walmart: { label: 'WMT', cls: 'bg-blue-500/10 text-blue-400' },
-  ebay: { label: 'EBAY', cls: 'bg-green-500/10 text-green-400' },
-  paypal: { label: 'PP', cls: 'bg-cyan-500/10 text-cyan-400' },
+  amazon: { label: 'AMZ', cls: 'mkt mkt-amazon' },
+  walmart: { label: 'WMT', cls: 'mkt mkt-walmart' },
+  ebay: { label: 'EBAY', cls: 'mkt mkt-ebay' },
+  paypal: { label: 'PP', cls: 'mkt mkt-paypal' },
 };
 
 export default function OrderDetailPage({ params }: { params: Promise<{ id: string }> }) {
@@ -98,7 +105,7 @@ export default function OrderDetailPage({ params }: { params: Promise<{ id: stri
         <Link href="/" className="inline-flex items-center gap-1.5 text-sm text-text-secondary hover:text-text-primary mb-4">
           <ArrowLeft size={14} /> Back
         </Link>
-        <div className="rounded-md border border-negative/30 bg-negative/5 p-4 text-sm text-negative flex items-start gap-2">
+        <div className="flash flash-bad p-4 text-sm text-negative flex items-start gap-2">
           <AlertCircle size={16} className="mt-0.5" />
           <div>
             <div className="font-medium">{error}</div>
@@ -110,8 +117,8 @@ export default function OrderDetailPage({ params }: { params: Promise<{ id: stri
   }
   if (!data) return null;
 
-  const { order, items, events, fees, refunds, reimbursements, amazonDisputes, walmartDisputes, summary } = data;
-  const mb = marketplaceBadge[order.marketplace] || { label: order.marketplace.toUpperCase(), cls: 'bg-text-tertiary/10 text-text-tertiary' };
+  const { order, replacement, items, events, fees, refunds, reimbursements, amazonDisputes, walmartDisputes, summary } = data;
+  const mb = marketplaceBadge[order.marketplace] || { label: order.marketplace.toUpperCase(), cls: 'mkt' };
 
   // Marketplace-specific external link
   const externalUrl = (() => {
@@ -130,20 +137,46 @@ export default function OrderDetailPage({ params }: { params: Promise<{ id: stri
         <div className="flex items-start justify-between gap-4">
           <div>
             <div className="flex items-center gap-2 mb-1.5">
-              <span className={`px-1.5 py-0.5 text-[10px] font-medium rounded ${mb.cls}`}>{mb.label}</span>
-              <span className="text-xs text-text-tertiary uppercase tracking-wider">{order.fulfillment_channel}</span>
+              <span className={mb.cls}>{mb.label}</span>
+              <span className="text-xs text-text-tertiary label-caps">{order.fulfillment_channel}</span>
               <span className="text-xs text-text-tertiary">·</span>
               <span className="text-xs text-text-tertiary">{order.status}</span>
             </div>
-            <h1 className="text-2xl font-semibold tracking-tight font-mono">{order.order_id}</h1>
+            <h1 className="page-title font-mono">{order.order_id}</h1>
             <div className="text-sm text-text-tertiary mt-1">Purchased {fmtDate(order.purchase_date)}</div>
+            {replacement?.isReplacement && (
+              <div className="mt-2 flex flex-wrap items-center gap-2 text-sm">
+                <span className="tag text-accent">Replacement</span>
+                {replacement.replacesOrderId && (
+                  <span className="text-text-secondary">
+                    replaces{' '}
+                    <Link href={`/lookup/${encodeURIComponent(replacement.replacesOrderId)}`} className="font-mono text-link hover:underline">
+                      {replacement.replacesOrderId}
+                    </Link>
+                  </span>
+                )}
+                <span className="text-text-tertiary">
+                  · {replacement.reasonLabel ? `Reason: ${replacement.reasonLabel}` : 'Reason pending — Amazon reports it 1–2 days after the replacement ships'}
+                </span>
+              </div>
+            )}
+            {replacement?.replacedBy.map((r) => (
+              <div key={r.orderId} className="mt-2 flex flex-wrap items-center gap-2 text-sm">
+                <span className="tag text-warning">Replaced</span>
+                <span className="text-text-secondary">
+                  free replacement sent as{' '}
+                  <Link href={`/lookup/${encodeURIComponent(r.orderId)}`} className="font-mono text-link hover:underline">{r.orderId}</Link>
+                </span>
+                <span className="text-text-tertiary">· {r.reasonLabel ? `Reason: ${r.reasonLabel}` : `${r.status} — reason pending`}</span>
+              </div>
+            ))}
           </div>
           {externalUrl && (
             <a
               href={externalUrl}
               target="_blank"
               rel="noopener noreferrer"
-              className="inline-flex items-center gap-1.5 h-9 px-3 bg-bg-elevated border border-border-default rounded-md text-sm text-text-secondary hover:text-text-primary hover:bg-bg-hover transition-colors"
+              className="inline-flex items-center gap-1.5 h-9 px-3 bg-bg-surface border-[1.5px] border-border-strong rounded-md text-sm text-text-secondary hover:text-text-primary hover:bg-bg-hover transition-colors"
             >
               Open in {order.marketplace === 'amazon' ? 'Seller Central' : 'Seller Center'}
               <ExternalLink size={13} />
@@ -163,16 +196,16 @@ export default function OrderDetailPage({ params }: { params: Promise<{ id: stri
       {/* Items */}
       <Section title={`Items (${items.length})`}>
         <table className="w-full text-sm">
-          <thead className="text-text-tertiary text-xs uppercase tracking-wider">
-            <tr className="border-b border-border-subtle">
-              <th className="text-left py-2 px-3 font-medium">Product</th>
-              <th className="text-left py-2 px-3 font-medium">SKU</th>
-              <th className="text-right py-2 px-3 font-medium">Qty</th>
-              <th className="text-right py-2 px-3 font-medium">Price</th>
-              <th className="text-right py-2 px-3 font-medium">Total</th>
-              <th className="text-right py-2 px-3 font-medium">COGS/u</th>
-              <th className="text-right py-2 px-3 font-medium">Ship</th>
-              <th className="text-right py-2 px-3 font-medium">Promo</th>
+          <thead className="text-text-tertiary text-xs label-caps">
+            <tr>
+              <th className="text-left py-2 px-3">Product</th>
+              <th className="text-left py-2 px-3">SKU</th>
+              <th className="text-right py-2 px-3">Qty</th>
+              <th className="text-right py-2 px-3">Price</th>
+              <th className="text-right py-2 px-3">Total</th>
+              <th className="text-right py-2 px-3">COGS/u</th>
+              <th className="text-right py-2 px-3">Ship</th>
+              <th className="text-right py-2 px-3">Promo</th>
             </tr>
           </thead>
           <tbody>
@@ -198,12 +231,12 @@ export default function OrderDetailPage({ params }: { params: Promise<{ id: stri
       {/* Financial events timeline */}
       <Section title={`Financial events (${events.length})`}>
         <table className="w-full text-sm">
-          <thead className="text-text-tertiary text-xs uppercase tracking-wider">
-            <tr className="border-b border-border-subtle">
-              <th className="text-left py-2 px-3 font-medium">Date</th>
-              <th className="text-left py-2 px-3 font-medium">Event</th>
-              <th className="text-left py-2 px-3 font-medium">Detail</th>
-              <th className="text-right py-2 px-3 font-medium">Amount</th>
+          <thead className="text-text-tertiary text-xs label-caps">
+            <tr>
+              <th className="text-left py-2 px-3">Date</th>
+              <th className="text-left py-2 px-3">Event</th>
+              <th className="text-left py-2 px-3">Detail</th>
+              <th className="text-right py-2 px-3">Amount</th>
             </tr>
           </thead>
           <tbody>
@@ -216,7 +249,7 @@ export default function OrderDetailPage({ params }: { params: Promise<{ id: stri
                   {e.amtType && <span> · {e.amtType}</span>}
                   {e.txDesc && <span> · {e.txDesc}</span>}
                 </td>
-                <td className={`py-2 px-3 text-right font-mono ${e.amountCents < 0 ? 'text-negative' : 'text-positive'}`}>
+                <td className={`py-2 px-3 text-right tabular-nums ${e.amountCents < 0 ? 'text-negative' : 'text-positive'}`}>
                   {fmt(e.amountCents)}
                 </td>
               </tr>
@@ -229,12 +262,12 @@ export default function OrderDetailPage({ params }: { params: Promise<{ id: stri
       {fees.length > 0 && (
         <Section title={`Fees (${fees.length})`}>
           <table className="w-full text-sm">
-            <thead className="text-text-tertiary text-xs uppercase tracking-wider">
-              <tr className="border-b border-border-subtle">
-                <th className="text-left py-2 px-3 font-medium">Date</th>
-                <th className="text-left py-2 px-3 font-medium">Type</th>
-                <th className="text-left py-2 px-3 font-medium">Category</th>
-                <th className="text-right py-2 px-3 font-medium">Amount</th>
+            <thead className="text-text-tertiary text-xs label-caps">
+              <tr>
+                <th className="text-left py-2 px-3">Date</th>
+                <th className="text-left py-2 px-3">Type</th>
+                <th className="text-left py-2 px-3">Category</th>
+                <th className="text-right py-2 px-3">Amount</th>
               </tr>
             </thead>
             <tbody>
@@ -243,7 +276,7 @@ export default function OrderDetailPage({ params }: { params: Promise<{ id: stri
                   <td className="py-2 px-3 text-text-secondary whitespace-nowrap">{fmtDate(f.posted_date)}</td>
                   <td className="py-2 px-3 font-mono text-xs">{f.fee_type}</td>
                   <td className="py-2 px-3 text-text-tertiary">{f.fee_category}</td>
-                  <td className={`py-2 px-3 text-right font-mono ${f.amount < 0 ? 'text-negative' : 'text-positive'}`}>
+                  <td className={`py-2 px-3 text-right tabular-nums ${f.amount < 0 ? 'text-negative' : 'text-positive'}`}>
                     {fmt(f.amount)}
                   </td>
                 </tr>
@@ -257,13 +290,13 @@ export default function OrderDetailPage({ params }: { params: Promise<{ id: stri
       {refunds.length > 0 && (
         <Section title={`Refunds (${refunds.length})`}>
           <table className="w-full text-sm">
-            <thead className="text-text-tertiary text-xs uppercase tracking-wider">
-              <tr className="border-b border-border-subtle">
-                <th className="text-left py-2 px-3 font-medium">Date</th>
-                <th className="text-left py-2 px-3 font-medium">SKU</th>
-                <th className="text-left py-2 px-3 font-medium">Reason</th>
-                <th className="text-right py-2 px-3 font-medium">Qty</th>
-                <th className="text-right py-2 px-3 font-medium">Amount</th>
+            <thead className="text-text-tertiary text-xs label-caps">
+              <tr>
+                <th className="text-left py-2 px-3">Date</th>
+                <th className="text-left py-2 px-3">SKU</th>
+                <th className="text-left py-2 px-3">Reason</th>
+                <th className="text-right py-2 px-3">Qty</th>
+                <th className="text-right py-2 px-3">Amount</th>
               </tr>
             </thead>
             <tbody>
@@ -273,7 +306,7 @@ export default function OrderDetailPage({ params }: { params: Promise<{ id: stri
                   <td className="py-2 px-3 font-mono text-xs">{r.sku || '—'}</td>
                   <td className="py-2 px-3 text-text-tertiary">{r.reason || '—'}</td>
                   <td className="py-2 px-3 text-right">{r.quantity}</td>
-                  <td className="py-2 px-3 text-right text-negative font-mono">{fmt(-r.refund_amount)}</td>
+                  <td className="py-2 px-3 text-right text-negative tabular-nums">{fmt(-r.refund_amount)}</td>
                 </tr>
               ))}
             </tbody>
@@ -285,13 +318,13 @@ export default function OrderDetailPage({ params }: { params: Promise<{ id: stri
       {reimbursements.length > 0 && (
         <Section title={`Reimbursements (${reimbursements.length})`}>
           <table className="w-full text-sm">
-            <thead className="text-text-tertiary text-xs uppercase tracking-wider">
-              <tr className="border-b border-border-subtle">
-                <th className="text-left py-2 px-3 font-medium">Date</th>
-                <th className="text-left py-2 px-3 font-medium">ID</th>
-                <th className="text-left py-2 px-3 font-medium">SKU</th>
-                <th className="text-left py-2 px-3 font-medium">Reason</th>
-                <th className="text-right py-2 px-3 font-medium">Amount</th>
+            <thead className="text-text-tertiary text-xs label-caps">
+              <tr>
+                <th className="text-left py-2 px-3">Date</th>
+                <th className="text-left py-2 px-3">ID</th>
+                <th className="text-left py-2 px-3">SKU</th>
+                <th className="text-left py-2 px-3">Reason</th>
+                <th className="text-right py-2 px-3">Amount</th>
               </tr>
             </thead>
             <tbody>
@@ -301,7 +334,7 @@ export default function OrderDetailPage({ params }: { params: Promise<{ id: stri
                   <td className="py-2 px-3 font-mono text-xs truncate max-w-[16rem]">{r.reimbursement_id}</td>
                   <td className="py-2 px-3 font-mono text-xs">{r.sku || '—'}</td>
                   <td className="py-2 px-3 text-text-tertiary">{r.reason || '—'}</td>
-                  <td className="py-2 px-3 text-right text-positive font-mono">{fmt(r.amount)}</td>
+                  <td className="py-2 px-3 text-right text-positive tabular-nums">{fmt(r.amount)}</td>
                 </tr>
               ))}
             </tbody>
@@ -317,16 +350,16 @@ export default function OrderDetailPage({ params }: { params: Promise<{ id: stri
               <div key={`${d.refund_id}-${d.id}`} className="flex items-center justify-between p-3 rounded-md bg-bg-elevated text-sm">
                 <div className="flex items-center gap-3">
                   <span className={`px-1.5 py-0.5 text-[10px] font-medium rounded ${
-                    d.eligibility === 'eligible' ? 'bg-positive/10 text-positive' :
-                    d.eligibility === 'maybe' ? 'bg-warning/10 text-warning' :
-                    'bg-text-tertiary/10 text-text-tertiary'
+                    d.eligibility === 'eligible' ? 'tag text-positive' :
+                    d.eligibility === 'maybe' ? 'tag text-warning' :
+                    'tag text-text-tertiary'
                   }`}>
                     {d.eligibility}
                   </span>
-                  <span className="text-text-tertiary text-xs uppercase tracking-wider">{d.status}</span>
+                  <span className="text-text-tertiary text-xs label-caps">{d.status}</span>
                   <span className="text-text-secondary">{d.return_reason || '—'}</span>
                 </div>
-                <span className="font-mono text-text-secondary">{fmt(d.refund_amount_cents)}</span>
+                <span className="text-text-secondary tabular-nums">{fmt(d.refund_amount_cents)}</span>
               </div>
             ))}
           </div>
@@ -339,9 +372,9 @@ export default function OrderDetailPage({ params }: { params: Promise<{ id: stri
 function SummaryCard({ label, value, accent }: { label: string; value: string; accent: 'positive' | 'negative' | 'neutral' }) {
   const cls = accent === 'positive' ? 'text-positive' : accent === 'negative' ? 'text-negative' : 'text-text-primary';
   return (
-    <div className="rounded-md border border-border-subtle bg-bg-surface p-3">
-      <div className="text-[10px] uppercase tracking-wider text-text-tertiary mb-1.5">{label}</div>
-      <div className={`text-lg font-mono ${cls}`}>{value}</div>
+    <div className="panel p-3">
+      <div className="text-[10px] label-caps text-text-tertiary mb-1.5">{label}</div>
+      <div className={`text-lg tabular-nums ${cls}`}>{value}</div>
     </div>
   );
 }
@@ -349,8 +382,8 @@ function SummaryCard({ label, value, accent }: { label: string; value: string; a
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (
     <div className="mb-6">
-      <h2 className="text-sm font-medium text-text-secondary uppercase tracking-wider mb-2">{title}</h2>
-      <div className="rounded-md border border-border-subtle bg-bg-surface overflow-x-auto">
+      <h2 className="text-sm text-text-secondary label-caps mb-2">{title}</h2>
+      <div className="panel overflow-x-auto">
         {children}
       </div>
     </div>

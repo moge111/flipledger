@@ -50,15 +50,15 @@ type SortKey = 'value' | 'units' | 'resale' | 'name';
 
 // Order matches the physical journey: on your shelf → in transit → at the FC → sold.
 const STAGE_META: { key: StageKey; label: string; short: string; chip: string; bar: string }[] = [
-  { key: 'local',                 label: 'On hand (local)',      short: 'Local',        chip: 'bg-slate-500/10 text-slate-300 border-slate-500/30',   bar: 'bg-slate-400' },
-  { key: 'inboundWorking',        label: 'Shipment created',     short: 'Working',      chip: 'bg-info/10 text-info border-info/30',                   bar: 'bg-sky-600' },
-  { key: 'inboundShipped',        label: 'In transit',           short: 'In transit',   chip: 'bg-info/10 text-info border-info/30',                   bar: 'bg-sky-500' },
-  { key: 'inboundReceiving',      label: 'Checking in',          short: 'Checking in',  chip: 'bg-accent/10 text-accent border-accent/30',             bar: 'bg-sky-400' },
-  { key: 'fulfillable',           label: 'Fulfillable',          short: 'Fulfillable',  chip: 'bg-positive/10 text-positive border-positive/30',       bar: 'bg-emerald-500' },
-  { key: 'reservedFcTransfer',    label: 'FC transfer',          short: 'FC transfer',  chip: 'bg-purple-500/10 text-purple-400 border-purple-500/30', bar: 'bg-purple-500' },
-  { key: 'reservedFcProcessing',  label: 'FC processing',        short: 'FC processing',chip: 'bg-purple-500/10 text-purple-400 border-purple-500/30', bar: 'bg-purple-400' },
-  { key: 'reservedCustomerOrder', label: 'Sold — awaiting ship', short: 'Sold',         chip: 'bg-teal-500/10 text-teal-400 border-teal-500/30',       bar: 'bg-teal-400' },
-  { key: 'unfulfillable',         label: 'Unfulfillable',        short: 'Unfulfillable',chip: 'bg-negative/10 text-negative border-negative/30',       bar: 'bg-red-500' },
+  { key: 'local',                 label: 'On hand (local)',      short: 'Local',        chip: 'text-text-secondary',  bar: 'bg-chart-3' },
+  { key: 'inboundWorking',        label: 'Shipment created',     short: 'Working',      chip: 'text-link',            bar: 'bg-link/40' },
+  { key: 'inboundShipped',        label: 'In transit',           short: 'In transit',   chip: 'text-link',            bar: 'bg-link/70' },
+  { key: 'inboundReceiving',      label: 'Checking in',          short: 'Checking in',  chip: 'text-link',            bar: 'bg-link' },
+  { key: 'fulfillable',           label: 'Fulfillable',          short: 'Fulfillable',  chip: 'text-positive',        bar: 'bg-positive' },
+  { key: 'reservedFcTransfer',    label: 'FC transfer',          short: 'FC transfer',  chip: 'text-text-secondary',  bar: 'bg-chart-1/60' },
+  { key: 'reservedFcProcessing',  label: 'FC processing',        short: 'FC processing',chip: 'text-text-secondary',  bar: 'bg-chart-1/35' },
+  { key: 'reservedCustomerOrder', label: 'Sold — awaiting ship', short: 'Sold',         chip: 'text-text-primary',    bar: 'bg-chart-1' },
+  { key: 'unfulfillable',         label: 'Unfulfillable',        short: 'Unfulfillable',chip: 'text-negative',        bar: 'bg-negative' },
 ];
 
 const MARKETPLACE_BADGE: Record<string, { tone: 'amazon' | 'walmart' | 'neutral'; label: string }> = {
@@ -142,7 +142,7 @@ export default function InventoryPage() {
     { label: 'Total inventory at cost', value: fmt(totals.totalCostValue), sub: `${totals.totalUnits} units · ${totals.skuCount} SKUs`, tone: 'text-text-primary' },
     { label: 'Sellable now', value: fmt(st!.fulfillable.value), sub: `${st!.fulfillable.units} units fulfillable`, tone: 'text-positive' },
     { label: 'In transit / checking in', value: fmt(inTransitValue), sub: `${inTransitUnits} units inbound`, tone: 'text-info' },
-    { label: 'Reserved', value: fmt(reservedValue), sub: `${st!.reservedCustomerOrder.units} sold · ${st!.reservedFcTransfer.units + st!.reservedFcProcessing.units} FC moves`, tone: 'text-purple-400' },
+    { label: 'Reserved', value: fmt(reservedValue), sub: `${st!.reservedCustomerOrder.units} sold · ${st!.reservedFcTransfer.units + st!.reservedFcProcessing.units} FC moves`, tone: 'text-text-primary' },
     { label: 'On hand (local)', value: fmt(st!.local.value), sub: `${st!.local.units} units not sent anywhere`, tone: 'text-text-secondary' },
   ] : [];
 
@@ -156,12 +156,12 @@ export default function InventoryPage() {
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-xl font-semibold text-text-primary">Inventory</h1>
+          <h1 className="page-title">Inventory</h1>
           <p className="text-sm text-text-tertiary">Every unit you own — where it is, what stage it&apos;s in, and what it&apos;s worth</p>
         </div>
         <button
           onClick={load}
-          className="flex items-center gap-2 rounded-md border border-border-default bg-bg-surface px-3 py-1.5 text-sm text-text-secondary hover:bg-bg-elevated"
+          className="flex items-center gap-2 rounded-md border-[1.5px] border-border-strong bg-bg-surface px-3 py-1.5 text-sm text-text-secondary hover:bg-bg-hover"
         >
           <RefreshCw size={14} className={loading ? 'animate-spin' : ''} />
           Refresh
@@ -171,19 +171,21 @@ export default function InventoryPage() {
       {/* Stat cards */}
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-5">
         {cards.map((c) => (
-          <div key={c.label} className="rounded-lg border border-border-default bg-bg-surface p-4">
-            <div className="text-xs uppercase tracking-wide text-text-tertiary">{c.label}</div>
-            <div className={`mt-1 text-xl font-semibold ${c.tone}`}>{c.value}</div>
+          <div key={c.label} className="panel p-4">
+            <div className="text-xs label-caps text-text-tertiary">{c.label}</div>
+            <div className={`mt-1.5 stat-num text-[18px] sm:text-[22px] ${c.tone}`}>{c.value}</div>
             <div className="mt-0.5 text-xs text-text-tertiary">{c.sub}</div>
           </div>
         ))}
       </div>
 
+
       {/* Pipeline bar */}
       {barTotal > 0 && (
-        <div className="rounded-lg border border-border-default bg-bg-surface p-4">
-          <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-text-tertiary">Pipeline — units by stage</div>
-          <div className="flex h-4 w-full overflow-hidden rounded-full bg-bg-elevated">
+        <div className="panel">
+          <div className="panel-bar"><span>Pipeline — units by stage</span><span className="panel-bar-caption">click a stage to filter</span></div>
+          <div className="p-4">
+          <div className="flex h-4 w-full overflow-hidden rounded-sm border-[1.5px] border-border-strong bg-bg-elevated">
             {barSegments.map((seg) => (
               <div
                 key={seg.key}
@@ -203,9 +205,10 @@ export default function InventoryPage() {
               >
                 <span className={`h-2.5 w-2.5 rounded-sm ${seg.bar}`} />
                 <span className="text-text-secondary">{seg.label}</span>
-                <span className="font-mono text-text-tertiary">{seg.units}</span>
+                <span className="text-text-tertiary tabular-nums">{seg.units}</span>
               </button>
             ))}
+          </div>
           </div>
         </div>
       )}
@@ -218,10 +221,10 @@ export default function InventoryPage() {
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             placeholder="Search product, SKU, or ASIN…"
-            className="h-9 w-full rounded-md border border-border-default bg-bg-input pl-9 pr-3 text-sm text-text-primary placeholder-text-tertiary focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent/25"
+            className="h-9 w-full rounded-md border border-border-default bg-bg-input pl-9 pr-3 text-sm text-text-primary placeholder-text-tertiary focus:border-link focus:outline-none focus:ring-[3px] focus:ring-link-muted"
           />
         </div>
-        <div className="flex rounded-md border border-border-default bg-bg-surface p-0.5">
+        <div className="seg" role="group" aria-label="Location">
           {([
             { value: 'all', label: 'All' },
             { value: 'amazon', label: 'Amazon FBA' },
@@ -231,9 +234,7 @@ export default function InventoryPage() {
             <button
               key={t.value}
               onClick={() => setLocation(t.value)}
-              className={`rounded px-3 py-1.5 text-sm font-medium transition-colors ${
-                location === t.value ? 'bg-accent text-white' : 'text-text-secondary hover:text-text-primary'
-              }`}
+              aria-current={location === t.value ? 'true' : undefined}
             >
               {t.label}
             </button>
@@ -242,7 +243,7 @@ export default function InventoryPage() {
         <select
           value={stageFilter}
           onChange={(e) => setStageFilter(e.target.value as StageKey | 'all')}
-          className="h-9 rounded-md border border-border-default bg-bg-surface px-3 text-sm text-text-secondary focus:border-accent focus:outline-none"
+          className="h-9 rounded-md border border-border-default bg-bg-surface px-3 text-sm text-text-secondary focus:border-link focus:outline-none"
         >
           <option value="all">All stages</option>
           {STAGE_META.map((m) => (
@@ -253,15 +254,15 @@ export default function InventoryPage() {
 
       {/* Filtered subtotal strip */}
       <div className="flex flex-wrap gap-x-6 gap-y-1 rounded-md border border-border-subtle bg-bg-elevated/50 px-3 py-2 text-xs text-text-tertiary">
-        <span>Showing <span className="font-mono text-text-secondary">{visible.length}</span> products</span>
-        <span>Units <span className="font-mono text-text-secondary">{visibleTotals.units}</span></span>
-        <span>Cost <span className="font-mono text-text-secondary">{fmt(visibleTotals.cost)}</span></span>
-        <span>Est. resale <span className="font-mono text-text-secondary">{fmt(visibleTotals.resale)}</span></span>
+        <span>Showing <span className="text-text-secondary tabular-nums">{visible.length}</span> products</span>
+        <span>Units <span className="text-text-secondary tabular-nums">{visibleTotals.units}</span></span>
+        <span>Cost <span className="text-text-secondary tabular-nums">{fmt(visibleTotals.cost)}</span></span>
+        <span>Est. resale <span className="text-text-secondary tabular-nums">{fmt(visibleTotals.resale)}</span></span>
       </div>
 
       {/* Table */}
-      <div className="overflow-hidden rounded-lg border border-border-default bg-bg-surface">
-        <div className="grid grid-cols-[1fr_260px_70px_90px_110px_110px] gap-3 border-b border-border-default px-4 py-2.5 text-xs font-semibold uppercase tracking-wide text-text-tertiary">
+      <div className="panel overflow-hidden">
+        <div className="grid grid-cols-[1fr_260px_70px_90px_110px_110px] gap-3 border-b-[1.5px] border-border-strong px-4 py-2.5 text-[10.5px] label-caps text-text-tertiary">
           <button onClick={() => { setSortKey('name'); setSortDesc(sortKey === 'name' ? !sortDesc : false); }} className="text-left hover:text-text-secondary">
             Product{sortKey === 'name' ? (sortDesc ? ' ↓' : ' ↑') : ''}
           </button>
@@ -309,7 +310,7 @@ export default function InventoryPage() {
                       <div className="flex items-center gap-2">
                         <StatusBadge tone={badge.tone} size="xs">{badge.label}</StatusBadge>
                         {url ? (
-                          <a href={url} target="_blank" rel="noopener noreferrer" className="truncate text-sm text-text-primary hover:text-accent hover:underline" title={it.productName}>
+                          <a href={url} target="_blank" rel="noopener noreferrer" className="truncate text-sm text-text-primary hover:text-link hover:underline" title={it.productName}>
                             {it.productName || it.sku}
                             <ExternalLink size={11} className="ml-1 inline opacity-60" />
                           </a>
@@ -326,18 +327,18 @@ export default function InventoryPage() {
                   {/* Stage chips */}
                   <div className="flex flex-wrap gap-1">
                     {STAGE_META.filter((m) => it.stages[m.key] > 0).map((m) => (
-                      <span key={m.key} className={`inline-flex items-center rounded-full border px-1.5 py-0.5 text-[10px] font-medium ${m.chip}`} title={m.label}>
+                      <span key={m.key} className={`tag ${m.chip}`} title={m.label}>
                         {it.stages[m.key]} {m.short}
                       </span>
                     ))}
                   </div>
 
-                  <div className="text-right font-mono text-sm text-text-primary">{it.totalQty}</div>
-                  <div className="text-right font-mono text-sm text-text-secondary">
+                  <div className="text-right text-sm text-text-primary tabular-nums">{it.totalQty}</div>
+                  <div className="text-right text-sm text-text-secondary tabular-nums">
                     {it.cogsPerUnit > 0 ? fmt(it.cogsPerUnit) : <span className="text-warning">—</span>}
                   </div>
-                  <div className="text-right font-mono text-sm font-semibold text-text-primary">{fmt(it.totalCostValue)}</div>
-                  <div className="text-right font-mono text-sm text-text-secondary">
+                  <div className="text-right text-sm font-semibold text-text-primary tabular-nums">{fmt(it.totalCostValue)}</div>
+                  <div className="text-right text-sm text-text-secondary tabular-nums">
                     {it.estResaleValue > 0 ? fmt(it.estResaleValue) : '—'}
                   </div>
                 </div>

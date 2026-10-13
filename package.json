@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "next dev",
+    "dev": "next dev -H 127.0.0.1",
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
@@ -11,7 +11,9 @@
     "seed": "tsx src/lib/seed.ts"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.132.0",
     "@tanstack/react-table": "^8.21.3",
+    "ajv": "^6.14.0",
     "better-sqlite3": "^12.8.0",
     "bwip-js": "^4.10.1",
     "date-fns": "^4.1.0",

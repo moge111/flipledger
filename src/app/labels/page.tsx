@@ -258,7 +258,7 @@ export default function LabelsPage() {
     <div className="max-w-6xl">
       <div className="mb-4 flex items-start justify-between gap-4">
         <div>
-          <h1 className="text-xl font-semibold tracking-tight">Labels</h1>
+          <h1 className="page-title">Labels</h1>
           <p className="text-sm text-text-tertiary mt-0.5">
             Bulk-print barcode and custom labels. Reuses the same renderer as batch and merchant
             inventory labels — formats render identically.
@@ -267,7 +267,7 @@ export default function LabelsPage() {
         <div className="flex gap-2">
           <button
             onClick={handleClear}
-            className="px-3 py-1.5 text-sm rounded border border-border-subtle text-text-secondary hover:bg-bg-surface"
+            className="px-3 py-1.5 text-sm rounded text-text-primary hover:bg-bg-hover font-semibold bg-bg-surface border-[1.5px] border-border-strong"
             disabled={!pasteText && customRows.every(r => !r.title && !r.subtitle && !r.notes && !r.bin)}
           >
             Clear
@@ -275,7 +275,7 @@ export default function LabelsPage() {
           <button
             onClick={handlePrint}
             disabled={specs.length === 0}
-            className="px-4 py-1.5 text-sm rounded bg-accent text-white font-medium hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+            className="px-4 py-1.5 text-sm rounded bg-accent text-text-inverse font-bold hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
           >
             <Printer size={16} />
             Print {specs.length > 0 ? `${specs.length} label${specs.length !== 1 ? 's' : ''}` : ''}
@@ -306,14 +306,14 @@ export default function LabelsPage() {
       {/* Size + help row */}
       <div className="flex items-start gap-4 mb-4">
         <div className="flex items-center gap-2">
-          <span className="text-xs uppercase tracking-wide text-text-tertiary font-medium">Size</span>
+          <span className="text-xs label-caps text-text-tertiary">Size</span>
           <div className="flex rounded border border-border-subtle overflow-hidden">
             {(['2x1', '4x6'] as LabelSize[]).map(s => (
               <button
                 key={s}
                 onClick={() => setSize(s)}
                 className={`px-3 py-1 text-sm ${
-                  size === s ? 'bg-accent text-white' : 'bg-bg-surface text-text-secondary hover:bg-bg-elevated'
+                  size === s ? 'bg-accent text-text-inverse' : 'bg-bg-surface text-text-secondary hover:bg-bg-elevated'
                 }`}
               >
                 {s === '2x1' ? '2" × 1" thermal' : '4" × 6" thermal'}
@@ -321,7 +321,7 @@ export default function LabelsPage() {
             ))}
           </div>
         </div>
-        <div className="flex-1 text-xs text-text-tertiary border border-border-subtle rounded p-2 bg-bg-surface">
+        <div className="panel flex-1 text-xs text-text-tertiary p-2">
           <div className="font-mono mb-1">
             <span className="text-text-secondary">Columns:</span> {help.columns}
           </div>
@@ -340,7 +340,7 @@ export default function LabelsPage() {
           {customRows.map((row, idx) => (
             <div
               key={idx}
-              className="grid grid-cols-12 gap-2 items-start p-2 border border-border-subtle rounded bg-bg-surface"
+              className="panel grid grid-cols-12 gap-2 items-start p-2"
             >
               <input
                 type="text"
@@ -383,7 +383,7 @@ export default function LabelsPage() {
                 <button
                   onClick={() => removeCustomRow(idx)}
                   disabled={customRows.length === 1}
-                  className="p-1 text-text-tertiary hover:text-red-500 disabled:opacity-30"
+                  className="p-1 text-text-tertiary hover:text-negative disabled:opacity-30"
                   title="Remove row"
                 >
                   <Trash2 size={14} />
@@ -393,7 +393,7 @@ export default function LabelsPage() {
           ))}
           <button
             onClick={addCustomRow}
-            className="flex items-center gap-1 text-sm px-2 py-1 border border-border-subtle rounded text-text-secondary hover:bg-bg-surface"
+            className="flex items-center gap-1 text-sm px-2 py-1 rounded text-text-primary hover:bg-bg-hover font-semibold bg-bg-surface border-[1.5px] border-border-strong"
           >
             <Plus size={14} /> Add row
           </button>
@@ -403,7 +403,7 @@ export default function LabelsPage() {
           value={pasteText}
           onChange={e => setPasteText(e.target.value)}
           placeholder={`One row per label. Use | as the separator.\n\n${help.example}`}
-          className="w-full h-64 p-3 text-sm font-mono border border-border-subtle rounded bg-bg-surface focus:outline-none focus:border-accent"
+          className="w-full h-64 p-3 text-sm font-mono border border-border-subtle rounded bg-bg-surface focus:outline-none focus:border-link"
           spellCheck={false}
         />
       )}
@@ -411,12 +411,12 @@ export default function LabelsPage() {
       {/* Parsed preview */}
       {mode !== 'custom' && pasteText.trim() && (
         <div className="mt-4 border border-border-subtle rounded">
-          <div className="px-3 py-2 border-b border-border-subtle bg-bg-surface text-xs uppercase tracking-wide text-text-tertiary flex items-center justify-between">
+          <div className="px-3 py-2 border-b border-border-subtle bg-bg-surface text-xs label-caps text-text-tertiary flex items-center justify-between">
             <span>Preview ({parsedRows.length} row{parsedRows.length !== 1 ? 's' : ''})</span>
             <span>
-              <span className="text-green-500">{validRowCount} valid</span>
+              <span className="text-positive">{validRowCount} valid</span>
               {errorCount > 0 && (
-                <span className="ml-3 text-red-500">{errorCount} error{errorCount !== 1 ? 's' : ''}</span>
+                <span className="ml-3 text-negative">{errorCount} error{errorCount !== 1 ? 's' : ''}</span>
               )}
               <span className="ml-3 text-text-secondary">→ {specs.length} label{specs.length !== 1 ? 's' : ''}</span>
             </span>
@@ -425,16 +425,16 @@ export default function LabelsPage() {
             <table className="w-full text-xs">
               <thead className="bg-bg-surface sticky top-0">
                 <tr className="text-left text-text-tertiary">
-                  <th className="px-2 py-1 font-medium">#</th>
-                  <th className="px-2 py-1 font-medium">Identifier</th>
-                  <th className="px-2 py-1 font-medium">Title</th>
-                  <th className="px-2 py-1 font-medium">Detail</th>
-                  <th className="px-2 py-1 font-medium text-right">Copies</th>
+                  <th className="px-2 py-1">#</th>
+                  <th className="px-2 py-1">Identifier</th>
+                  <th className="px-2 py-1">Title</th>
+                  <th className="px-2 py-1">Detail</th>
+                  <th className="px-2 py-1 text-right">Copies</th>
                 </tr>
               </thead>
               <tbody>
                 {parsedRows.map((row, i) => (
-                  <tr key={i} className={`border-t border-border-subtle ${row.error ? 'bg-red-500/5' : ''}`}>
+                  <tr key={i} className={`border-t border-border-subtle ${row.error ? 'bg-negative/5' : ''}`}>
                     <td className="px-2 py-1 text-text-tertiary">{i + 1}</td>
                     <td className="px-2 py-1 font-mono">
                       {row.spec?.asin || row.spec?.fnsku || (
@@ -446,7 +446,7 @@ export default function LabelsPage() {
                     </td>
                     <td className="px-2 py-1 text-text-secondary">
                       {row.error ? (
-                        <span className="text-red-500 inline-flex items-center gap-1">
+                        <span className="text-negative inline-flex items-center gap-1">
                           <AlertTriangle size={12} />
                           {row.error}
                         </span>
@@ -461,7 +461,7 @@ export default function LabelsPage() {
                           .join(' · ') || <span className="text-text-tertiary">—</span>
                       )}
                     </td>
-                    <td className="px-2 py-1 text-right font-mono">{row.error ? '—' : row.copies}</td>
+                    <td className="px-2 py-1 text-right tabular-nums">{row.error ? '—' : row.copies}</td>
                   </tr>
                 ))}
               </tbody>
@@ -471,8 +471,8 @@ export default function LabelsPage() {
       )}
 
       {mode === 'fnsku' && validRowCount > 0 && (
-        <div className="mt-3 text-xs text-text-tertiary flex items-start gap-2 p-2 border border-border-subtle rounded bg-bg-surface">
-          <AlertTriangle size={14} className="mt-0.5 flex-shrink-0 text-amber-500" />
+        <div className="panel mt-3 text-xs text-text-tertiary flex items-start gap-2 p-2">
+          <AlertTriangle size={14} className="mt-0.5 flex-shrink-0 text-warning" />
           <div>
             FNSKU labels never fall back to ASIN. If any row lists an ASIN-format value instead of
             an X00-prefixed FNSKU, it will show as an error above and be skipped.
@@ -480,8 +480,8 @@ export default function LabelsPage() {
         </div>
       )}
       {mode === 'warehouse' && validRowCount > 0 && (
-        <div className="mt-3 text-xs text-text-tertiary flex items-start gap-2 p-2 border border-border-subtle rounded bg-bg-surface">
-          <AlertTriangle size={14} className="mt-0.5 flex-shrink-0 text-amber-500" />
+        <div className="panel mt-3 text-xs text-text-tertiary flex items-start gap-2 p-2">
+          <AlertTriangle size={14} className="mt-0.5 flex-shrink-0 text-warning" />
           <div>
             Warehouse labels render MSKU, bin, and price. Do not give these to customers — use ASIN
             mode for customer-facing labels.

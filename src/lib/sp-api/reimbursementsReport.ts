@@ -17,6 +17,7 @@
 import { getAccessToken, getEndpoint, fetchWithRetry } from './auth';
 import { downloadReport } from './reports';
 import type { SPAPICredentials } from './types';
+import type Database from 'better-sqlite3';
 import { openDb } from '@/lib/db-conn';
 import { createLogger } from '@/lib/log';
 
@@ -39,7 +40,7 @@ function toCents(s: string): number {
   return Math.round(n * 100);
 }
 
-interface ReimbursementRow {
+export interface ReimbursementRow {
   approvalDate: string;        // ISO
   reimbursementId: string;
   caseId: string | null;
@@ -50,6 +51,7 @@ interface ReimbursementRow {
   quantityReimbursedTotal: number;
   originalReimbursementId: string | null;
   originalReimbursementType: string | null;
+  amazonOrderId: string | null;
   asin: string | null;
   fnsku: string | null;
   sku: string | null;
@@ -128,6 +130,7 @@ export function parseReimbursementsReport(tsv: string): ReimbursementRow[] {
   const iQtyTotal = idx('quantity-reimbursed-total');
   const iOrigId = idx('original-reimbursement-id');
   const iOrigType = idx('original-reimbursement-type');
+  const iOrderId = idx('amazon-order-id');
   const iAsin = idx('asin');
   const iFnsku = idx('fnsku');
   const iSku = idx('sku');
@@ -153,6 +156,7 @@ export function parseReimbursementsReport(tsv: string): ReimbursementRow[] {
       quantityReimbursedTotal: iQtyTotal >= 0 ? parseInt(cols[iQtyTotal] || '0', 10) || 0 : 0,
       originalReimbursementId: iOrigId >= 0 ? cols[iOrigId] || null : null,
       originalReimbursementType: iOrigType >= 0 ? cols[iOrigType] || null : null,
+      amazonOrderId: iOrderId >= 0 ? cols[iOrderId] || null : null,
       asin: iAsin >= 0 ? cols[iAsin] || null : null,
       fnsku: iFnsku >= 0 ? cols[iFnsku] || null : null,
       sku: iSku >= 0 ? cols[iSku] || null : null,
@@ -176,19 +180,34 @@ export async function syncReimbursementsReport(
   const rows = parseReimbursementsReport(tsv);
 
   const db = getDb();
+  try {
+    return storeReimbursementRows(db, rows);
+  } finally {
+    db.close();
+  }
+}
+
+/** Upserts parsed report rows (one per line) and sweeps the placeholders they supersede. */
+export function storeReimbursementRows(
+  db: Database.Database,
+  rows: ReimbursementRow[],
+): { reportRows: number; inserted: number; updated: number; totalAmountCents: number } {
 
   const upsert = db.prepare(`
     INSERT INTO reimbursements (
-      reimbursement_id, reimbursement_date, asin, sku, reason, amount, quantity, status, marketplace, created_at
+      reimbursement_id, reimbursement_date, asin, sku, reason, amount, quantity, status, marketplace,
+      original_reimbursement_id, amazon_order_id, created_at
     )
-    VALUES (?, ?, ?, ?, ?, ?, ?, 'Approved', 'amazon', datetime('now'))
+    VALUES (?, ?, ?, ?, ?, ?, ?, 'Approved', 'amazon', ?, ?, datetime('now'))
     ON CONFLICT(reimbursement_id) DO UPDATE SET
       reimbursement_date = excluded.reimbursement_date,
       asin = excluded.asin,
       sku = excluded.sku,
       reason = excluded.reason,
       amount = excluded.amount,
-      quantity = excluded.quantity
+      quantity = excluded.quantity,
+      original_reimbursement_id = excluded.original_reimbursement_id,
+      amazon_order_id = excluded.amazon_order_id
   `);
 
   // After upserting a canonical numeric row, sweep any prior ADJ-* or
@@ -225,18 +244,43 @@ export async function syncReimbursementsReport(
 
   let inserted = 0, updated = 0, totalAmount = 0, dupsRemoved = 0;
 
+  // One reimbursement id can cover several products (one report line each).
+  // Keyed on the id alone, each line overwrote the previous one and the
+  // placeholder sweep then deleted the matching SETTLEMENT/ADJ rows, so every
+  // line but the last vanished from the books ($266.02 on Sep 6-7 2026,
+  // review A10). Multi-line ids are stored per line as "<id>:<sku>".
+  const linesPerId = new Map<string, number>();
+  for (const r of rows) linesPerId.set(r.reimbursementId, (linesPerId.get(r.reimbursementId) || 0) + 1);
+  const usedKeys = new Set<string>();
+  const lineKey = (r: ReimbursementRow): string => {
+    if ((linesPerId.get(r.reimbursementId) || 0) < 2) return r.reimbursementId;
+    const base = `${r.reimbursementId}:${r.sku || r.asin || 'line'}`;
+    let key = base;
+    for (let n = 2; usedKeys.has(key); n++) key = `${base}:${n}`;
+    return key;
+  };
+  // A bare row stored before this fix is replaced by its per-line rows.
+  const bareRow = db.prepare(`SELECT id, sku FROM reimbursements WHERE reimbursement_id = ?`);
+  const lineRow = db.prepare(`SELECT id FROM reimbursements WHERE reimbursement_id LIKE ? || ':%' AND (sku = ? OR ? IS NULL) ORDER BY id LIMIT 1`);
+  const repointBare = db.prepare(`UPDATE reimbursement_candidates SET matched_reimbursement_id = ? WHERE matched_reimbursement_id = ?`);
+  const deleteBare = db.prepare(`DELETE FROM reimbursements WHERE id = ?`);
+
   const tx = db.transaction(() => {
     for (const r of rows) {
       // Use approvalDate if present, fall back to today
       const date = r.approvalDate || new Date().toISOString().slice(0, 10);
+      const key = lineKey(r);
+      usedKeys.add(key);
       const result = upsert.run(
-        r.reimbursementId,
+        key,
         date,
         r.asin,
         r.sku,
         r.reason || r.originalReimbursementType || 'REIMBURSEMENT',
         r.amountTotalCents,
-        r.quantityReimbursedTotal || 1
+        r.quantityReimbursedTotal || 1,
+        r.originalReimbursementId,
+        r.amazonOrderId
       );
       if (result.changes === 1) inserted++;
       else if (result.changes === 2) updated++;
@@ -244,7 +288,7 @@ export async function syncReimbursementsReport(
 
       // Sweep any ADJ/SETTLEMENT placeholders this canonical row supersedes
       repointCandidates.run(
-        r.reimbursementId,
+        key,
         date, r.amountTotalCents,
         r.sku, r.sku, r.asin, r.asin
       );
@@ -254,12 +298,20 @@ export async function syncReimbursementsReport(
       );
       dupsRemoved += sweep.changes;
     }
+
+    for (const [id, n] of linesPerId) {
+      if (n < 2) continue;
+      const bare = bareRow.get(id) as { id: number; sku: string | null } | undefined;
+      if (!bare) continue;
+      const line = lineRow.get(id, bare.sku, bare.sku) as { id: number } | undefined;
+      if (line) repointBare.run(line.id, bare.id);
+      deleteBare.run(bare.id);
+    }
   });
   tx();
   if (dupsRemoved > 0) {
     log.info(`swept ${dupsRemoved} ADJ/SETTLEMENT placeholders superseded by canonical rows`);
   }
 
-  db.close();
   return { reportRows: rows.length, inserted, updated, totalAmountCents: totalAmount };
 }

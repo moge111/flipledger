@@ -266,7 +266,8 @@ export async function GET(request: NextRequest) {
     }
   }
 
-  const firstSize  = specs[0]?.size || '2x1';
+  // Whitelisted, never echoed raw: `size` comes from the request and lands in the HTML.
+  const firstSize  = specs[0]?.size === '4x6' ? '4x6' : '2x1';
   const is4x6      = firstSize === '4x6';
   const labelCount = specs.length;
 
@@ -328,7 +329,7 @@ body{margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,sans-serif;
     <button id="o-portrait" class="btn-orient" onclick="setOrient('portrait')">Portrait</button>
     <button id="o-landscape" class="btn-orient" onclick="setOrient('landscape')">Landscape</button>
   </span>` : ''}
-  <span class="toolbar-info">${labelCount} label${labelCount !== 1 ? 's' : ''} &middot; ${firstSize}</span>
+  <span class="toolbar-info">${labelCount} label${labelCount !== 1 ? 's' : ''} &middot; ${esc(firstSize)}</span>
 </div>
 <div class="labels-wrap">
 ${labelsHtml}

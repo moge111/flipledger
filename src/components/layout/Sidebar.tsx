@@ -5,6 +5,7 @@ import Link from 'next/link';
 import {
   LayoutDashboard,
   TrendingUp,
+  Telescope,
   Receipt,
   DollarSign,
   Package,
@@ -27,9 +28,15 @@ import {
   ScanBarcode,
   ShieldCheck,
   Warehouse,
+  PackagePlus,
+  Landmark,
+  Banknote,
+  ShoppingBasket,
+  Workflow,
 } from 'lucide-react';
 import { useState, useEffect } from 'react';
 import GlobalSearch from '@/components/ui/GlobalSearch';
+import ThemeToggle from '@/components/layout/ThemeToggle';
 
 interface NavItem {
   label: string;
@@ -58,6 +65,7 @@ const navSections: NavSection[] = [
     items: [
       { label: 'Dashboard', href: '/', icon: <LayoutDashboard size={18} /> },
       { label: 'Inventory', href: '/inventory', icon: <Warehouse size={18} /> },
+      { label: 'Restock Watch', href: '/inventory/restock', icon: <PackagePlus size={18} /> },
       { label: 'Products & COGS', href: '/products', icon: <ShoppingBag size={18} /> },
     ],
   },
@@ -65,6 +73,7 @@ const navSections: NavSection[] = [
     title: 'LISTING',
     items: [
       { label: 'Batches', href: '/list', icon: <ScanBarcode size={18} /> },
+      { label: 'Batch Results', href: '/list/results', icon: <BarChart3 size={18} /> },
       { label: 'MFN Orders', href: '/mfn/orders', icon: <ShoppingCart size={18} /> },
     ],
   },
@@ -135,14 +144,19 @@ export default function Sidebar() {
 
   return (
     <>
-      {/* Mobile hamburger */}
-      <button
-        onClick={() => setMobileOpen(true)}
-        className="fixed top-4 left-4 z-50 p-2 rounded-md bg-bg-surface border border-border-subtle lg:hidden"
-        aria-label="Open navigation"
-      >
-        <Menu size={20} className="text-text-secondary" />
-      </button>
+      {/* Mobile top bar: the black label bar with the brand, menu and ◐ */}
+      <header className="lg:hidden sticky top-0 z-30 h-[52px] shrink-0 bg-top-bg text-top-fg flex items-center gap-3 px-3.5">
+        <button
+          onClick={() => setMobileOpen(true)}
+          className="p-1.5 rounded-md text-top-fg/70 hover:text-top-fg hover:bg-top-fg/10"
+          aria-label="Open navigation"
+        >
+          <Menu size={20} />
+        </button>
+        <Brand />
+        <span className="flex-1" />
+        <ThemeToggle />
+      </header>
 
       {/* Mobile overlay */}
       {mobileOpen && (
@@ -155,7 +169,7 @@ export default function Sidebar() {
       {/* Sidebar */}
       <aside
         className={`
-          fixed top-0 left-0 z-50 h-screen bg-bg-surface border-r border-border-subtle
+          fixed top-0 left-0 z-50 h-screen bg-top-bg text-top-fg
           flex flex-col transition-all duration-200 ease-in-out
           ${collapsed ? 'w-16' : 'w-60'}
           ${mobileOpen ? 'translate-x-0' : '-translate-x-full'}
@@ -163,23 +177,19 @@ export default function Sidebar() {
         `}
       >
         {/* Logo */}
-        <div className="flex items-center justify-between h-14 px-4 border-b border-border-subtle shrink-0">
-          {!collapsed && (
-            <Link href="/" className="text-lg font-semibold text-text-primary tracking-tight">
-              FlipLedger
-            </Link>
-          )}
+        <div className="flex items-center justify-between h-[52px] px-4 border-b border-top-fg/15 shrink-0">
+          {!collapsed && <Brand />}
           <button
             onClick={() => {
               setCollapsed(!collapsed);
               setMobileOpen(false);
             }}
-            className="p-1 rounded-md hover:bg-bg-hover transition-colors"
+            className="p-1 rounded-md text-top-fg/60 hover:text-top-fg hover:bg-top-fg/10 transition-colors"
             aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
           >
             <ChevronLeft
               size={18}
-              className={`text-text-tertiary transition-transform ${collapsed ? 'rotate-180' : ''}`}
+              className={`transition-transform ${collapsed ? 'rotate-180' : ''}`}
             />
           </button>
         </div>
@@ -194,12 +204,12 @@ export default function Sidebar() {
           {navSections.map((section) => (
             <div key={section.title || 'main'} className="mb-3">
               {section.title && !collapsed && (
-                <div className="px-3 mb-1.5 text-[11px] font-medium tracking-widest text-text-tertiary uppercase">
+                <div className="label-caps px-3 mb-1.5 text-[10.5px] text-top-fg/45">
                   {section.title}
                 </div>
               )}
               {section.title && collapsed && (
-                <div className="w-full h-px bg-border-subtle my-2" />
+                <div className="w-full h-px bg-top-fg/15 my-2" />
               )}
               {section.items.map((item) => {
                 const isActive = pathname === item.href;
@@ -209,18 +219,17 @@ export default function Sidebar() {
                     href={item.href}
                     onClick={() => setMobileOpen(false)}
                     title={collapsed ? item.label : undefined}
+                    aria-current={isActive ? 'page' : undefined}
                     className={`
-                      flex items-center gap-2.5 h-8 px-3 rounded-md text-sm transition-colors
+                      flex items-center gap-2.5 h-8 px-3 rounded-md text-[13px] font-semibold transition-colors text-top-fg
                       ${collapsed ? 'justify-center px-0' : ''}
                       ${isActive
-                        ? 'bg-bg-active text-text-primary border-l-2 border-accent'
-                        : 'text-text-secondary hover:bg-bg-hover hover:text-text-primary'
+                        ? 'bg-[rgba(128,128,128,.22)] opacity-100'
+                        : 'opacity-[.62] hover:opacity-100'
                       }
                     `}
                   >
-                    <span className={`shrink-0 ${isActive ? 'text-accent' : 'text-text-tertiary'}`}>
-                      {item.icon}
-                    </span>
+                    <span className="shrink-0">{item.icon}</span>
                     {!collapsed && <span className="truncate">{item.label}</span>}
                   </Link>
                 );
@@ -230,27 +239,40 @@ export default function Sidebar() {
         </nav>
 
         {/* Footer */}
-        <div className="shrink-0 px-3 py-3 border-t border-border-subtle">
-          <div className="flex items-center gap-2 text-xs text-text-tertiary mb-2">
-            <span className={`w-2 h-2 rounded-full ${lastSync ? 'bg-positive' : 'bg-warning'}`} />
-            {!collapsed && <span>{lastSync ? formatSyncTime(lastSync) : 'No data synced yet'}</span>}
+        <div className="shrink-0 px-3 py-3 border-t border-top-fg/15">
+          <div className={`flex items-center gap-2 text-xs text-top-fg/70 mb-2 ${collapsed ? 'justify-center' : ''}`}>
+            <span className={`w-2 h-2 rounded-full ${lastSync ? 'bg-positive' : 'bg-highlight'}`} />
+            {!collapsed && <span className="flex-1">{lastSync ? formatSyncTime(lastSync) : 'No data synced yet'}</span>}
+            {!collapsed && <ThemeToggle className="hidden lg:inline-flex" />}
           </div>
           <Link
             href="/settings"
+            aria-current={pathname === '/settings' ? 'page' : undefined}
             className={`
-              flex items-center gap-2.5 h-8 px-3 rounded-md text-sm transition-colors
+              flex items-center gap-2.5 h-8 px-3 rounded-md text-[13px] font-semibold text-top-fg transition-colors
               ${collapsed ? 'justify-center px-0' : ''}
               ${pathname === '/settings'
-                ? 'bg-bg-active text-text-primary'
-                : 'text-text-secondary hover:bg-bg-hover hover:text-text-primary'
+                ? 'bg-[rgba(128,128,128,.22)] opacity-100'
+                : 'opacity-[.62] hover:opacity-100'
               }
             `}
           >
-            <Settings size={18} className="text-text-tertiary shrink-0" />
+            <Settings size={18} className="shrink-0" />
             {!collapsed && <span>Settings</span>}
           </Link>
+          {collapsed && <div className="hidden lg:flex justify-center mt-2"><ThemeToggle /></div>}
         </div>
       </aside>
     </>
+  );
+}
+
+// Brand: expanded heavy caps next to a small carton mark (a box with its tape seam).
+function Brand() {
+  return (
+    <Link href="/" className="flex items-center gap-2.5 text-top-fg font-black label-caps text-[15px] [font-stretch:125%] [font-variation-settings:'wdth'_125]">
+      <i aria-hidden="true" className="relative w-[22px] h-4 border-2 border-current rounded-[2px] after:content-[''] after:absolute after:left-1/2 after:-top-[2px] after:-bottom-[2px] after:border-l-2 after:border-current" />
+      FlipLedger
+    </Link>
   );
 }

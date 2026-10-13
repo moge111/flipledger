@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { MKT_DATE, marketToday, marketDaysAgo, addDays } from '@/lib/market-day';
 import { openDb } from '@/lib/db-conn';
+import { lineSettledRefundExpr } from '@/lib/accounting-sql';
 import { marketplaceParam } from '@/lib/request-params';
 import { createLogger } from '@/lib/log';
 
@@ -38,6 +39,8 @@ export async function GET(request: NextRequest) {
         COALESCE(p.name, oi.asin) as productName,
         oi.quantity,
         oi.total_price as salePrice,
+        -- Settled refunds against this line (review C3).
+        CAST(ROUND(${lineSettledRefundExpr()}) AS INTEGER) as refunded,
         COALESCE(oi.cogs_per_unit, 0) as buyCostPerUnit,
         CASE WHEN ot.order_total > 0
           THEN CAST(COALESCE(fd.totalFees, 0) * oi.total_price * 1.0 / ot.order_total AS INTEGER)
@@ -59,8 +62,15 @@ export async function GET(request: NextRequest) {
         SELECT order_id, -SUM(amount) as totalFees FROM fee_details WHERE order_id IS NOT NULL AND order_id != '' GROUP BY order_id
       ) fd ON o.order_id = fd.order_id
       LEFT JOIN (
+        -- Walmart-funded incentive on the sale, net of its reversal when the
+        -- unit was returned (that reversal is stored as the WalmartRefundEvent
+        -- 'Total Walmart Funded Savings' line).
         SELECT order_id, SUM(total_amount) as totalInc FROM financial_events
-        WHERE event_type = 'WalmartIncentive' AND order_id IS NOT NULL AND order_id != '' GROUP BY order_id
+        WHERE order_id IS NOT NULL AND order_id != ''
+          AND (event_type = 'WalmartIncentive'
+               OR (event_type = 'WalmartRefundEvent'
+                   AND json_extract(raw_data, '$."Amount Type"') = 'Total Walmart Funded Savings'))
+        GROUP BY order_id
       ) inc ON o.order_id = inc.order_id
       LEFT JOIN (
         SELECT order_id, SUM(total_price) as order_total FROM order_items GROUP BY order_id
@@ -73,7 +83,8 @@ export async function GET(request: NextRequest) {
     const items = rows.map((row) => {
       const buyCost = row.buyCostPerUnit * row.quantity;
       const incentives = row.incentives || 0;
-      const profit = row.salePrice - buyCost - row.fees + incentives;
+      const refunded = row.refunded || 0;
+      const profit = row.salePrice - buyCost - row.fees + incentives - refunded;
       const profitPercent = row.salePrice > 0 ? (profit / row.salePrice) * 100 : 0;
       const roiPercent = buyCost > 0 ? (profit / buyCost) * 100 : 0;
       return {
@@ -84,6 +95,7 @@ export async function GET(request: NextRequest) {
         productName: row.productName,
         quantity: row.quantity,
         salePrice: row.salePrice,
+        refunded,
         buyCost,
         fees: row.fees,
         incentives,
@@ -95,6 +107,7 @@ export async function GET(request: NextRequest) {
     });
 
     const totalSales = items.reduce((s, i) => s + i.salePrice, 0);
+    const totalRefunded = items.reduce((s, i) => s + i.refunded, 0);
     const totalFees = items.reduce((s, i) => s + i.fees, 0);
     const totalIncentives = items.reduce((s, i) => s + i.incentives, 0);
     const totalProfit = items.reduce((s, i) => s + i.profit, 0);
@@ -109,6 +122,7 @@ export async function GET(request: NextRequest) {
       totals: {
         count,
         totalSales,
+        totalRefunded,
         totalFees,
         totalIncentives,
         totalProfit,

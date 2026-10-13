@@ -6,6 +6,8 @@ import {
 } from 'recharts';
 import { Banknote, Download, Info, PiggyBank, TimerReset } from 'lucide-react';
 import { useQuery } from '@/lib/useQuery';
+import { Seg } from '@/components/ui/Paper';
+import ChartTooltip from '@/components/charts/ChartTooltip';
 
 interface MonthRow {
   month: string;
@@ -161,26 +163,19 @@ export default function CashFlowPage() {
       {/* Header */}
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <h1 className="text-xl font-semibold text-text-primary">Cash Flow</h1>
+          <h1 className="page-title">Cash Flow</h1>
           <p className="text-sm text-text-tertiary">Money in vs money out by month, what&apos;s still in flight, and how long your cash lasts</p>
         </div>
         <div className="flex items-center gap-2">
-          <div className="flex rounded-md border border-border-default bg-bg-surface p-0.5">
-            {[6, 12, 24].map((w) => (
-              <button
-                key={w}
-                onClick={() => setWindowMonths(w)}
-                className={`rounded px-3 py-1.5 text-sm font-medium transition-colors ${
-                  windowMonths === w ? 'bg-accent text-white' : 'text-text-secondary hover:text-text-primary'
-                }`}
-              >
-                {w}mo
-              </button>
-            ))}
-          </div>
+          <Seg
+            ariaLabel="Months shown"
+            value={String(windowMonths)}
+            onChange={(v) => setWindowMonths(Number(v))}
+            options={[6, 12, 24].map((w) => ({ value: String(w), label: `${w}mo` }))}
+          />
           <button
             onClick={exportCsv}
-            className="flex h-9 items-center gap-2 rounded-md border border-border-default bg-bg-surface px-3 text-sm text-text-secondary hover:bg-bg-elevated"
+            className="flex h-9 items-center gap-2 rounded-md border-[1.5px] border-border-strong bg-bg-surface px-3 text-sm font-semibold text-text-primary hover:bg-bg-hover"
           >
             <Download size={14} />
             CSV
@@ -192,12 +187,12 @@ export default function CashFlowPage() {
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-5">
         {loading && !s
           ? Array.from({ length: 5 }).map((_, i) => (
-              <div key={i} className="h-[92px] animate-pulse rounded-lg border border-border-subtle bg-bg-surface" />
+              <div key={i} className="panel h-[92px] animate-pulse" />
             ))
           : cards.map((c) => (
-              <div key={c.label} className="rounded-lg border border-border-default bg-bg-surface p-4">
-                <div className="text-xs uppercase tracking-wide text-text-tertiary">{c.label}</div>
-                <div className={`mt-1 font-mono text-xl font-semibold ${c.tone}`}>{c.value}</div>
+              <div key={c.label} className="panel px-4 py-3.5">
+                <div className="label-caps text-text-tertiary">{c.label}</div>
+                <div className={`mt-1.5 stat-num text-[18px] sm:text-[22px] ${c.tone}`}>{c.value}</div>
                 <div className="mt-0.5 text-xs text-text-tertiary">{c.sub}</div>
               </div>
             ))}
@@ -205,7 +200,7 @@ export default function CashFlowPage() {
 
       {/* Runway panel */}
       {s && (
-        <div className={`rounded-lg border p-4 ${selfFunding ? 'border-positive/30 bg-positive-muted/30' : 'border-warning/30 bg-warning-muted/20'}`}>
+        <div className={selfFunding ? 'panel p-4' : 'attn-banner p-4'}>
           <div className="flex flex-wrap items-center justify-between gap-4">
             <div className="flex items-center gap-3">
               {selfFunding ? <PiggyBank size={22} className="text-positive" /> : <TimerReset size={22} className="text-warning" />}
@@ -224,7 +219,7 @@ export default function CashFlowPage() {
                   </>
                 ) : (
                   <>
-                    <div className="font-mono text-2xl font-bold text-warning">
+                    <div className="stat-num text-[22px] sm:text-[26px] text-warning">
                       {s.runwayMonths} months of runway
                     </div>
                     <div className="text-xs text-text-tertiary">
@@ -238,7 +233,7 @@ export default function CashFlowPage() {
             {/* Cash on hand input */}
             <div className="flex items-center gap-2">
               <Banknote size={16} className="text-text-tertiary" />
-              <label className="text-xs uppercase tracking-wide text-text-tertiary">Cash on hand</label>
+              <label className="text-xs label-caps text-text-tertiary">Cash on hand</label>
               <div className="relative">
                 <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-sm text-text-tertiary">$</span>
                 <input
@@ -247,13 +242,13 @@ export default function CashFlowPage() {
                   onKeyDown={(e) => e.key === 'Enter' && saveCash()}
                   placeholder="0.00"
                   inputMode="decimal"
-                  className="h-9 w-32 rounded-md border border-border-default bg-bg-input pl-6 pr-2 text-right font-mono text-sm text-text-primary placeholder-text-tertiary focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent/25"
+                  className="h-9 w-32 rounded-md border border-border-default bg-bg-input pl-6 pr-2 text-right text-sm text-text-primary placeholder-text-tertiary focus:border-link focus:outline-none focus:ring-[3px] focus:ring-link-muted tabular-nums"
                 />
               </div>
               <button
                 onClick={saveCash}
                 disabled={savingCash}
-                className="h-9 rounded-md bg-accent px-3 text-sm font-medium text-white hover:bg-accent-hover disabled:opacity-50"
+                className="h-9 rounded-md bg-accent px-3 text-sm font-bold text-text-inverse hover:bg-accent-hover disabled:opacity-50"
               >
                 {savingCash ? 'Saving…' : 'Save'}
               </button>
@@ -266,47 +261,45 @@ export default function CashFlowPage() {
       )}
 
       {/* Chart */}
-      <div className="rounded-lg border border-border-default bg-bg-surface p-4">
-        <div className="mb-3 text-xs font-semibold uppercase tracking-wide text-text-tertiary">Monthly cash in vs out</div>
+      <div className="panel">
+        <div className="panel-bar"><span>Monthly cash in vs out</span><span className="panel-bar-caption">cash basis</span></div>
+        <div className="p-4">
         {loading && months.length === 0 ? (
           <div className="h-[280px] animate-pulse rounded-md bg-bg-elevated" />
         ) : (
           <ResponsiveContainer width="100%" height={280}>
             <ComposedChart data={chartData} margin={{ top: 4, right: 8, left: 8, bottom: 0 }}>
-              <CartesianGrid strokeDasharray="3 3" stroke="#1e1e24" vertical={false} />
-              <XAxis dataKey="name" tick={{ fill: '#606070', fontSize: 11 }} axisLine={{ stroke: '#2a2a33' }} tickLine={false} />
+              <CartesianGrid stroke="var(--color-border-subtle)" vertical={false} />
+              <XAxis dataKey="name" tick={{ fill: 'var(--color-text-tertiary)', fontSize: 11 }} axisLine={{ stroke: 'var(--color-border-strong)', strokeWidth: 1.5 }} tickLine={false} />
               <YAxis
-                tick={{ fill: '#606070', fontSize: 11, fontFamily: 'var(--font-mono, monospace)' }}
+                tick={{ fill: 'var(--color-text-tertiary)', fontSize: 11 }}
                 axisLine={false} tickLine={false}
                 tickFormatter={(v: number) => `$${Math.abs(v) >= 1000 ? `${(v / 1000).toFixed(0)}k` : v.toFixed(0)}`}
               />
               <Tooltip
-                contentStyle={{ background: '#18181c', border: '1px solid #2a2a33', borderRadius: 8, fontSize: 12 }}
-                labelStyle={{ color: '#a0a0b0' }}
-                formatter={(value, name) => [
-                  (value as number).toLocaleString('en-US', { style: 'currency', currency: 'USD' }),
-                  name === 'cashIn' ? 'Cash in' : name === 'cashOut' ? 'Cash out' : 'Net',
-                ]}
+                content={<ChartTooltip format={(v) => v.toLocaleString('en-US', { style: 'currency', currency: 'USD' })} />}
+                cursor={{ fill: 'var(--color-accent-muted)' }}
               />
-              <ReferenceLine y={0} stroke="#3a3a44" />
-              <Bar dataKey="cashIn" fill="#22c55e" radius={[3, 3, 0, 0]} maxBarSize={26} />
-              <Bar dataKey="cashOut" fill="#ef4444" radius={[3, 3, 0, 0]} maxBarSize={26} />
-              <Line dataKey="net" stroke="#6366f1" strokeWidth={2} dot={false} type="monotone" />
+              <ReferenceLine y={0} stroke="var(--color-border-strong)" strokeWidth={1.5} />
+              <Bar dataKey="cashIn" name="Cash in" fill="var(--color-positive)" radius={[1, 1, 0, 0]} maxBarSize={26} />
+              <Bar dataKey="cashOut" name="Cash out" fill="var(--color-negative)" radius={[1, 1, 0, 0]} maxBarSize={26} />
+              <Line dataKey="net" name="Net" stroke="var(--color-chart-1)" strokeWidth={2} dot={false} type="monotone" />
             </ComposedChart>
           </ResponsiveContainer>
         )}
         <div className="mt-1 flex gap-4 text-xs text-text-tertiary">
           <span className="flex items-center gap-1.5"><span className="h-2.5 w-2.5 rounded-sm bg-positive" /> Cash in (sales + reimbursements)</span>
           <span className="flex items-center gap-1.5"><span className="h-2.5 w-2.5 rounded-sm bg-negative" /> Cash out (COGS + fees + refunds + expenses)</span>
-          <span className="flex items-center gap-1.5"><span className="h-0.5 w-3 rounded bg-accent" /> Net</span>
+          <span className="flex items-center gap-1.5"><span className="h-0.5 w-3 rounded bg-chart-1" /> Net</span>
+        </div>
         </div>
       </div>
 
       {/* Monthly table */}
-      <div className="overflow-x-auto rounded-lg border border-border-default bg-bg-surface">
+      <div className="panel overflow-x-auto">
         <table className="w-full min-w-[900px] text-sm">
           <thead>
-            <tr className="border-b border-border-default bg-bg-elevated text-xs font-medium uppercase tracking-wide text-text-tertiary">
+            <tr className="bg-bg-surface text-xs label-caps text-text-tertiary">
               <th className="px-4 py-2.5 text-left">Month</th>
               <th className="px-3 py-2.5 text-right">Sales</th>
               <th className="px-3 py-2.5 text-right">Reimb</th>
@@ -327,16 +320,16 @@ export default function CashFlowPage() {
                   {monthLabel(m.month)}
                   {m.partial && <span className="ml-1.5 text-xs text-text-tertiary">(partial)</span>}
                 </td>
-                <td className="px-3 py-2 text-right font-mono text-text-secondary">{fmt(m.salesIncome + m.mfnShippingCredits)}</td>
-                <td className="px-3 py-2 text-right font-mono text-text-secondary">{fmt(m.reimbursements + m.otherIncome)}</td>
-                <td className="px-3 py-2 text-right font-mono text-text-primary">{fmt(m.cashIn)}</td>
-                <td className="px-3 py-2 text-right font-mono text-text-secondary">{fmt(m.cogs)}</td>
-                <td className="px-3 py-2 text-right font-mono text-text-secondary">{fmt(m.orderFees + m.serviceFees)}</td>
-                <td className="px-3 py-2 text-right font-mono text-text-secondary">{fmt(m.refunds)}</td>
-                <td className="px-3 py-2 text-right font-mono text-text-secondary">{fmt(m.shippingCosts)}</td>
-                <td className="px-3 py-2 text-right font-mono text-text-secondary">{fmt(m.expenses)}</td>
-                <td className="px-3 py-2 text-right font-mono text-text-primary">{fmt(m.cashOut)}</td>
-                <td className={`px-4 py-2 text-right font-mono font-semibold ${m.net >= 0 ? 'text-positive' : 'text-negative'}`}>{fmtSigned(m.net)}</td>
+                <td className="px-3 py-2 text-right text-text-secondary tabular-nums">{fmt(m.salesIncome + m.mfnShippingCredits)}</td>
+                <td className="px-3 py-2 text-right text-text-secondary tabular-nums">{fmt(m.reimbursements + m.otherIncome)}</td>
+                <td className="px-3 py-2 text-right text-text-primary tabular-nums">{fmt(m.cashIn)}</td>
+                <td className="px-3 py-2 text-right text-text-secondary tabular-nums">{fmt(m.cogs)}</td>
+                <td className="px-3 py-2 text-right text-text-secondary tabular-nums">{fmt(m.orderFees + m.serviceFees)}</td>
+                <td className="px-3 py-2 text-right text-text-secondary tabular-nums">{fmt(m.refunds)}</td>
+                <td className="px-3 py-2 text-right text-text-secondary tabular-nums">{fmt(m.shippingCosts)}</td>
+                <td className="px-3 py-2 text-right text-text-secondary tabular-nums">{fmt(m.expenses)}</td>
+                <td className="px-3 py-2 text-right text-text-primary tabular-nums">{fmt(m.cashOut)}</td>
+                <td className={`px-4 py-2 text-right font-semibold tabular-nums ${m.net >= 0 ? 'text-positive' : 'text-negative'}`}>{fmtSigned(m.net)}</td>
               </tr>
             ))}
             {months.length === 0 && !loading && (
@@ -345,18 +338,18 @@ export default function CashFlowPage() {
           </tbody>
           {months.length > 0 && (
             <tfoot>
-              <tr className="border-t-2 border-border-strong bg-bg-elevated font-semibold">
+              <tr className="border-t-[1.5px] border-border-strong bg-bg-surface font-bold">
                 <td className="px-4 py-2.5 text-text-primary">Total</td>
                 <td className="px-3 py-2.5" />
                 <td className="px-3 py-2.5" />
-                <td className="px-3 py-2.5 text-right font-mono text-text-primary">{fmt(totals.cashIn)}</td>
-                <td className="px-3 py-2.5 text-right font-mono text-text-secondary">{fmt(totals.cogs)}</td>
-                <td className="px-3 py-2.5 text-right font-mono text-text-secondary">{fmt(totals.fees)}</td>
-                <td className="px-3 py-2.5 text-right font-mono text-text-secondary">{fmt(totals.refunds)}</td>
-                <td className="px-3 py-2.5 text-right font-mono text-text-secondary">{fmt(totals.shipping)}</td>
-                <td className="px-3 py-2.5 text-right font-mono text-text-secondary">{fmt(totals.expenses)}</td>
-                <td className="px-3 py-2.5 text-right font-mono text-text-primary">{fmt(totals.cashOut)}</td>
-                <td className={`px-4 py-2.5 text-right font-mono ${totals.net >= 0 ? 'text-positive' : 'text-negative'}`}>{fmtSigned(totals.net)}</td>
+                <td className="px-3 py-2.5 text-right text-text-primary tabular-nums">{fmt(totals.cashIn)}</td>
+                <td className="px-3 py-2.5 text-right text-text-secondary tabular-nums">{fmt(totals.cogs)}</td>
+                <td className="px-3 py-2.5 text-right text-text-secondary tabular-nums">{fmt(totals.fees)}</td>
+                <td className="px-3 py-2.5 text-right text-text-secondary tabular-nums">{fmt(totals.refunds)}</td>
+                <td className="px-3 py-2.5 text-right text-text-secondary tabular-nums">{fmt(totals.shipping)}</td>
+                <td className="px-3 py-2.5 text-right text-text-secondary tabular-nums">{fmt(totals.expenses)}</td>
+                <td className="px-3 py-2.5 text-right text-text-primary tabular-nums">{fmt(totals.cashOut)}</td>
+                <td className={`px-4 py-2.5 text-right tabular-nums ${totals.net >= 0 ? 'text-positive' : 'text-negative'}`}>{fmtSigned(totals.net)}</td>
               </tr>
             </tfoot>
           )}

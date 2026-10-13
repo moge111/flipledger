@@ -120,14 +120,29 @@ test('dedup unique indexes exist with the right shape', { skip: !dbExists }, () 
 });
 
 test('no phantom estimator fees on non-Amazon orders', { skip: !dbExists }, () => {
-  // May 19, 2026 bug: the fee estimator (sentinel financial_event_id = 0)
-  // created fake Commission/FBA fees on Walmart orders awaiting recon.
+  // May 19, 2026 bug: the Amazon fee estimator (sentinel financial_event_id = 0)
+  // created fake Commission/FBA fees on Walmart orders awaiting recon. Since
+  // Sept 27 Walmart has its own estimates — only those types are allowed.
   const n = count(`
     SELECT COUNT(*) as n FROM fee_details fd
     JOIN orders o ON fd.order_id = o.order_id
     WHERE fd.financial_event_id = 0 AND o.marketplace != 'amazon'
+      AND NOT (o.marketplace = 'walmart'
+               AND fd.fee_type IN ('WalmartReferralFeeEstimate', 'WFSFulfillmentFeeEstimate'))
   `);
   assert.equal(n, 0, `${n} estimator fee rows on non-Amazon orders — the marketplace filter in fee-estimator.ts regressed`);
+});
+
+test('Walmart fee estimates never sit beside real recon fees', { skip: !dbExists }, () => {
+  // An estimate left on an order whose real fees have settled double-counts
+  // that order's fees. refreshWalmartFeeEstimates rebuilds after every recon.
+  const n = count(`
+    SELECT COUNT(DISTINCT fd.order_id) as n FROM fee_details fd
+    WHERE fd.fee_type IN ('WalmartReferralFeeEstimate', 'WFSFulfillmentFeeEstimate')
+      AND EXISTS (SELECT 1 FROM fee_details r WHERE r.order_id = fd.order_id
+                  AND r.fee_type NOT IN ('WalmartReferralFeeEstimate', 'WFSFulfillmentFeeEstimate'))
+  `);
+  assert.equal(n, 0, `${n} Walmart orders carry both estimated and real fees`);
 });
 
 test('no Walmart refund content-duplicates', { skip: !dbExists }, () => {
@@ -522,4 +537,193 @@ test('no Walmart dispute candidate is eligible past its own claim window', { ski
   assert.equal(dead.length, 0,
     `claims presented as actionable whose window has closed: ` +
     dead.map(d => `${d.order_id} ($${(d.refund_amount_cents/100).toFixed(2)}, ${d.days_past}d past)`).join(', '));
+});
+
+test('every settled Walmart funded-incentive reversal is booked against income', { skip: !dbExists }, () => {
+  // Sept 21 2026: recon captured "Total Walmart Funded Savings" on the SALE as
+  // income but dropped the negative Refund-side row, so a returned unit kept
+  // its incentive forever ($268.47 across 25 returns).
+  const missing = db!.prepare(`
+    SELECT fe.order_id, fe.total_amount
+    FROM financial_events fe
+    WHERE fe.event_type = 'WalmartRefundEvent'
+      AND fe.total_amount < 0
+      AND json_extract(fe.raw_data, '$."Amount Type"') = 'Total Walmart Funded Savings'
+      AND NOT EXISTS (
+        SELECT 1 FROM reimbursements r
+        WHERE r.reimbursement_id = 'WMT-FUNDED-REV-' || json_extract(fe.raw_data, '$."Transaction Key"')
+          AND r.amount = fe.total_amount
+      )
+  `).all() as any[];
+  assert.equal(missing.length, 0,
+    `funded-incentive reversals not booked: ` + missing.map(m => `${m.order_id} (${m.total_amount})`).join(', '));
+});
+
+test('Walmart "Commission Saving" is never booked as income', { skip: !dbExists }, () => {
+  // Sept 21 2026: the saving is a descriptive column on the commission row —
+  // the charged commission is already at the reduced rate and recon deposits
+  // equal the sum of the Amount column. Booking it double-counted $912.75.
+  const reimb = db!.prepare(`SELECT COUNT(*) n FROM reimbursements WHERE reimbursement_id LIKE 'WMT-INCENTIVE-%' OR reason LIKE 'Commission Incentive%'`).get() as any;
+  const events = db!.prepare(`SELECT COUNT(*) n FROM financial_events WHERE event_type = 'WalmartIncentive' AND json_extract(raw_data, '$.incentiveProgram') IS NOT NULL`).get() as any;
+  assert.equal(reimb.n, 0, `${reimb.n} commission-saving reimbursements booked as income`);
+  assert.equal(events.n, 0, `${events.n} synthetic commission-saving incentive events`);
+});
+
+test('Amazon service fees since the v2024 cutover equal Amazon\'s v2024 ledger, month by month', { skip: !dbExists }, () => {
+  // Sept 22 2026 (review A1): three writers booked the same service fees and
+  // none could tell a repeat from a new fee — $646.32 of 2026 fees counted
+  // twice. From the cutover the rows are a projection of
+  // finances_transactions_v2, so the books must equal Amazon's ledger exactly.
+  const cutover = '2026-04-12T00:00:00Z';
+  const mkt = (col: string) => `strftime('%Y-%m', date(${col}, 'localtime', '-1 hour'))`;
+  const ledger = new Map((db!.prepare(`
+    SELECT ${mkt('posted_date')} m, SUM(total_amount_cents) c FROM finances_transactions_v2
+    WHERE transaction_type = 'ServiceFee' AND posted_date >= ? GROUP BY 1
+  `).all(cutover) as { m: string; c: number }[]).map(r => [r.m, r.c]));
+  const books = new Map((db!.prepare(`
+    SELECT ${mkt('fd.posted_date')} m, SUM(fd.amount) c
+    FROM fee_details fd JOIN financial_events fe ON fe.id = fd.financial_event_id
+    WHERE fe.event_type = 'AmazonV2024ServiceFee' GROUP BY 1
+  `).all() as { m: string; c: number }[]).map(r => [r.m, r.c]));
+  const months = [...new Set([...ledger.keys(), ...books.keys()])].sort();
+  const diffs = months.filter(m => (ledger.get(m) || 0) !== (books.get(m) || 0))
+    .map(m => `${m}: books ${books.get(m) || 0} vs ledger ${ledger.get(m) || 0}`);
+  assert.deepEqual(diffs, [], 'service fees drifted from the v2024 ledger');
+});
+
+test('no legacy-source Amazon service fees inside the v2024 window', { skip: !dbExists }, () => {
+  // ServiceFeeEvent, settlement placement/storage/removal lines and the
+  // transaction-report import all duplicated v2024 fees after the cutover.
+  const rows = db!.prepare(`
+    SELECT fe.event_type, fd.fee_type, COUNT(*) n
+    FROM fee_details fd JOIN financial_events fe ON fe.id = fd.financial_event_id
+    WHERE fe.marketplace = 'amazon' AND (fd.order_id IS NULL OR fd.order_id = '')
+      AND fd.posted_date >= '2026-04-12'
+      AND (fe.event_type IN ('ServiceFeeEvent', 'TransactionReportServiceFee', 'TransactionReportInventoryFee')
+        OR (fe.event_type = 'SettlementServiceFee'
+            AND fd.fee_type NOT IN ('Adjustment', 'FeeAdjustment', 'COMPENSATED_CLAWBACK', 'Shippinglabelpurchaseforreturn')))
+    GROUP BY 1, 2
+  `).all() as { event_type: string; fee_type: string; n: number }[];
+  assert.deepEqual(rows, [], `legacy service-fee rows after the cutover: ${JSON.stringify(rows)}`);
+});
+
+test('no settled Walmart return that never came back has zeroed or reversed COGS', { skip: !dbExists }, () => {
+  // Sept 22 2026 (review A2): every Walmart refund carries item_returned=1, so
+  // FIFO erased COGS on units Walmart lost (LostReturnAdjustment) or that were
+  // lost in transit — ~$730. Those sales must keep their cost.
+  const rows = db!.prepare(`
+    SELECT oi.order_id, oi.sku FROM order_items oi
+    JOIN refunds r ON r.order_id = oi.order_id AND r.marketplace = 'walmart'
+    WHERE (oi.cogs_per_unit = 0 OR EXISTS (SELECT 1 FROM cogs_reversals cr WHERE cr.order_item_id = oi.id))
+      AND (r.reason IN ('LOST_IN_TRANSIT', 'LOST_AFTER_DELIVERY')
+           OR EXISTS (SELECT 1 FROM wfs_lost_returns l WHERE l.rma = r.return_order_id OR (l.rma IS NULL AND l.po = r.order_id)))
+      AND EXISTS (SELECT 1 FROM financial_events fe WHERE fe.event_type = 'WalmartRefundEvent' AND fe.order_id = r.order_id
+                  AND json_extract(fe.raw_data, '$."Amount Type"') = 'Product Price')
+      AND EXISTS (SELECT 1 FROM inventory_ledger il WHERE (il.sku = oi.sku OR il.asin = oi.asin) AND il.buy_price > 0)
+  `).all() as { order_id: string; sku: string }[];
+  assert.deepEqual(rows, [], `lost Walmart returns with erased COGS: ${rows.map(r => `${r.order_id}/${r.sku}`).join(', ')}`);
+});
+
+test('no open Walmart claim on a return Walmart already paid for', { skip: !dbExists }, () => {
+  // Sept 22 2026 (review D2): 4 lost-return claims filed Aug 29 were denied
+  // because Walmart had already paid LostReturnAdjustments on them.
+  const rows = db!.prepare(`
+    SELECT c.order_id FROM walmart_dispute_candidates c JOIN refunds r ON r.id = c.refund_id
+    WHERE c.status = 'pending' AND c.eligibility IN ('eligible', 'maybe')
+      AND EXISTS (SELECT 1 FROM wfs_lost_returns l WHERE l.rma = r.return_order_id OR (l.rma IS NULL AND l.po = r.order_id))
+  `).all() as { order_id: string }[];
+  assert.deepEqual(rows, [], `claims open on already-paid returns: ${rows.map(r => r.order_id).join(', ')}`);
+});
+
+test('no Walmart funded-incentive reversal is stored twice as events', { skip: !dbExists }, () => {
+  // Sept 23 2026 (review A12): the reversal was written both as the
+  // WalmartRefundEvent funded-savings line AND as a negative WalmartIncentive,
+  // so the order lookup Net subtracted it twice (-$268.47 over 25 orders).
+  const n = count(`
+    SELECT COUNT(*) as n FROM financial_events fe
+    WHERE fe.event_type = 'WalmartIncentive' AND fe.total_amount < 0
+      AND json_extract(fe.raw_data, '$."Transaction Type"') = 'Refund'
+  `);
+  assert.equal(n, 0, `${n} duplicate funded-incentive reversal events`);
+});
+
+test('no Amazon reimbursement clawback is booked as a fee', { skip: !dbExists }, () => {
+  // Sept 23 2026 (review A5): settlement COMPENSATED_CLAWBACK rows fell through
+  // to the fee path on top of the canonical Reimbursement_Reversal ($87.75).
+  const n = count(`
+    SELECT COUNT(*) as n FROM fee_details fd JOIN financial_events fe ON fe.id = fd.financial_event_id
+    WHERE fe.event_type = 'SettlementServiceFee'
+      AND (fd.fee_type = 'COMPENSATED_CLAWBACK'
+        OR EXISTS (SELECT 1 FROM reimbursements r WHERE r.marketplace = 'amazon'
+                     AND r.amount = fd.amount AND date(r.reimbursement_date) = date(fd.posted_date)))
+  `);
+  assert.equal(n, 0, `${n} settlement fee rows duplicate a reimbursement`);
+});
+
+test('Amazon reimbursements equal Amazon\'s v2024 ledger, month by month', { skip: !dbExists }, () => {
+  // Sept 23 2026 (review A10): multi-line reimbursements lost every line but
+  // the last ($266.02), and a settlement + ADJ placeholder pair double-counted
+  // $40.48. Both show up here. A fresh reimbursement can mismatch for up to a
+  // day while its ADJ/SETTLEMENT placeholder or report row catches up.
+  const mkt = (col: string) => `strftime('%Y-%m', date(${col}, 'localtime', '-1 hour'))`;
+  const ledger = new Map((db!.prepare(`
+    SELECT ${mkt('posted_date')} m, SUM(total_amount_cents) c FROM finances_transactions_v2
+    WHERE transaction_type = 'FBAInventoryReimbursement' AND posted_date >= '2026-04-12' GROUP BY 1
+  `).all() as { m: string; c: number }[]).map(r => [r.m, r.c]));
+  const books = new Map((db!.prepare(`
+    SELECT ${mkt('reimbursement_date')} m, SUM(amount) c FROM reimbursements
+    WHERE marketplace = 'amazon' AND reimbursement_date >= '2026-04-12' GROUP BY 1
+  `).all() as { m: string; c: number }[]).map(r => [r.m, r.c]));
+  const diffs = [...new Set([...ledger.keys(), ...books.keys()])].sort()
+    .filter(m => (ledger.get(m) || 0) !== (books.get(m) || 0))
+    .map(m => `${m}: books ${books.get(m) || 0} vs ledger ${ledger.get(m) || 0}`);
+  assert.deepEqual(diffs, [], 'Amazon reimbursements drifted from the v2024 ledger');
+});
+
+test('every Amazon MCF shipment is paired with the sale it fulfilled', { skip: !dbExists }, () => {
+  // Sept 23 2026 (review A4): an unpaired MCF line keeps its COGS on top of
+  // the sale's own, so its cost may be counted twice. Pair it (mcf.ts) or
+  // record the pair in mcf_fulfillments by hand.
+  const rows = db!.prepare(`
+    SELECT order_id FROM orders WHERE fulfillment_channel = 'MCF'
+      AND order_id NOT IN (SELECT mcf_order_id FROM mcf_fulfillments)
+  `).all() as { order_id: string }[];
+  assert.deepEqual(rows, [], `unpaired MCF shipments: ${rows.map(r => r.order_id).join(', ')}`);
+});
+
+test('per-line refund attribution sums to each order settled refunds (review C3)', { skip: !dbExists }, async () => {
+  // Per-order views subtract lineSettledRefundExpr from profit: SKU-matched
+  // refunds on their line, SKU-less ones split by revenue. Within an order the
+  // lines must add back to exactly the settled refunds — more means a refund
+  // was attributed twice, less means one was dropped. (A refund can exceed the
+  // sale price legitimately: refunded shipping or gift wrap.)
+  const { lineSettledRefundExpr, walmartSettledRefund } = await import('../src/lib/accounting-sql');
+  const rows = db!.prepare(`
+    WITH lines AS (
+      SELECT oi.order_id, SUM(${lineSettledRefundExpr()}) AS attributed
+      FROM order_items oi WHERE oi.order_id IN (SELECT order_id FROM refunds) GROUP BY oi.order_id
+    ),
+    truth AS (
+      SELECT r.order_id, SUM(r.refund_amount) AS settled FROM refunds r
+      WHERE ${walmartSettledRefund('r', true)}
+        AND (EXISTS (SELECT 1 FROM order_items x WHERE x.order_id = r.order_id AND x.sku = r.sku)
+             OR (SELECT SUM(x.total_price) FROM order_items x WHERE x.order_id = r.order_id) > 0)
+      GROUP BY r.order_id
+    )
+    SELECT l.order_id, l.attributed, COALESCE(t.settled, 0) AS settled
+    FROM lines l LEFT JOIN truth t ON t.order_id = l.order_id
+    WHERE ABS(l.attributed - COALESCE(t.settled, 0)) >= 1
+  `).all() as { order_id: string; attributed: number; settled: number }[];
+  assert.deepEqual(rows.map(r => `${r.order_id}: attributed ${r.attributed} vs settled ${r.settled}`), []);
+});
+
+test('no two suppliers differ only by case, spaces or punctuation', { skip: !dbExists }, async () => {
+  // Sept 23 2026: exact-name matching had split 14 suppliers into 32 rows.
+  // Writes go through resolveSupplierId (src/lib/suppliers.ts).
+  const { supplierKey } = await import('../src/lib/suppliers');
+  const byKey = new Map<string, string[]>();
+  for (const { name } of db!.prepare('SELECT name FROM suppliers').all() as { name: string }[]) {
+    byKey.set(supplierKey(name), [...(byKey.get(supplierKey(name)) ?? []), name]);
+  }
+  assert.deepEqual([...byKey.values()].filter(v => v.length > 1), []);
 });

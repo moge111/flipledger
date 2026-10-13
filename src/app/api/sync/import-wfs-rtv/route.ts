@@ -12,10 +12,17 @@
  * you" detector treats every settled return as lost, which is how 17 of 19
  * flagged claims turned out to be units already sitting in the garage.
  *
- * SAFETY: this writes ONLY to wfs_rtv_units. It never touches fee_details,
- * financial_events, or reimbursements, so it cannot double-count against the
- * recon roll-ups the way re-enabling the retired CSV fee importer would.
- * Idempotent — re-running converges (unique index on gtin+date+reference).
+ * It also reads the Refund_*.csv exports for LostReturnAdjustment rows
+ * (Walmart lost a customer return and paid for it) into wfs_lost_returns. FIFO
+ * uses them to keep the sale's COGS (the unit never came back), and the dispute
+ * detector uses them so a return Walmart already paid for is not filed again.
+ * Sept 22 2026: 4 claims filed Aug 29 were denied for exactly that reason.
+ *
+ * SAFETY: this writes ONLY to wfs_rtv_units and wfs_lost_returns. It never
+ * touches fee_details, financial_events, or reimbursements, so it cannot
+ * double-count against the recon roll-ups (the lost-return money is already
+ * booked as the WMT-WFSSVC "WFS Refund" rows). Idempotent — unique indexes on
+ * gtin+date+reference and on the WFS reference id.
  */
 import { NextResponse } from 'next/server';
 import fs from 'fs';
@@ -57,10 +64,12 @@ export async function POST() {
   if (!fs.existsSync(DIR)) {
     return NextResponse.json({ error: `Directory not found: ${DIR}` }, { status: 400 });
   }
-  const files = fs.readdirSync(DIR).filter(f => /^RC_InventoryRTVFee_.*\.csv$/i.test(f)).sort();
-  if (files.length === 0) {
+  const all = fs.readdirSync(DIR).sort();
+  const files = all.filter(f => /^RC_InventoryRTVFee_.*\.csv$/i.test(f));
+  const refundFiles = all.filter(f => /^Refund_.*\.csv$/i.test(f));
+  if (files.length === 0 && refundFiles.length === 0) {
     return NextResponse.json({
-      error: 'No RC_InventoryRTVFee CSVs found. Export them from Seller Center → Payments → Services Fees and unzip into data/walmart-service-fees/.',
+      error: 'No RC_InventoryRTVFee or Refund CSVs found. Export them from Seller Center → Payments → Services Fees and unzip into data/walmart-service-fees/.',
     }, { status: 400 });
   }
 
@@ -71,7 +80,12 @@ export async function POST() {
       INSERT OR IGNORE INTO wfs_rtv_units (gtin, rtv_date, quantity, net_payable_cents, wfs_reference_id, source_file)
       VALUES (?, ?, ?, ?, ?, ?)
     `);
+    const insLost = db.prepare(`
+      INSERT OR IGNORE INTO wfs_lost_returns (po, rma, gtin, credit_date, quantity, credit_cents, wfs_reference_id, source_file)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `);
     let scanned = 0, inserted = 0, skippedNoGtin = 0;
+    let lostScanned = 0, lostInserted = 0, lostSkipped = 0;
     const dates: string[] = [];
 
     db.transaction(() => {
@@ -88,9 +102,25 @@ export async function POST() {
           inserted += ins.run(gtin, date, qty, net, clean(row['WFSReferenceID']) || null, file).changes;
         }
       }
+      for (const file of refundFiles) {
+        for (const row of parseCsv(fs.readFileSync(path.join(DIR, file), 'utf8'))) {
+          if (clean(row['Reason Code']) !== 'LostReturnAdjustment') continue;
+          lostScanned++;
+          const po = clean(row['Walmart.com PO #']);
+          const ref = clean(row['WFSReferenceID']);
+          const date = clean(row['Transaction Date/Time'] || row['Transaction Date and Time']).slice(0, 10);
+          if (!po || !ref || !date) { lostSkipped++; continue; }
+          const rma = (clean(row['Detail']).match(/RMA:\s*(\d+)/) || [])[1] || null;
+          // Net Payable is negative for a credit to the seller; store it positive.
+          const credit = -Math.round(parseFloat(clean(row['Net Payable']) || '0') * 100);
+          const qty = parseInt(clean(row['Qty']) || '1', 10) || 1;
+          lostInserted += insLost.run(po, rma, clean(row['Partner GTIN']) || null, date, qty, credit, ref, file).changes;
+        }
+      }
     })();
 
     const total = db.prepare(`SELECT COUNT(*) n, COALESCE(SUM(quantity),0) units, MIN(rtv_date) mn, MAX(rtv_date) mx FROM wfs_rtv_units`).get() as any;
+    const lost = db.prepare(`SELECT COUNT(*) rows, COALESCE(SUM(credit_cents),0) credit_cents, MIN(credit_date) from_date, MAX(credit_date) through_date FROM wfs_lost_returns`).get();
     return NextResponse.json({
       success: true,
       filesRead: files.length,
@@ -99,7 +129,14 @@ export async function POST() {
       rowsSkippedNoGtin: skippedNoGtin,
       csvCoverage: dates.length ? { from: dates.sort()[0], through: dates[dates.length - 1] } : null,
       table: { rows: total.n, units: total.units, from: total.mn, through: total.mx },
-      note: 'Disposition data only — no financial rows written. Re-export the CSVs periodically; RTV lags a return by ~2-7 weeks.',
+      lostReturns: {
+        refundFilesRead: refundFiles.length,
+        rowsScanned: lostScanned,
+        rowsInserted: lostInserted,
+        rowsSkipped: lostSkipped,
+        table: lost,
+      },
+      note: 'Disposition data only — no financial rows written. Re-export the CSVs periodically; RTV lags a return by ~2-7 weeks and lost-return payouts by ~2-5 months.',
     });
   } finally {
     db.close();
@@ -110,7 +147,8 @@ export async function GET() {
   const db = openDb();
   try {
     const t = db.prepare(`SELECT COUNT(*) rows, COALESCE(SUM(quantity),0) units, MIN(rtv_date) from_date, MAX(rtv_date) through_date FROM wfs_rtv_units`).get();
-    return NextResponse.json({ ...(t as object), dir: DIR });
+    const lost = db.prepare(`SELECT COUNT(*) rows, COALESCE(SUM(credit_cents),0) credit_cents, MIN(credit_date) from_date, MAX(credit_date) through_date FROM wfs_lost_returns`).get();
+    return NextResponse.json({ ...(t as object), lostReturns: lost, dir: DIR });
   } finally {
     db.close();
   }

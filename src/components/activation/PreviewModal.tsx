@@ -59,15 +59,15 @@ export interface PreviewModalProps {
 
 function spStatusBadge(status: PushResult['sp_status']) {
   const map: Record<string, string> = {
-    ACCEPTED: 'bg-green-500/10 text-green-400 border-green-500/30',
-    VALID:    'bg-green-500/10 text-green-400 border-green-500/30',
-    INVALID:  'bg-red-500/10 text-red-400 border-red-500/30',
-    ERROR:    'bg-red-500/10 text-red-400 border-red-500/30',
-    SKIPPED:  'bg-bg-elevated text-text-tertiary border-border-subtle',
-    DRY_RUN:  'bg-bg-elevated text-text-tertiary border-border-subtle',
+    ACCEPTED: 'tag text-positive',
+    VALID:    'tag text-positive',
+    INVALID:  'tag text-negative',
+    ERROR:    'tag text-negative',
+    SKIPPED:  'tag text-text-tertiary',
+    DRY_RUN:  'tag text-text-tertiary',
   };
   return (
-    <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-medium border ${map[status] ?? map.SKIPPED}`}>
+    <span className={map[status] ?? map.SKIPPED}>
       {status}
     </span>
   );
@@ -161,18 +161,18 @@ export function PreviewModal({ rows, shippingTemplate, onClose, onPushComplete, 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60" onClick={isBusy ? undefined : onClose}>
       <div
-        className="bg-bg-surface border border-border-subtle rounded-xl shadow-2xl w-[960px] max-h-[88vh] overflow-hidden flex flex-col"
+        className="panel shadow-2xl w-[960px] max-h-[88vh] overflow-hidden flex flex-col"
         onClick={e => e.stopPropagation()}
       >
         {/* Header */}
-        <div className="flex items-center justify-between px-5 py-4 border-b border-border-subtle shrink-0">
+        <div className="flex items-center justify-between px-5 py-4 border-b-[1.5px] border-border-strong shrink-0">
           <div>
             <h2 className="text-sm font-semibold text-text-primary">
               {pushPhase === 'done' ? 'Push Complete' : 'Activation Preview'}
             </h2>
             <p className="text-[11px] text-text-tertiary mt-0.5">
               {pushPhase === 'preview' || pushPhase === 'confirm'
-                ? <>Dry run — no Amazon writes made. <span className="text-green-400 font-medium">{pushableCount}</span> of {rows.length} rows ready to push.</>
+                ? <>Dry run — no Amazon writes made. <span className="text-positive font-medium">{pushableCount}</span> of {rows.length} rows ready to push.</>
                 : pushPhase === 'testing'
                   ? 'Sending test SKU to Amazon…'
                   : pushPhase === 'test_done'
@@ -190,9 +190,9 @@ export function PreviewModal({ rows, shippingTemplate, onClose, onPushComplete, 
 
         {/* Summary bar */}
         <div className="px-5 py-2 bg-bg-elevated border-b border-border-subtle shrink-0 flex items-center gap-4 text-xs">
-          <span className="text-green-400 font-medium">{pushableCount} push eligible</span>
+          <span className="text-positive font-medium">{pushableCount} push eligible</span>
           <span className="text-text-tertiary">{rows.length - pushableCount} not eligible</span>
-          {warningCount > 0 && <span className="text-amber-400">{warningCount} with warnings</span>}
+          {warningCount > 0 && <span className="text-warning">{warningCount} with warnings</span>}
           <span className="ml-auto text-text-tertiary font-mono truncate max-w-[300px]">
             Template: {shippingTemplate || '(varies per lot)'}
           </span>
@@ -200,7 +200,7 @@ export function PreviewModal({ rows, shippingTemplate, onClose, onPushComplete, 
 
         {/* Shipping-template scope banner — appears in preview phase only */}
         {(pushPhase === 'preview' || pushPhase === 'confirm') && (
-          <div className="px-5 py-2 bg-amber-500/5 border-b border-amber-500/20 shrink-0 flex items-start gap-2 text-[11px] text-amber-400/90">
+          <div className="px-5 py-2 bg-highlight text-highlight-fg border-b-[1.5px] border-border-strong [--warning:var(--highlight-fg)] [--text-secondary:var(--highlight-fg)] shrink-0 flex items-start gap-2 text-[11px] text-warning/90">
             <AlertTriangle size={12} className="shrink-0 mt-0.5" />
             <span>
               <span className="font-medium">Shipping template is stored locally only.</span>{' '}
@@ -212,9 +212,9 @@ export function PreviewModal({ rows, shippingTemplate, onClose, onPushComplete, 
 
         {/* Confirm overlay */}
         {pushPhase === 'confirm' && (
-          <div className="px-5 py-4 bg-amber-500/5 border-b border-amber-500/20 shrink-0">
+          <div className="px-5 py-4 bg-highlight text-highlight-fg border-b-[1.5px] border-border-strong [--warning:var(--highlight-fg)] [--text-secondary:var(--highlight-fg)] shrink-0">
             <div className="flex items-start gap-3">
-              <AlertTriangle size={16} className="text-amber-400 shrink-0 mt-0.5" />
+              <AlertTriangle size={16} className="text-warning shrink-0 mt-0.5" />
               <div className="flex-1 min-w-0">
                 <p className="text-sm font-medium text-text-primary">This will write to Amazon Seller Central</p>
                 <p className="text-[11px] text-text-tertiary mt-1">
@@ -226,13 +226,13 @@ export function PreviewModal({ rows, shippingTemplate, onClose, onPushComplete, 
               <div className="flex gap-2 shrink-0">
                 <button
                   onClick={() => setPushPhase('preview')}
-                  className="h-8 px-3 rounded-md border border-border-subtle text-xs text-text-secondary hover:bg-bg-hover"
+                  className="h-8 px-3 rounded-md text-xs text-text-primary hover:bg-bg-hover font-semibold bg-bg-surface border-[1.5px] border-border-strong"
                 >
                   Cancel
                 </button>
                 <button
                   onClick={handleTestPush}
-                  className="h-8 px-3 rounded-md bg-accent text-white text-xs font-medium hover:bg-accent/90"
+                  className="h-8 px-3 rounded-md bg-accent text-text-inverse text-xs font-bold hover:bg-accent/90"
                 >
                   Test 1 SKU
                 </button>
@@ -243,7 +243,7 @@ export function PreviewModal({ rows, shippingTemplate, onClose, onPushComplete, 
 
         {/* Error banner */}
         {pushError && (
-          <div className="px-5 py-2 bg-red-500/10 border-b border-red-500/20 text-xs text-red-400 shrink-0">
+          <div className="px-5 py-2 bg-negative-muted border-b-[1.5px] border-border-strong text-xs font-semibold text-negative shrink-0">
             {pushError}
           </div>
         )}
@@ -252,17 +252,17 @@ export function PreviewModal({ rows, shippingTemplate, onClose, onPushComplete, 
         <div className="overflow-auto flex-1">
           <table className="w-full text-xs">
             <thead className="sticky top-0 bg-bg-elevated z-10">
-              <tr className="border-b border-border-subtle">
-                <th className="px-4 py-2.5 text-left text-[11px] font-medium tracking-widest uppercase text-text-tertiary">Product / SKU</th>
-                <th className="px-4 py-2.5 text-center text-[11px] font-medium tracking-widest uppercase text-text-tertiary w-24">Amz Status</th>
-                <th className="px-4 py-2.5 text-right text-[11px] font-medium tracking-widest uppercase text-text-tertiary w-16">Cur. Qty</th>
-                <th className="px-4 py-2.5 text-right text-[11px] font-medium tracking-widest uppercase text-text-tertiary w-16">Prop. Qty</th>
-                <th className="px-4 py-2.5 text-right text-[11px] font-medium tracking-widest uppercase text-text-tertiary w-24">Cur. Price</th>
-                <th className="px-4 py-2.5 text-right text-[11px] font-medium tracking-widest uppercase text-text-tertiary w-24">Prop. Price</th>
-                <th className="px-4 py-2.5 text-center text-[11px] font-medium tracking-widest uppercase text-text-tertiary w-28">
+              <tr>
+                <th className="px-4 py-2.5 text-left text-[11px] label-caps text-text-tertiary">Product / SKU</th>
+                <th className="px-4 py-2.5 text-center text-[11px] label-caps text-text-tertiary w-24">Amz Status</th>
+                <th className="px-4 py-2.5 text-right text-[11px] label-caps text-text-tertiary w-16">Cur. Qty</th>
+                <th className="px-4 py-2.5 text-right text-[11px] label-caps text-text-tertiary w-16">Prop. Qty</th>
+                <th className="px-4 py-2.5 text-right text-[11px] label-caps text-text-tertiary w-24">Cur. Price</th>
+                <th className="px-4 py-2.5 text-right text-[11px] label-caps text-text-tertiary w-24">Prop. Price</th>
+                <th className="px-4 py-2.5 text-center text-[11px] label-caps text-text-tertiary w-28">
                   {pushPhase === 'preview' || pushPhase === 'confirm' ? 'Eligible' : 'Push Status'}
                 </th>
-                <th className="px-4 py-2.5 text-left text-[11px] font-medium tracking-widest uppercase text-text-tertiary">
+                <th className="px-4 py-2.5 text-left text-[11px] label-caps text-text-tertiary">
                   {pushPhase === 'preview' || pushPhase === 'confirm' ? 'Notes' : 'Details'}
                 </th>
               </tr>
@@ -275,9 +275,9 @@ export function PreviewModal({ rows, shippingTemplate, onClose, onPushComplete, 
                     key={row.sku}
                     className={`border-b border-border-subtle/50 transition-colors ${
                       pushed?.sp_status === 'ACCEPTED' || pushed?.sp_status === 'VALID'
-                        ? 'bg-green-500/5'
+                        ? 'bg-positive/5'
                         : pushed?.sp_status === 'INVALID' || pushed?.sp_status === 'ERROR'
-                          ? 'bg-red-500/5'
+                          ? 'bg-negative/5'
                           : row.can_push ? 'hover:bg-bg-hover' : 'opacity-60'
                     }`}
                   >
@@ -290,53 +290,53 @@ export function PreviewModal({ rows, shippingTemplate, onClose, onPushComplete, 
                     </td>
                     <td className="px-4 py-2.5 text-center">
                       {row.current_status ? (
-                        <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-medium border ${
+                        <span className={`${
                           row.current_status === 'Active'
-                            ? 'bg-green-500/10 text-green-400 border-green-500/30'
-                            : 'bg-red-500/10 text-red-400 border-red-500/30'
+                            ? 'tag text-positive'
+                            : 'tag text-negative'
                         }`}>{row.current_status}</span>
                       ) : (
                         <span className="text-text-tertiary text-[10px]">Not listed</span>
                       )}
                     </td>
-                    <td className="px-4 py-2.5 text-right font-mono">
+                    <td className="px-4 py-2.5 text-right tabular-nums">
                       {row.current_qty != null ? row.current_qty : <span className="text-text-tertiary">—</span>}
                     </td>
-                    <td className="px-4 py-2.5 text-right font-mono">
-                      <span className={row.proposed_qty > 0 ? 'text-text-primary font-medium' : 'text-amber-400'}>
+                    <td className="px-4 py-2.5 text-right tabular-nums">
+                      <span className={row.proposed_qty > 0 ? 'text-text-primary font-medium' : 'text-warning'}>
                         {row.proposed_qty}
                       </span>
-                      {row.qty_source === 'remaining' && <span className="block text-[9px] text-amber-400/70 mt-0.5">ledger fallback</span>}
-                      {row.qty_source === 'received'  && <span className="block text-[9px] text-green-400/60 mt-0.5">received</span>}
+                      {row.qty_source === 'remaining' && <span className="block text-[9px] text-warning/70 mt-0.5">ledger fallback</span>}
+                      {row.qty_source === 'received'  && <span className="block text-[9px] text-positive/60 mt-0.5">received</span>}
                     </td>
-                    <td className="px-4 py-2.5 text-right font-mono">
+                    <td className="px-4 py-2.5 text-right tabular-nums">
                       {row.current_price_cents != null ? formatCurrency(row.current_price_cents) : <span className="text-text-tertiary">—</span>}
                     </td>
-                    <td className="px-4 py-2.5 text-right font-mono">
+                    <td className="px-4 py-2.5 text-right tabular-nums">
                       {row.proposed_price_cents != null
                         ? <span className="text-text-primary font-medium">{formatCurrency(row.proposed_price_cents)}</span>
-                        : <span className="text-amber-400">No price</span>}
+                        : <span className="text-warning">No price</span>}
                     </td>
                     <td className="px-4 py-2.5 text-center">
                       {pushed
                         ? spStatusBadge(pushed.sp_status)
                         : row.can_push
-                          ? <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium border bg-green-500/10 text-green-400 border-green-500/30"><Check size={9} />Eligible</span>
-                          : <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium border bg-bg-elevated text-text-tertiary border-border-subtle"><X size={9} />Not eligible</span>
+                          ? <span className="tag gap-1 text-positive"><Check size={9} />Eligible</span>
+                          : <span className="tag text-text-tertiary"><X size={9} />Not eligible</span>
                       }
                     </td>
                     <td className="px-4 py-2.5">
                       {pushed
                         ? pushed.error_message
-                          ? <span className="text-red-400 text-[10px]">{pushed.error_message}</span>
+                          ? <span className="text-negative text-[10px]">{pushed.error_message}</span>
                           : pushed.sp_issues.length > 0
-                            ? <div className="space-y-0.5">{pushed.sp_issues.slice(0, 2).map((iss, i) => <div key={i} className="text-amber-400 text-[10px]">{iss.code}: {iss.message}</div>)}</div>
+                            ? <div className="space-y-0.5">{pushed.sp_issues.slice(0, 2).map((iss, i) => <div key={i} className="text-warning text-[10px]">{iss.code}: {iss.message}</div>)}</div>
                             : pushed.sp_submission_id
-                              ? <span className="text-green-400/70 text-[10px] font-mono">ID: {pushed.sp_submission_id.slice(0, 12)}…</span>
-                              : <span className="text-green-400 text-[10px]">Submitted</span>
+                              ? <span className="text-positive/70 text-[10px] font-mono">ID: {pushed.sp_submission_id.slice(0, 12)}…</span>
+                              : <span className="text-positive text-[10px]">Submitted</span>
                         : row.warnings.length > 0
-                          ? <div className="space-y-0.5">{row.warnings.map((w, i) => <div key={i} className="text-amber-400 text-[10px] leading-tight">{w}</div>)}</div>
-                          : <span className="text-green-400 text-[10px]">All checks pass</span>
+                          ? <div className="space-y-0.5">{row.warnings.map((w, i) => <div key={i} className="text-warning text-[10px] leading-tight">{w}</div>)}</div>
+                          : <span className="text-positive text-[10px]">All checks pass</span>
                       }
                     </td>
                   </tr>
@@ -357,7 +357,7 @@ export function PreviewModal({ rows, shippingTemplate, onClose, onPushComplete, 
           </p>
           <div className="flex items-center gap-2 shrink-0">
             {(pushPhase === 'preview' || pushPhase === 'confirm') && (
-              <button onClick={onClose} className="h-8 px-4 rounded-md border border-border-subtle text-xs text-text-secondary hover:bg-bg-hover">
+              <button onClick={onClose} className="h-8 px-4 rounded-md text-xs text-text-primary hover:bg-bg-hover font-semibold bg-bg-surface border-[1.5px] border-border-strong">
                 Close
               </button>
             )}
@@ -365,7 +365,7 @@ export function PreviewModal({ rows, shippingTemplate, onClose, onPushComplete, 
             {pushPhase === 'preview' && pushableCount > 0 && (
               <button
                 onClick={() => setPushPhase('confirm')}
-                className="flex items-center gap-1.5 h-8 px-4 rounded-md bg-accent text-white text-xs font-medium hover:bg-accent/90"
+                className="flex items-center gap-1.5 h-8 px-4 rounded-md bg-accent text-text-inverse text-xs font-bold hover:bg-accent/90"
               >
                 <Send size={12} />
                 Push {pushableCount} to Amazon
@@ -381,20 +381,20 @@ export function PreviewModal({ rows, shippingTemplate, onClose, onPushComplete, 
 
             {pushPhase === 'test_done' && (
               <>
-                <button onClick={onClose} className="h-8 px-4 rounded-md border border-border-subtle text-xs text-text-secondary hover:bg-bg-hover">
+                <button onClick={onClose} className="h-8 px-4 rounded-md text-xs text-text-primary hover:bg-bg-hover font-semibold bg-bg-surface border-[1.5px] border-border-strong">
                   Stop here
                 </button>
                 {remainingCount > 0 && (
                   <button
                     onClick={handleBulkPush}
-                    className="flex items-center gap-1.5 h-8 px-4 rounded-md bg-accent text-white text-xs font-medium hover:bg-accent/90"
+                    className="flex items-center gap-1.5 h-8 px-4 rounded-md bg-accent text-text-inverse text-xs font-bold hover:bg-accent/90"
                   >
                     <Send size={12} />
                     Push remaining {remainingCount}
                   </button>
                 )}
                 {remainingCount === 0 && (
-                  <button onClick={() => { finishPush([testResult].filter(Boolean) as PushResult[]); onClose(); }} className="h-8 px-4 rounded-md bg-accent text-white text-xs font-medium hover:bg-accent/90">
+                  <button onClick={() => { finishPush([testResult].filter(Boolean) as PushResult[]); onClose(); }} className="h-8 px-4 rounded-md bg-accent text-text-inverse text-xs font-bold hover:bg-accent/90">
                     Done
                   </button>
                 )}
@@ -404,7 +404,7 @@ export function PreviewModal({ rows, shippingTemplate, onClose, onPushComplete, 
             {pushPhase === 'done' && (
               <button
                 onClick={() => { onPushComplete?.(); onClose(); }}
-                className="h-8 px-4 rounded-md bg-accent text-white text-xs font-medium hover:bg-accent/90"
+                className="h-8 px-4 rounded-md bg-accent text-text-inverse text-xs font-bold hover:bg-accent/90"
               >
                 Done
               </button>
